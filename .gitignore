@@ -1,0 +1,12 @@
+node_modules
+out
+dist
+dist-electron
+*.log
+*.tsbuildinfo
+test-results
+playwright-report
+.DS_Store
+.env
+.env.*
+!.env.example

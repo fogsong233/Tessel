@@ -1,0 +1,56 @@
+{
+  "name": "sidelight",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local-first PDF reading workspace for anchored AI conversations and notes.",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "pnpm typecheck && electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc -b --noEmit",
+    "test": "pnpm test:e2e",
+    "test:e2e": "pnpm build && playwright test"
+  },
+  "dependencies": {
+    "@react-pdf-viewer/bookmark": "^3.12.0",
+    "@react-pdf-viewer/core": "^3.12.0",
+    "@react-pdf-viewer/default-layout": "^3.12.0",
+    "@react-pdf-viewer/highlight": "^3.12.0",
+    "@react-pdf-viewer/page-navigation": "^3.12.0",
+    "@react-pdf-viewer/scroll-mode": "^3.12.0",
+    "@react-pdf-viewer/search": "^3.12.0",
+    "@react-pdf-viewer/selection-mode": "^3.12.0",
+    "@react-pdf-viewer/zoom": "^3.12.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "electron-vite": "^4.0.0",
+    "katex": "^0.16.22",
+    "lucide-react": "^0.468.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^3.11.174",
+    "primeicons": "^7.0.0",
+    "primereact": "^10.9.8",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-markdown": "^10.1.0",
+    "react-resizable-panels": "^4.11.1",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.2.79",
+    "@types/react-dom": "^18.2.25",
+    "electron": "^38.0.0",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild"
+    ]
+  }
+}
