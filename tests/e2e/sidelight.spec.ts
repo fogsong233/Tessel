@@ -309,11 +309,15 @@ test.describe('Sidelight Electron reading flow', () => {
     const widthBeforeChat = await firstPageWidth(reader);
     await reader.locator('.selection-toolbar').getByRole('button', { name: /^Chat$/i }).click();
     await expect(reader.locator('.dock-chat-panel')).toBeVisible();
-    await expect(reader.locator('.pdf-mark[data-color-role="chat"]').first()).toBeVisible();
+    await expect(reader.locator('.pdf-mark-visual[data-color-role="chat"]').first()).toBeVisible();
+    await expect(reader.locator('.pdf-mark-hit[data-color-role="chat"]').first()).toBeVisible();
     await expect.poll(async () => pdfMarkVisualSnapshot(reader, 'chat')).toMatchObject({
       boxShadow: 'none',
-      mixBlendMode: 'multiply',
-      opacity: '1'
+      hasPaint: true,
+      layerOpacity: '0.24',
+      mixBlendMode: 'normal',
+      opacity: '1',
+      visualZIndex: '5'
     });
     await expect.poll(async () => Math.abs((await firstPageWidth(reader)) - widthBeforeChat)).toBeLessThan(1);
     await expectPanelInsideDock(reader, '.dock-chat-panel');
@@ -1438,16 +1442,23 @@ async function chatBottomGap(page: Page): Promise<number> {
 async function pdfMarkVisualSnapshot(page: Page, colorRole: string): Promise<{
   backgroundColor: string;
   boxShadow: string;
+  hasPaint: boolean;
+  layerOpacity: string;
   mixBlendMode: string;
   opacity: string;
+  visualZIndex: string;
 }> {
-  return page.locator(`.pdf-mark[data-color-role="${colorRole}"]`).first().evaluate((element) => {
+  return page.locator(`.pdf-mark-visual[data-color-role="${colorRole}"]`).first().evaluate((element) => {
     const style = window.getComputedStyle(element);
+    const backgroundColor = style.backgroundColor;
     return {
-      backgroundColor: style.backgroundColor,
+      backgroundColor,
       boxShadow: style.boxShadow,
+      hasPaint: backgroundColor !== 'rgba(0, 0, 0, 0)' && backgroundColor !== 'transparent',
+      layerOpacity: window.getComputedStyle(element.parentElement as Element).opacity,
       mixBlendMode: style.mixBlendMode,
-      opacity: style.opacity
+      opacity: style.opacity,
+      visualZIndex: window.getComputedStyle(element.parentElement as Element).zIndex
     };
   });
 }

@@ -505,6 +505,7 @@ input:disabled {
 
 .pdfViewer.removePageBorders .page,
 .pdfViewer .page {
+  position: relative;
   margin: 16px auto 18px;
   overflow: visible;
   border: 1px solid #d0d0d0;
@@ -748,32 +749,88 @@ input:disabled {
 .sidelight-mark-layer {
   position: absolute;
   inset: 0;
-  z-index: 5;
   pointer-events: none;
 }
 
-.pdf-mark {
+.sidelight-mark-layer--visual {
+  z-index: 5;
+  opacity: var(--pdf-mark-overlay-opacity, 0.24);
+  isolation: isolate;
+}
+
+.sidelight-mark-layer--hit {
+  z-index: 6;
+}
+
+.pdfViewer .canvasWrapper {
+  position: relative;
+  z-index: 1;
+}
+
+.pdfViewer .textLayer {
+  z-index: 2;
+}
+
+.pdfViewer .annotationLayer,
+.pdfViewer .annotationEditorLayer,
+.pdfViewer .xfaLayer {
+  z-index: 3;
+}
+
+.pdf-mark-visual,
+.pdf-mark-hit {
   position: absolute;
   z-index: 1;
   display: block;
   padding: 0;
   border: 0;
   border-radius: 2px;
-  background: rgba(0, 0, 0, 0.12);
-  mix-blend-mode: multiply;
+  background: transparent;
+}
+
+.pdf-mark-visual {
+  background: var(--mark-color, var(--selection-note-color, #f3e7a2));
+  mix-blend-mode: normal;
+  pointer-events: none;
+}
+
+.pdf-mark-hit {
   pointer-events: auto;
 }
 
-.pdf-mark:hover {
+.pdf-mark-visual::before {
+  position: absolute;
+  right: 0;
+  bottom: 8%;
+  left: 0;
+  display: none;
+  height: clamp(2px, 24%, 5px);
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.12);
+  content: none;
+  pointer-events: none;
+}
+
+.pdf-mark-hit:hover + .pdf-mark-visual::before,
+.pdf-mark-visual:hover::before {
   background: rgba(0, 0, 0, 0.18);
 }
 
-.pdf-mark--underline {
+.pdf-mark-visual--underline,
+.pdf-mark-hit.pdf-mark--underline {
   height: 0 !important;
   border-bottom: 2px solid rgba(0, 0, 0, 0.68);
   border-radius: 0;
   background: transparent;
   transform: translateY(100%);
+}
+
+.pdf-mark-hit.pdf-mark--underline {
+  border-bottom-color: transparent;
+}
+
+.pdf-mark-visual--underline::before {
+  display: none;
 }
 
 .selection-toolbar {
@@ -8556,35 +8613,62 @@ body.is-resizing-workspace-block * {
   background: var(--ui-hover);
 }
 
-/* Muted solid marks stay readable without borders that pile up on formula glyph boxes. */
+/* Muted highlighter bands stay readable without formula-sized color blocks. */
 .pdfViewer .textLayer ::selection {
   color: inherit;
   background: var(--selection-chat-color, #cfe3f5);
 }
 
-.pdf-mark {
+.pdf-mark-visual,
+.pdf-mark-hit {
   border: 0;
   border-radius: 1px;
-  background: color-mix(in srgb, var(--mark-color, #d8ead4) 46%, #ffffff 54%);
   box-shadow: none;
-  mix-blend-mode: multiply;
   opacity: 1;
   outline: 0;
 }
 
-.pdf-mark:hover {
-  background: color-mix(in srgb, var(--mark-color, #d8ead4) 58%, #ffffff 42%);
+.pdf-mark-visual {
+  background: var(--mark-color, var(--selection-note-color, #f3e7a2));
+  mix-blend-mode: normal;
+}
+
+.pdf-mark-visual::before {
+  right: 0;
+  bottom: 8%;
+  left: 0;
+  display: none;
+  height: clamp(2px, 24%, 5px);
+  background: color-mix(in srgb, var(--mark-color, #d8ead4) 42%, #ffffff 58%);
   box-shadow: none;
 }
 
-.pdf-mark--underline {
+.pdf-mark-visual:hover::before {
+  background: color-mix(in srgb, var(--mark-color, #d8ead4) 56%, #ffffff 44%);
+}
+
+.pdf-mark-hit:hover {
+  background: transparent;
+  box-shadow: none;
+}
+
+.pdf-mark-visual--underline,
+.pdf-mark-hit.pdf-mark--underline {
   border-bottom-color: var(--mark-color, var(--selection-underline-color, #8fa4b8));
   background: transparent;
   box-shadow: none;
   mix-blend-mode: normal;
 }
 
-.pdf-mark--underline:hover {
+.pdf-mark-hit.pdf-mark--underline {
+  border-bottom-color: transparent;
+}
+
+.pdf-mark-visual--underline::before {
+  display: none;
+}
+
+.pdf-mark-hit.pdf-mark--underline:hover {
   background: transparent;
   box-shadow: none;
 }

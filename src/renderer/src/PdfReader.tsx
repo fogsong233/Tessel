@@ -2699,6 +2699,7 @@ function ReaderDock({
           {tab === 'notes' && (
             <DockNotesPanel
               activePage={activePage}
+              allNotes={allNotes}
               busy={noteBusy}
               notes={notes}
               text={t}
@@ -2812,6 +2813,7 @@ function TransientAidPanel({
 
 function DockNotesPanel({
   activePage,
+  allNotes,
   busy,
   notes,
   text,
@@ -2822,6 +2824,7 @@ function DockNotesPanel({
   onPin
 }: {
   activePage: number;
+  allNotes: NoteDocument[];
   busy: boolean;
   notes: NoteDocument[];
   text: ReaderText;
@@ -2840,6 +2843,24 @@ function DockNotesPanel({
     setAiRangeEnd(String(activePage));
   }, [activePage]);
 
+  const panelNotes = useMemo(() => {
+    const pageStart = Number(aiRangeStart);
+    const pageEnd = Number(aiRangeEnd);
+    const rangeStart = Number.isInteger(pageStart) && Number.isInteger(pageEnd)
+      ? Math.max(1, Math.floor(Math.min(pageStart, pageEnd)))
+      : activePage;
+    const rangeEnd = Number.isInteger(pageStart) && Number.isInteger(pageEnd)
+      ? Math.max(rangeStart, Math.floor(Math.max(pageStart, pageEnd)))
+      : activePage;
+    const byId = new Map(notes.map((note) => [note.id, note]));
+    for (const note of allNotes) {
+      if (note.pageStart <= rangeEnd && note.pageEnd >= rangeStart) {
+        byId.set(note.id, note);
+      }
+    }
+    return Array.from(byId.values());
+  }, [activePage, aiRangeEnd, aiRangeStart, allNotes, notes]);
+
   const submitAiNote = (): void => {
     const pageStart = Number(aiRangeStart);
     const pageEnd = Number(aiRangeEnd);
@@ -2856,7 +2877,7 @@ function DockNotesPanel({
         <div>
           <span>{t.page} {activePage}</span>
           <strong>{t.notes}</strong>
-          <small>{notes.length ? t.visibleOnPage(notes.length) : t.noNoteCoversPage}</small>
+          <small>{panelNotes.length ? t.visibleOnPage(panelNotes.length) : t.noNoteCoversPage}</small>
         </div>
         <div className="notes-panel__top-actions">
           <button className="dock-action notes-panel__new" type="button" title={t.newPageNote} onClick={onCreate}>
@@ -2865,14 +2886,14 @@ function DockNotesPanel({
         </div>
       </div>
 
-      {notes.length > 0 ? (
+      {panelNotes.length > 0 ? (
         <section className="notes-panel__list" aria-label={t.pageNotes}>
           <header>
             <span>{t.visibleNotes}</span>
             <small>{t.scopedByPageRange}</small>
           </header>
           <div className="notes-panel__tabs" role="tablist" aria-label={t.pageNotes}>
-            {notes.map((note) => (
+            {panelNotes.map((note) => (
               <div className="notes-panel__tab-row" key={note.id}>
                 <button
                   className="notes-panel__tab-main"
@@ -4532,9 +4553,13 @@ function renderMarkLayers(
       continue;
     }
 
-    const layer = document.createElement('div');
-    layer.className = 'sidelight-mark-layer';
-    pageElement.appendChild(layer);
+    const visualLayer = document.createElement('div');
+    visualLayer.className = 'sidelight-mark-layer sidelight-mark-layer--visual';
+    pageElement.prepend(visualLayer);
+
+    const hitLayer = document.createElement('div');
+    hitLayer.className = 'sidelight-mark-layer sidelight-mark-layer--hit';
+    pageElement.appendChild(hitLayer);
 
     const renderedAreas = new Set<string>();
     for (const mark of pageMarks) {
@@ -4549,29 +4574,46 @@ function renderMarkLayers(
         }
 
         renderedAreas.add(key);
-        const node = document.createElement('button');
         const colorRole = mark.colorRole ?? mark.kind;
+
+        const visualNode = document.createElement('span');
+        visualNode.className = [
+          'pdf-mark-visual',
+          mark.kind === 'underline' ? 'pdf-mark-visual--underline' : '',
+          `pdf-mark-visual--${colorRole}`
+        ].filter(Boolean).join(' ');
+        visualNode.dataset.colorRole = colorRole;
+        visualNode.setAttribute('aria-hidden', 'true');
+        visualNode.style.setProperty('--mark-color', selectionColorForRole(colorRole, selectionColors));
+        applyMarkAreaStyle(visualNode, area);
+        visualLayer.appendChild(visualNode);
+
+        const node = document.createElement('button');
         node.type = 'button';
         node.className = [
-          'pdf-mark',
+          'pdf-mark-hit',
           mark.kind === 'underline' ? 'pdf-mark--underline' : '',
-          `pdf-mark--${colorRole}`
+          `pdf-mark-hit--${colorRole}`
         ].filter(Boolean).join(' ');
         node.title = mark.quote;
         node.dataset.colorRole = colorRole;
         node.style.setProperty('--mark-color', selectionColorForRole(colorRole, selectionColors));
-        node.style.left = `${area.left}%`;
-        node.style.top = `${area.top}%`;
-        node.style.width = `${area.width}%`;
-        node.style.height = `${area.height}%`;
+        applyMarkAreaStyle(node, area);
         node.addEventListener('click', (event) => {
           event.stopPropagation();
           onMarkClick(mark.id, event);
         });
-        layer.appendChild(node);
+        hitLayer.appendChild(node);
       }
     }
   }
+}
+
+function applyMarkAreaStyle(node: HTMLElement, area: PdfMarkArea): void {
+  node.style.left = `${area.left}%`;
+  node.style.top = `${area.top}%`;
+  node.style.width = `${area.width}%`;
+  node.style.height = `${area.height}%`;
 }
 
 function clearSelection(): void {
