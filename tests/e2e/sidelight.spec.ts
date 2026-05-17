@@ -1,4 +1,4 @@
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
@@ -219,6 +219,7 @@ test.describe('Sidelight Electron reading flow', () => {
       await settings.getByLabel('Token').fill('github_pat_secret_for_test');
       await settings.getByLabel('Enabled').check();
       await settings.getByLabel('AI preferred language').selectOption('English');
+      await setColorInput(settings.getByLabel('Note selection'), '#f6dda0');
       await settings.getByLabel('UI language').selectOption('zh-CN');
       await library.locator('.floating-settings button[type="submit"]').click();
       await expect(settings).toHaveCount(0);
@@ -236,7 +237,10 @@ test.describe('Sidelight Electron reading flow', () => {
       });
       await expect.poll(async () => persistedAppPreferences(userDataDir)).toMatchObject({
         uiLanguage: 'zh-CN',
-        aiLanguage: 'English'
+        aiLanguage: 'English',
+        selectionColors: expect.objectContaining({
+          note: '#f6dda0'
+        })
       });
       const persisted = JSON.stringify(await persistedStore(userDataDir));
       expect(persisted).not.toContain('github_pat_secret_for_test');
@@ -305,6 +309,11 @@ test.describe('Sidelight Electron reading flow', () => {
     const widthBeforeChat = await firstPageWidth(reader);
     await reader.locator('.selection-toolbar').getByRole('button', { name: /^Chat$/i }).click();
     await expect(reader.locator('.dock-chat-panel')).toBeVisible();
+    await expect(reader.locator('.pdf-mark[data-color-role="chat"]').first()).toBeVisible();
+    await expect.poll(async () => pdfMarkVisualSnapshot(reader, 'chat')).toMatchObject({
+      mixBlendMode: 'darken',
+      opacity: '1'
+    });
     await expect.poll(async () => Math.abs((await firstPageWidth(reader)) - widthBeforeChat)).toBeLessThan(1);
     await expectPanelInsideDock(reader, '.dock-chat-panel');
     await expectPdfPageBeforeDock(reader);
@@ -1324,6 +1333,16 @@ async function pasteImageIntoViewport(page: Page, imagePath: string, fileName: s
   );
 }
 
+async function setColorInput(locator: Locator, value: string): Promise<void> {
+  await locator.evaluate((element, nextValue) => {
+    const input = element as HTMLInputElement;
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    valueSetter?.call(input, nextValue);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }, value);
+}
+
 async function userBubbleAspect(page: Page): Promise<number> {
   return page.locator('.chat-message--user .chat-bubble').first().evaluate((element) => {
     const rect = element.getBoundingClientRect();
@@ -1412,6 +1431,21 @@ async function chatBottomGap(page: Page): Promise<number> {
     const messageRect = lastMessage.getBoundingClientRect();
     const messagesRect = messages.getBoundingClientRect();
     return Math.max(0, messagesRect.bottom - messageRect.bottom);
+  });
+}
+
+async function pdfMarkVisualSnapshot(page: Page, colorRole: string): Promise<{
+  backgroundColor: string;
+  mixBlendMode: string;
+  opacity: string;
+}> {
+  return page.locator(`.pdf-mark[data-color-role="${colorRole}"]`).first().evaluate((element) => {
+    const style = window.getComputedStyle(element);
+    return {
+      backgroundColor: style.backgroundColor,
+      mixBlendMode: style.mixBlendMode,
+      opacity: style.opacity
+    };
   });
 }
 
@@ -1949,11 +1983,13 @@ async function persistedAiProvider(userDataDir: string): Promise<{
 async function persistedAppPreferences(userDataDir: string): Promise<{
   uiLanguage?: string;
   aiLanguage?: string;
+  selectionColors?: Record<string, string>;
 }> {
   const store = await persistedStore(userDataDir);
   return (store.appPreferences ?? {}) as {
     uiLanguage?: string;
     aiLanguage?: string;
+    selectionColors?: Record<string, string>;
   };
 }
 

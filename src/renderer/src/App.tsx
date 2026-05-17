@@ -11,6 +11,7 @@ import {
   Languages as LanguagesIcon,
   Library,
   MessageCircle,
+  Palette,
   Plus,
   RefreshCw,
   Search,
@@ -41,6 +42,7 @@ import {
   PdfReadingState,
   PdfSourceDescriptor,
   PdfUserBookmark,
+  SelectionColorRole,
   GitHubUploadConfig,
   LibraryGroup,
   SafeAiProviderConfig,
@@ -51,6 +53,7 @@ import {
 } from '../../shared/domain';
 import { createId } from '../../shared/ids';
 import { mergeNoteDocuments as mergeNotes } from '../../shared/notes';
+import { normalizeSelectionColors } from '../../shared/selectionColors';
 import { PdfReader, type PdfSelectionPayload } from './PdfReader';
 import { MarkdownView } from './MarkdownView';
 
@@ -294,7 +297,7 @@ export function App(): ReactElement {
     }
 
     if (mode === 'ask') {
-      await ensureSelectionMark('highlight', selection);
+      await ensureSelectionMark('highlight', selection, 'chat');
       await createFreeChat(selection);
       return;
     }
@@ -631,34 +634,55 @@ export function App(): ReactElement {
     });
   }
 
-  async function saveMark(kind: PdfMarkKind, selection: PdfSelectionPayload): Promise<void> {
+  async function saveMark(
+    kind: PdfMarkKind,
+    selection: PdfSelectionPayload,
+    colorRole: SelectionColorRole = kind
+  ): Promise<void> {
     if (!activeDocument) {
       return;
     }
 
+    const existing = marks.find((mark) => mark.kind === kind && sameSelection(mark, selection));
     const saved = await window.sidelight.savePdfMark({
       mark: {
-        id: createId('mark'),
+        id: existing?.id ?? createId('mark'),
         documentId: activeDocument.id,
         kind,
+        colorRole,
         quote: selection.quote,
         areas: selection.areas,
         pageNumber: selection.pageNumber,
-        createdAt: new Date().toISOString()
+        createdAt: existing?.createdAt ?? new Date().toISOString()
       }
     });
     setMarks((current) => [saved, ...current.filter((mark) => mark.id !== saved.id)]);
   }
 
-  async function ensureSelectionMark(kind: PdfMarkKind, selection: PdfSelectionPayload): Promise<void> {
-    if (
-      !activeDocument ||
-      marks.some((mark) => mark.kind === kind && sameSelection(mark, selection))
-    ) {
+  async function ensureSelectionMark(
+    kind: PdfMarkKind,
+    selection: PdfSelectionPayload,
+    colorRole: SelectionColorRole = kind
+  ): Promise<void> {
+    if (!activeDocument) {
       return;
     }
 
-    await saveMark(kind, selection);
+    const existing = marks.find((mark) => mark.kind === kind && sameSelection(mark, selection));
+    if (existing) {
+      if ((existing.colorRole ?? existing.kind) !== colorRole) {
+        const saved = await window.sidelight.savePdfMark({
+          mark: {
+            ...existing,
+            colorRole
+          }
+        });
+        setMarks((current) => [saved, ...current.filter((mark) => mark.id !== saved.id)]);
+      }
+      return;
+    }
+
+    await saveMark(kind, selection, colorRole);
   }
 
   async function addBookmark(pageNumber: number): Promise<void> {
@@ -955,6 +979,7 @@ export function App(): ReactElement {
         source={pdfSource}
         meta={activeDocument}
         uiLanguage={appPreferences.uiLanguage}
+        selectionColors={appPreferences.selectionColors}
         activePage={currentPage}
         marks={marks}
         bookmarks={bookmarks}
@@ -973,7 +998,7 @@ export function App(): ReactElement {
         onLoadDocument={(documentId) => void openDocumentWindow(documentId)}
         onAddToLibrary={() => void addActiveDocumentToLibrary()}
         onPageChange={updateCurrentPage}
-        onCreateMark={(kind, selection) => void saveMark(kind, selection)}
+        onCreateMark={(kind, selection, colorRole) => void saveMark(kind, selection, colorRole)}
         onSelectionAction={(mode, selection) => void startAnchoredAction(mode, selection)}
         onAddBookmark={(pageNumber) => void addBookmark(pageNumber)}
         onDeleteBookmark={(bookmarkId) => void deleteBookmark(bookmarkId)}
@@ -1017,10 +1042,13 @@ function appText(language: UiLanguage) {
       aiPreferredLanguage: 'AI 首选语言',
       aiProvider: 'AI Provider',
       aiReady: 'AI 已就绪',
+      annotationColorsHelp: '为高亮、下划线、对话和笔记选区设置低饱和颜色。',
+      appearance: '外观',
       apiKey: 'API key',
       baseUrl: 'Base URL',
       branch: 'Branch',
       cancel: '取消',
+      chatColor: '对话选区',
       availableModels: '可选模型',
       chooseModel: '选择模型',
       close: '关闭',
@@ -1051,8 +1079,10 @@ function appText(language: UiLanguage) {
       loadingModels: '获取中...',
       localDraftMode: '本地草稿模式',
       localFirstLibraryData: '本地优先的资料库数据',
+      highlightColor: '高亮',
       model: 'Model',
       name: '名称',
+      noteColor: '笔记选区',
       noModelsFound: '没有获取到模型。',
       noMatchingCopy: '换一个标题、文件名或标签试试。',
       noMatchingPdfs: '没有匹配的 PDF',
@@ -1085,7 +1115,10 @@ function appText(language: UiLanguage) {
       title: '标题',
       token: 'Token',
       tokenStored: 'Token 已保存',
+      summaryColor: '总结选区',
+      translateColor: '翻译选区',
       uiLanguage: 'UI 语言',
+      underlineColor: '下划线',
       untagged: '无标签',
       workspace: '工作区',
       workspaceMuted: 'PDF 元数据、笔记、标注和对话会留在本地工作区，直到你开启上传。'
@@ -1096,10 +1129,13 @@ function appText(language: UiLanguage) {
     aiPreferredLanguage: 'AI preferred language',
     aiProvider: 'AI Provider',
     aiReady: 'AI ready',
+    annotationColorsHelp: 'Use muted colors for highlights, underlines, chats, and note selections.',
+    appearance: 'Appearance',
     apiKey: 'API key',
     baseUrl: 'Base URL',
     branch: 'Branch',
     cancel: 'Cancel',
+    chatColor: 'Chat selection',
     availableModels: 'Available models',
     chooseModel: 'Choose a model',
     close: 'Close',
@@ -1130,8 +1166,10 @@ function appText(language: UiLanguage) {
     loadingModels: 'Loading...',
     localDraftMode: 'Local draft mode',
     localFirstLibraryData: 'Local-first library data',
+    highlightColor: 'Highlight',
     model: 'Model',
     name: 'Name',
+    noteColor: 'Note selection',
     noModelsFound: 'No models were returned.',
     noMatchingCopy: 'Try a different title, file name, or tag.',
     noMatchingPdfs: 'No matching PDFs',
@@ -1164,7 +1202,10 @@ function appText(language: UiLanguage) {
     title: 'Title',
     token: 'Token',
     tokenStored: 'Token stored',
+    summaryColor: 'Summary selection',
+    translateColor: 'Translate selection',
     uiLanguage: 'UI language',
+    underlineColor: 'Underline',
     untagged: 'untagged',
     workspace: 'Workspace',
     workspaceMuted: 'PDF metadata, notes, highlights, and chats stay in the local workspace until upload is enabled.'
@@ -1617,6 +1658,7 @@ function FloatingSettingsPanel({
   const [token, setToken] = useState('');
   const [uiLanguage, setUiLanguage] = useState<UiLanguage>(preferences.uiLanguage);
   const [aiLanguage, setAiLanguage] = useState<AiPreferredLanguage>(preferences.aiLanguage);
+  const [selectionColors, setSelectionColors] = useState(normalizeSelectionColors(preferences.selectionColors));
   const [modelOptions, setModelOptions] = useState<AiModelInfo[]>([]);
   const [modelLoading, setModelLoading] = useState(false);
   const [modelError, setModelError] = useState<string>();
@@ -1669,9 +1711,17 @@ function FloatingSettingsPanel({
       },
       {
         uiLanguage,
-        aiLanguage
+        aiLanguage,
+        selectionColors: normalizeSelectionColors(selectionColors)
       }
     );
+  };
+
+  const updateSelectionColor = (role: SelectionColorRole, color: string): void => {
+    setSelectionColors((current) => normalizeSelectionColors({
+      ...current,
+      [role]: color
+    }));
   };
 
   return (
@@ -1696,6 +1746,10 @@ function FloatingSettingsPanel({
             <a href="#settings-language">
               <LanguagesIcon />
               {t.language}
+            </a>
+            <a href="#settings-appearance">
+              <Palette size={15} />
+              {t.appearance}
             </a>
             <a href="#settings-github">
               <Github size={15} />
@@ -1822,6 +1876,48 @@ function FloatingSettingsPanel({
               </div>
             </section>
 
+            <section className="settings-section" id="settings-appearance">
+              <div className="settings-section__heading">
+                <Palette size={17} />
+                <div>
+                  <strong>{t.appearance}</strong>
+                  <span>{t.annotationColorsHelp}</span>
+                </div>
+              </div>
+              <div className="settings-color-grid">
+                <SelectionColorField
+                  label={t.highlightColor}
+                  value={selectionColors.highlight}
+                  onChange={(color) => updateSelectionColor('highlight', color)}
+                />
+                <SelectionColorField
+                  label={t.underlineColor}
+                  value={selectionColors.underline}
+                  onChange={(color) => updateSelectionColor('underline', color)}
+                />
+                <SelectionColorField
+                  label={t.chatColor}
+                  value={selectionColors.chat}
+                  onChange={(color) => updateSelectionColor('chat', color)}
+                />
+                <SelectionColorField
+                  label={t.noteColor}
+                  value={selectionColors.note}
+                  onChange={(color) => updateSelectionColor('note', color)}
+                />
+                <SelectionColorField
+                  label={t.summaryColor}
+                  value={selectionColors.summary}
+                  onChange={(color) => updateSelectionColor('summary', color)}
+                />
+                <SelectionColorField
+                  label={t.translateColor}
+                  value={selectionColors.translate}
+                  onChange={(color) => updateSelectionColor('translate', color)}
+                />
+              </div>
+            </section>
+
             <section className="settings-section" id="settings-github">
               <div className="settings-section__heading">
                 <Github size={17} />
@@ -1893,6 +1989,29 @@ function FloatingSettingsPanel({
         </form>
       </section>
     </div>
+  );
+}
+
+function SelectionColorField({
+  label,
+  value,
+  onChange
+}: {
+  label: string;
+  value: string;
+  onChange(color: string): void;
+}): ReactElement {
+  return (
+    <label className="settings-color-field">
+      <span>{label}</span>
+      <input
+        type="color"
+        aria-label={label}
+        value={value}
+        onInput={(event) => onChange(event.currentTarget.value)}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
   );
 }
 

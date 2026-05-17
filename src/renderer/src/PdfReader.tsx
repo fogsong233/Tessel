@@ -72,6 +72,8 @@ import {
   PdfMarkKind,
   PdfSourceDescriptor,
   PdfUserBookmark,
+  SelectionColorPreferences,
+  SelectionColorRole,
   TextAnchor,
   UiLanguage,
   WorkspaceBlock,
@@ -79,6 +81,7 @@ import {
 } from '../../shared/domain';
 import { createId } from '../../shared/ids';
 import { isPendingGeneratedNoteDraft } from '../../shared/notes';
+import { normalizeSelectionColors, selectionColorForRole } from '../../shared/selectionColors';
 import { canOpenWorkspaceBlockSource, defaultWorkspaceBlockWidth, workspaceBlockSpec } from '../../shared/workspacePins';
 import { MarkdownView } from './MarkdownView';
 import { MarkdownNoteEditor } from './MarkdownNoteEditor';
@@ -107,6 +110,7 @@ interface PdfReaderProps {
   source?: PdfSourceDescriptor;
   meta?: PdfDocumentMeta;
   uiLanguage?: UiLanguage;
+  selectionColors: SelectionColorPreferences;
   activePage: number;
   marks: PdfMark[];
   bookmarks: PdfUserBookmark[];
@@ -128,7 +132,7 @@ interface PdfReaderProps {
   onLoadDocument(documentId: string): void;
   onAddToLibrary(): void;
   onPageChange(pageNumber: number): void;
-  onCreateMark(kind: PdfMarkKind, selection: PdfSelectionPayload): void;
+  onCreateMark(kind: PdfMarkKind, selection: PdfSelectionPayload, colorRole?: SelectionColorRole): void;
   onSelectionAction(mode: AiMode, selection: PdfSelectionPayload): void;
   onAddBookmark(pageNumber: number): void;
   onDeleteBookmark(bookmarkId: string): void;
@@ -439,6 +443,7 @@ export function PdfReader({
   source,
   meta,
   uiLanguage = 'en',
+  selectionColors,
   activePage,
   marks,
   bookmarks,
@@ -484,6 +489,7 @@ export function PdfReader({
   const stageRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<PdfRuntime>();
   const marksRef = useRef(marks);
+  const selectionColorsRef = useRef(normalizeSelectionColors(selectionColors));
   const notesRef = useRef(notes);
   const conversationsRef = useRef(conversations);
   const workspaceBlocksRef = useRef(workspaceBlocks);
@@ -509,6 +515,7 @@ export function PdfReader({
   const [totalPages, setTotalPages] = useState(0);
   const [scale, setScale] = useState(1);
   const [pageDraft, setPageDraft] = useState(String(activePage));
+  const [pageDraftFocused, setPageDraftFocused] = useState(false);
   const [outline, setOutline] = useState<PdfOutlineItem[]>([]);
   const [outlineBusy, setOutlineBusy] = useState(false);
   const [selectionPopover, setSelectionPopover] = useState<SelectionPopover>();
@@ -547,8 +554,10 @@ export function PdfReader({
     }));
   }, [generatedOutline, outline]);
   const outlineIsGenerated = outline.length === 0 && displayOutline.length > 0;
+  const resolvedSelectionColors = useMemo(() => normalizeSelectionColors(selectionColors), [selectionColors]);
 
   marksRef.current = marks;
+  selectionColorsRef.current = resolvedSelectionColors;
   notesRef.current = notes;
   conversationsRef.current = conversations;
   workspaceBlocksRef.current = effectiveWorkspaceBlocks;
@@ -617,9 +626,10 @@ export function PdfReader({
     () => ({
       '--dock-panel-width': `${resolvedDockWidth}px`,
       '--dock-lane-width': `${resolvedDockWidth + dockHandleGutter}px`,
+      ...selectionColorCssVars(resolvedSelectionColors),
       ...(workspaceLeftGutter > 0 ? { '--canvas-left-gutter': `${workspaceLeftGutter}px` } : {})
     }) as CSSProperties,
-    [resolvedDockWidth, workspaceLeftGutter]
+    [resolvedDockWidth, resolvedSelectionColors, workspaceLeftGutter]
   );
 
   const closeNoteForForeground = useCallback((nextNoteId?: string): void => {
@@ -678,7 +688,7 @@ export function PdfReader({
       return;
     }
 
-    renderMarkLayers(viewerRef.current, marksRef.current, (markId, event) => {
+    renderMarkLayers(viewerRef.current, marksRef.current, selectionColorsRef.current, (markId, event) => {
       setSelectionPopover(undefined);
       const mark = marksRef.current.find((candidate) => candidate.id === markId);
       if (mark && dockTabRef.current === 'chat') {
@@ -776,7 +786,7 @@ export function PdfReader({
     };
 
     if (selection) {
-      onCreateMark('highlight', selection);
+      onCreateMark('highlight', selection, 'note');
     }
 
     replaceForegroundPanel('note', note);
@@ -1285,8 +1295,10 @@ export function PdfReader({
   }, [pinImageToCanvas]);
 
   useEffect(() => {
-    setPageDraft(String(activePage));
-  }, [activePage]);
+    if (!pageDraftFocused) {
+      setPageDraft(String(activePage));
+    }
+  }, [activePage, pageDraftFocused]);
 
   useEffect(() => {
     if (!meta) {
@@ -1318,7 +1330,7 @@ export function PdfReader({
 
   useEffect(() => {
     renderMarks();
-  }, [marks, renderMarks, scale, totalPages]);
+  }, [marks, renderMarks, resolvedSelectionColors, scale, totalPages]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(updateWorkspaceBlockLayouts);
@@ -1420,8 +1432,19 @@ export function PdfReader({
 
   const updatePageDraft = useCallback((value: string): void => {
     clearZoomPageLock();
+    setPageDraftFocused(true);
     setPageDraft(value);
   }, [clearZoomPageLock]);
+
+  const focusPageDraft = useCallback((): void => {
+    clearZoomPageLock();
+    setPageDraftFocused(true);
+  }, [clearZoomPageLock]);
+
+  const blurPageDraft = useCallback((): void => {
+    setPageDraftFocused(false);
+    setPageDraft(String(activePageRef.current));
+  }, []);
 
   const finishZoomPageLock = useCallback((version: number, pageNumber: number): void => {
     const normalizedPage = Math.max(1, Math.floor(pageNumber));
@@ -1753,6 +1776,7 @@ export function PdfReader({
 
   const submitPageJump = (event: FormEvent): void => {
     event.preventDefault();
+    setPageDraftFocused(false);
     const form = event.currentTarget as HTMLFormElement;
     const inputValue = form.querySelector<HTMLInputElement>('input')?.value ?? pageDraft;
     const pageNumber = Number(inputValue);
@@ -1921,7 +1945,9 @@ export function PdfReader({
             onLoadDocument={onLoadDocument}
             onOpenPdf={onOpenPdf}
             onOpenSettings={onOpenSettings}
+            onPageDraftBlur={blurPageDraft}
             onPageDraftChange={updatePageDraft}
+            onPageDraftFocus={focusPageDraft}
             onSearchQueryChange={setSearchQuery}
             onSubmitPageJump={submitPageJump}
             onSubmitSearch={submitSearch}
@@ -2051,8 +2077,8 @@ export function PdfReader({
                   <SelectionToolbar
                     popover={selectionPopover}
                     text={t}
-                    onCreateMark={(kind, selection) => {
-                      onCreateMark(kind, selection);
+                    onCreateMark={(kind, selection, colorRole) => {
+                      onCreateMark(kind, selection, colorRole);
                       clearSelection();
                       setSelectionPopover(undefined);
                     }}
@@ -2148,7 +2174,9 @@ function ReaderLeftPanel({
   onLoadDocument,
   onOpenPdf,
   onOpenSettings,
+  onPageDraftBlur,
   onPageDraftChange,
+  onPageDraftFocus,
   onSearchQueryChange,
   onSubmitPageJump,
   onSubmitSearch,
@@ -2187,7 +2215,9 @@ function ReaderLeftPanel({
   onLoadDocument(documentId: string): void;
   onOpenPdf(): void;
   onOpenSettings(): void;
+  onPageDraftBlur(): void;
   onPageDraftChange(value: string): void;
+  onPageDraftFocus(): void;
   onSearchQueryChange(value: string): void;
   onSubmitPageJump(event: FormEvent): void;
   onSubmitSearch(event: FormEvent): void;
@@ -2276,11 +2306,13 @@ function ReaderLeftPanel({
       <div className="reader-controls">
         <form className="page-control" onSubmit={onSubmitPageJump}>
           <InputText
-          value={pageDraft}
-          inputMode="numeric"
-          disabled={!hasDocument}
+            value={pageDraft}
+            inputMode="numeric"
+            disabled={!hasDocument}
             aria-label={t.page}
+            onBlur={onPageDraftBlur}
             onChange={(event) => onPageDraftChange(event.target.value.replace(/[^\d]/g, ''))}
+            onFocus={onPageDraftFocus}
           />
           <span className="page-control__separator">/</span>
           <span>{totalPages || '-'}</span>
@@ -3829,7 +3861,7 @@ function SelectionToolbar({
 }: {
   popover: SelectionPopover;
   text: ReaderText;
-  onCreateMark(kind: PdfMarkKind, selection: PdfSelectionPayload): void;
+  onCreateMark(kind: PdfMarkKind, selection: PdfSelectionPayload, colorRole?: SelectionColorRole): void;
   onCreateNote(selection: PdfSelectionPayload): void;
   onSelectionAction(mode: AiMode, selection: PdfSelectionPayload): void;
   onClose(): void;
@@ -3838,31 +3870,61 @@ function SelectionToolbar({
 
   return (
     <div className="selection-toolbar" style={{ left: popover.left, top: popover.top }}>
-      <button type="button" title={text.highlight} onClick={() => onCreateMark('highlight', selection)}>
+      <button
+        type="button"
+        className="selection-toolbar__action selection-toolbar__action--highlight"
+        title={text.highlight}
+        onClick={() => onCreateMark('highlight', selection, 'highlight')}
+      >
         <Highlighter size={15} />
         {text.highlight}
       </button>
-      <button type="button" title={text.underline} onClick={() => onCreateMark('underline', selection)}>
+      <button
+        type="button"
+        className="selection-toolbar__action selection-toolbar__action--underline"
+        title={text.underline}
+        onClick={() => onCreateMark('underline', selection, 'underline')}
+      >
         <Sparkles size={15} />
         {text.underline}
       </button>
-      <button type="button" title={text.openChat} onClick={() => onSelectionAction('ask', selection)}>
+      <button
+        type="button"
+        className="selection-toolbar__action selection-toolbar__action--chat"
+        title={text.openChat}
+        onClick={() => onSelectionAction('ask', selection)}
+      >
         <MessageCircle size={15} />
         {text.chat}
       </button>
-      <button type="button" title={text.openNote} onClick={() => onCreateNote(selection)}>
+      <button
+        type="button"
+        className="selection-toolbar__action selection-toolbar__action--note"
+        title={text.openNote}
+        onClick={() => onCreateNote(selection)}
+      >
         <FileText size={15} />
         {text.notes}
       </button>
-      <button type="button" title={text.summary} onClick={() => onSelectionAction('summarize', selection)}>
+      <button
+        type="button"
+        className="selection-toolbar__action selection-toolbar__action--summary"
+        title={text.summary}
+        onClick={() => onSelectionAction('summarize', selection)}
+      >
         <Sparkles size={15} />
         {text.summary}
       </button>
-      <button type="button" title={text.translate} onClick={() => onSelectionAction('translate', selection)}>
+      <button
+        type="button"
+        className="selection-toolbar__action selection-toolbar__action--translate"
+        title={text.translate}
+        onClick={() => onSelectionAction('translate', selection)}
+      >
         <Languages size={15} />
         {text.translate}
       </button>
-      <button type="button" title={text.close} onClick={onClose}>
+      <button type="button" className="selection-toolbar__close" title={text.close} onClick={onClose}>
         <X size={15} />
       </button>
     </div>
@@ -3934,6 +3996,17 @@ function compactPreview(markdown: string): string {
     .replace(/\s+/g, ' ')
     .trim();
   return clean.length > 150 ? `${clean.slice(0, 147)}...` : clean;
+}
+
+function selectionColorCssVars(colors: SelectionColorPreferences): Record<string, string> {
+  return {
+    '--selection-highlight-color': colors.highlight,
+    '--selection-underline-color': colors.underline,
+    '--selection-chat-color': colors.chat,
+    '--selection-note-color': colors.note,
+    '--selection-summary-color': colors.summary,
+    '--selection-translate-color': colors.translate
+  };
 }
 
 function shouldRefreshOpenNoteDraft(current: NoteDocument, latest: NoteDocument): boolean {
@@ -4402,6 +4475,7 @@ function dedupeAreas(areas: PdfMarkArea[]): PdfMarkArea[] {
 function renderMarkLayers(
   viewerElement: HTMLDivElement,
   marks: PdfMark[],
+  selectionColors: SelectionColorPreferences,
   onMarkClick: (markId: string, event: MouseEvent) => void
 ): void {
   viewerElement.querySelectorAll('.sidelight-mark-layer').forEach((layer) => layer.remove());
@@ -4439,9 +4513,16 @@ function renderMarkLayers(
 
         renderedAreas.add(key);
         const node = document.createElement('button');
+        const colorRole = mark.colorRole ?? mark.kind;
         node.type = 'button';
-        node.className = mark.kind === 'underline' ? 'pdf-mark pdf-mark--underline' : 'pdf-mark';
+        node.className = [
+          'pdf-mark',
+          mark.kind === 'underline' ? 'pdf-mark--underline' : '',
+          `pdf-mark--${colorRole}`
+        ].filter(Boolean).join(' ');
         node.title = mark.quote;
+        node.dataset.colorRole = colorRole;
+        node.style.setProperty('--mark-color', selectionColorForRole(colorRole, selectionColors));
         node.style.left = `${area.left}%`;
         node.style.top = `${area.top}%`;
         node.style.width = `${area.width}%`;

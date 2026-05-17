@@ -9,6 +9,7 @@ export type LibraryGroupId = string;
 export type AiMode = 'ask' | 'explain' | 'translate' | 'summarize' | 'lesson';
 export type ConversationRole = 'user' | 'assistant' | 'system';
 export type PdfMarkKind = 'highlight' | 'underline';
+export type SelectionColorRole = 'highlight' | 'underline' | 'chat' | 'note' | 'summary' | 'translate';
 export type ConversationAttachmentKind = 'image';
 export type DocumentFormat = 'pdf' | 'markdown' | 'text' | 'image' | 'html' | 'epub' | 'unknown';
 export type DocumentSourceKind = 'local-file' | 'cloud-file' | 'url';
@@ -94,6 +95,7 @@ export interface PdfMark {
   id: string;
   documentId: DocumentId;
   kind: PdfMarkKind;
+  colorRole?: SelectionColorRole;
   quote: string;
   areas: PdfMarkArea[];
   pageNumber: number;
@@ -245,6 +247,16 @@ export interface SafeGitHubUploadConfig extends Omit<GitHubUploadConfig, 'token'
 export interface AppPreferences {
   uiLanguage: UiLanguage;
   aiLanguage: AiPreferredLanguage;
+  selectionColors: SelectionColorPreferences;
+}
+
+export interface SelectionColorPreferences {
+  highlight: string;
+  underline: string;
+  chat: string;
+  note: string;
+  summary: string;
+  translate: string;
 }
 
 export interface AiPdfOutlineItem {
@@ -424,5 +436,13 @@ export const defaultGitHubUpload: SafeGitHubUploadConfig = {
 
 export const defaultAppPreferences: AppPreferences = {
   uiLanguage: 'en',
-  aiLanguage: 'Simplified Chinese'
+  aiLanguage: 'Simplified Chinese',
+  selectionColors: {
+    highlight: '#d8ead4',
+    underline: '#8fa4b8',
+    chat: '#cfe3f5',
+    note: '#f5e3a6',
+    summary: '#ded7f0',
+    translate: '#d7eadf'
+  }
 };

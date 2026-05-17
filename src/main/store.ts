@@ -36,6 +36,7 @@ import {
 } from './workspaceSync';
 import { normalizeWorkspaceBlock } from '../shared/workspacePins';
 import { normalizeNoteRange } from '../shared/notes';
+import { normalizeSelectionColors } from '../shared/selectionColors';
 
 interface PersistedAiProviderConfig extends Omit<AiProviderConfig, 'apiKey'> {
   encryptedApiKey?: string;
@@ -496,10 +497,7 @@ export class JsonWorkspaceStore {
 
   async saveAppPreferences(config: AppPreferences): Promise<AppPreferences> {
     const store = await this.read();
-    store.appPreferences = {
-      uiLanguage: config.uiLanguage === 'zh-CN' ? 'zh-CN' : 'en',
-      aiLanguage: normalizeAiLanguage(config.aiLanguage)
-    };
+    store.appPreferences = normalizeAppPreferences(config);
     await this.write(store);
     return store.appPreferences;
   }
@@ -529,7 +527,7 @@ export class JsonWorkspaceStore {
         libraryGroups: parsed.libraryGroups ?? fallback.libraryGroups,
         aiProvider: { ...fallback.aiProvider, ...parsed.aiProvider },
         githubUpload: { ...fallback.githubUpload, ...parsed.githubUpload },
-        appPreferences: { ...fallback.appPreferences, ...parsed.appPreferences },
+        appPreferences: normalizeAppPreferences({ ...fallback.appPreferences, ...parsed.appPreferences }),
         workspaceBlocks: parsed.workspaceBlocks ?? fallback.workspaceBlocks,
         generatedOutlines: parsed.generatedOutlines ?? fallback.generatedOutlines
       };
@@ -611,6 +609,14 @@ function normalizeAiLanguage(language: string): AppPreferences['aiLanguage'] {
   }
 
   return 'Simplified Chinese';
+}
+
+function normalizeAppPreferences(config: AppPreferences): AppPreferences {
+  return {
+    uiLanguage: config.uiLanguage === 'zh-CN' ? 'zh-CN' : 'en',
+    aiLanguage: normalizeAiLanguage(config.aiLanguage),
+    selectionColors: normalizeSelectionColors(config.selectionColors)
+  };
 }
 
 function normalizeGeneratedOutlineItems(items: PdfGeneratedOutline['items']): PdfGeneratedOutline['items'] {

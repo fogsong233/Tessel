@@ -8555,3 +8555,120 @@ body.is-resizing-workspace-block * {
   border-color: var(--ui-border-strong);
   background: var(--ui-hover);
 }
+
+/* Opaque muted marks avoid alpha stacking artifacts on formulas and overlapping text runs. */
+.pdfViewer .textLayer ::selection {
+  color: inherit;
+  background: var(--selection-chat-color, #cfe3f5);
+}
+
+.pdf-mark {
+  background: var(--mark-color, var(--selection-highlight-color, #d8ead4));
+  mix-blend-mode: darken;
+  opacity: 1;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mark-color, #d8ead4) 76%, #000000 24%);
+}
+
+.pdf-mark:hover {
+  background: color-mix(in srgb, var(--mark-color, #d8ead4) 86%, #ffffff 14%);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--mark-color, #d8ead4) 62%, #000000 38%),
+    0 0 0 2px rgba(32, 33, 35, 0.08);
+}
+
+.pdf-mark--underline {
+  border-bottom-color: var(--mark-color, var(--selection-underline-color, #8fa4b8));
+  background: transparent;
+  box-shadow: none;
+  mix-blend-mode: normal;
+}
+
+.pdf-mark--underline:hover {
+  background: transparent;
+  box-shadow: none;
+}
+
+.selection-toolbar {
+  gap: 5px;
+}
+
+.selection-toolbar .selection-toolbar__action {
+  --selection-action-color: var(--selection-highlight-color, #d8ead4);
+  border: 1px solid color-mix(in srgb, var(--selection-action-color) 72%, #000000 28%);
+  background: color-mix(in srgb, var(--selection-action-color) 72%, #ffffff 28%);
+}
+
+.selection-toolbar .selection-toolbar__action:hover {
+  background: color-mix(in srgb, var(--selection-action-color) 88%, #ffffff 12%);
+}
+
+.selection-toolbar__action--highlight {
+  --selection-action-color: var(--selection-highlight-color, #d8ead4);
+}
+
+.selection-toolbar__action--underline {
+  --selection-action-color: var(--selection-underline-color, #8fa4b8);
+}
+
+.selection-toolbar__action--chat {
+  --selection-action-color: var(--selection-chat-color, #cfe3f5);
+}
+
+.selection-toolbar__action--note {
+  --selection-action-color: var(--selection-note-color, #f5e3a6);
+}
+
+.selection-toolbar__action--summary {
+  --selection-action-color: var(--selection-summary-color, #ded7f0);
+}
+
+.selection-toolbar__action--translate {
+  --selection-action-color: var(--selection-translate-color, #d7eadf);
+}
+
+.selection-toolbar .selection-toolbar__close {
+  border: 1px solid var(--ui-border);
+  background: var(--ui-surface);
+}
+
+.settings-color-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.settings-color-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  background: var(--ui-surface);
+}
+
+.settings-color-field span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ui-text);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-color-field input[type="color"] {
+  width: 42px;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-tight);
+  background: var(--ui-surface);
+}
+
+@media (max-width: 980px) {
+  .settings-color-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
