@@ -81,6 +81,9 @@ Important files:
     reader/dock/chat polish.
 - `tests/e2e/sidelight.spec.ts`
   - Playwright Electron integration tests.
+- `docs/LEARNING_SPACE_PLAN.md`
+  - Product and implementation plan for evolving the reader into a spatial
+    learning canvas.
 
 ## Recent Fixes
 
@@ -115,6 +118,9 @@ Chat:
 - Markdown prose, blockquotes, headings, lists, code, and KaTeX have scoped
   styles inside the dock.
 - Composer uses lucide/PrimeReact controls.
+- Chat supports image attachments from the file picker, drag/drop, and pasted
+  clipboard images. User messages persist image attachments and AI requests send
+  them as OpenAI-compatible `image_url` content blocks.
 
 LaTeX:
 
@@ -159,10 +165,62 @@ Current e2e coverage:
 - Ctrl-wheel zoom increases page width.
 - Summary and Translation are temporary and not persisted.
 - Chat is persisted.
+- Chat image attachments show a composer preview, render in the transcript, and
+  are included in local draft / provider requests.
 - Chat LaTeX renders through KaTeX.
 - Right dock panels stay inside the dock.
 - PDF page does not sit under the dock.
 - AI stream stops cleanly when reader window closes.
+- AI stream stop from the composer persists a non-empty stopped/partial
+  assistant message.
+
+Learning space:
+
+- The workspace store now has durable `WorkspaceBlock` records.
+- A chat can be pinned from the chat header into the PDF canvas.
+- Pinned conversation blocks sit beside the page and move with the continuous
+  PDF canvas.
+- Pinned blocks avoid the open dock by default, can be dragged/resized on the
+  horizontal canvas, and persist `x`, `y`, and `width`.
+- E2E checks that pinned block controls are not occluded and that block content
+  does not overflow after drag/resize.
+- Notes can be pinned from the notes list or note editor. Pinned note blocks use
+  `kind: note`; clicking one reopens its note editor.
+- E2E covers note block persistence, no-overflow rendering, and click-to-open.
+- The dock `+` action is context-aware: it creates a page chat from chat mode
+  and a current-page note from notes mode.
+- Pinning a block horizontally reveals it in the canvas without forcing the PDF
+  back to the top of the page. New blocks default near the current vertical
+  reading position rather than the page start.
+- Workspace blocks are absolute-positioned, so `.workspace-canvas-spacer`
+  intentionally contributes horizontal scroll width. Keep it when changing the
+  canvas; otherwise pinned blocks can save correctly but remain unreachable or
+  invisible.
+- Pin placement follows the current PDF page, not the source page of the open
+  chat/note. Example: if a p.1 chat is open while the reader is on p.2, pinning
+  places the card beside p.2.
+- New chat/note pins now default to the left side of the PDF page. The canvas
+  reserves a stable left gutter once any left-side pin exists, so dragging a
+  pinned card changes its visible position instead of being cancelled out by
+  shrinking padding.
+- Pinned cards use a short `workspace-block-pop` mount animation and a larger
+  top drag hit area. New pins are placed through an overlap-avoidance pass, and
+  e2e checks multiple note cards do not stack on top of each other.
+- Search results for notes and Q&A now have their own pin action, so cross-page
+  items found through search can be attached to the current PDF page without
+  first opening the dock editor/chat.
+- Keep the PDF loader effect independent of `workspaceBlocks`. A previous
+  version depended on `updateWorkspaceBlockLayouts`, which depended on
+  `workspaceBlocks`, so every pin caused the PDF.js document to be destroyed and
+  reloaded.
+- Note pinning must save sequentially. Saving the note and the workspace block
+  concurrently can race in the JSON store and drop the newly pinned block.
+
+AI stream stop:
+
+- Stopping a stream records the stopped stream id in the renderer so a missing
+  final cancelled event still saves either the partial assistant text or
+  `Response stopped.` / `已停止回答。`.
 
 Expected build warnings:
 

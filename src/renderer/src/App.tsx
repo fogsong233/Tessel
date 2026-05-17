@@ -4,32 +4,53 @@ import {
   Bot,
   Check,
   Clock3,
+  Cloud,
   FileText,
   FolderOpen,
+  Github,
+  Languages as LanguagesIcon,
   Library,
   MessageCircle,
+  Plus,
+  RefreshCw,
   Search,
   Settings,
+  SlidersHorizontal,
   Tags,
   X
 } from 'lucide-react';
 import {
   AiProviderConfig,
+  AiModelInfo,
   AiMode,
+  AiDocumentToolContext,
+  AiPreferredLanguage,
+  AiToolCallEvent,
+  AppPreferences,
   Conversation,
   ConversationAttachment,
   ConversationMessage,
   ConversationSummary,
+  defaultAppPreferences,
   NoteDocument,
+  PdfGeneratedOutline,
+  PdfGeneratedOutlineItem,
   PdfMark,
   PdfMarkKind,
   PdfDocumentMeta,
+  PdfReadingState,
   PdfSourceDescriptor,
   PdfUserBookmark,
+  GitHubUploadConfig,
+  LibraryGroup,
   SafeAiProviderConfig,
-  TextAnchor
+  SafeGitHubUploadConfig,
+  TextAnchor,
+  UiLanguage,
+  WorkspaceBlock
 } from '../../shared/domain';
 import { createId } from '../../shared/ids';
+import { mergeNoteDocuments as mergeNotes } from '../../shared/notes';
 import { PdfReader, type PdfSelectionPayload } from './PdfReader';
 import { MarkdownView } from './MarkdownView';
 
@@ -48,6 +69,7 @@ interface TransientAidState {
 export function App(): ReactElement {
   const readerDocumentId = useMemo(() => new URLSearchParams(window.location.search).get('documentId') ?? undefined, []);
   const [documents, setDocuments] = useState<PdfDocumentMeta[]>([]);
+  const [libraryGroups, setLibraryGroups] = useState<LibraryGroup[]>([]);
   const [activeDocument, setActiveDocument] = useState<PdfDocumentMeta>();
   const [pdfSource, setPdfSource] = useState<PdfSourceDescriptor>();
   const [currentPage, setCurrentPage] = useState(1);
@@ -55,18 +77,32 @@ export function App(): ReactElement {
   const [activeConversationId, setActiveConversationId] = useState<string>();
   const [marks, setMarks] = useState<PdfMark[]>([]);
   const [bookmarks, setBookmarks] = useState<PdfUserBookmark[]>([]);
-  const [note, setNote] = useState<NoteDocument>();
+  const [notes, setNotes] = useState<NoteDocument[]>([]);
+  const [workspaceBlocks, setWorkspaceBlocks] = useState<WorkspaceBlock[]>([]);
+  const [generatedOutline, setGeneratedOutline] = useState<PdfGeneratedOutline | null>(null);
   const [aiProvider, setAiProvider] = useState<SafeAiProviderConfig>();
+  const [githubUpload, setGitHubUpload] = useState<SafeGitHubUploadConfig>();
+  const [appPreferences, setAppPreferences] = useState<AppPreferences>(defaultAppPreferences);
   const [transientAid, setTransientAid] = useState<TransientAidState>();
   const [panelOpen, setPanelOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [noteBusy, setNoteBusy] = useState(false);
+  const [outlineGenerationBusy, setOutlineGenerationBusy] = useState(false);
+  const [outlineGenerationError, setOutlineGenerationError] = useState<string>();
+  const [activeStream, setActiveStream] = useState<{ streamId: string; conversationId?: string }>();
   const loadedReaderDocumentRef = useRef<string | undefined>(undefined);
-  const readingStateTimer = useRef<number | undefined>(undefined);
+  const stoppedStreamIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     void refreshLibrary();
-    void refreshAiProvider();
+    void refreshSettings();
+  }, []);
+
+  useEffect(() => {
+    return window.sidelight.onLibraryChanged(() => {
+      void refreshLibrary();
+    });
   }, []);
 
   useEffect(() => {
@@ -78,27 +114,41 @@ export function App(): ReactElement {
     void loadDocumentIntoCurrentWindow(readerDocumentId);
   }, [readerDocumentId]);
 
-  useEffect(() => {
-    return () => {
-      if (readingStateTimer.current) {
-        window.clearTimeout(readingStateTimer.current);
-      }
-    };
-  }, []);
-
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeConversationId),
     [activeConversationId, conversations]
   );
 
+  useEffect(() => {
+    if (readerDocumentId) {
+      return;
+    }
+
+    const refreshOnFocus = (): void => {
+      void refreshLibrary();
+    };
+    window.addEventListener('focus', refreshOnFocus);
+    return () => window.removeEventListener('focus', refreshOnFocus);
+  }, [readerDocumentId]);
+
   async function refreshLibrary(): Promise<void> {
-    const loadedDocuments = await window.sidelight.listDocuments();
+    const [loadedDocuments, loadedGroups] = await Promise.all([
+      window.sidelight.listDocuments(),
+      window.sidelight.listLibraryGroups()
+    ]);
     setDocuments(loadedDocuments);
+    setLibraryGroups(loadedGroups);
   }
 
-  async function refreshAiProvider(): Promise<void> {
-    const provider = await window.sidelight.getAiProvider();
+  async function refreshSettings(): Promise<void> {
+    const [provider, upload, preferences] = await Promise.all([
+      window.sidelight.getAiProvider(),
+      window.sidelight.getGitHubUpload(),
+      window.sidelight.getAppPreferences()
+    ]);
     setAiProvider(provider);
+    setGitHubUpload(upload);
+    setAppPreferences(preferences);
   }
 
   async function openPdf(): Promise<void> {
@@ -115,6 +165,39 @@ export function App(): ReactElement {
     await refreshLibrary();
   }
 
+  async function addActiveDocumentToLibrary(): Promise<void> {
+    if (!activeDocument) {
+      return;
+    }
+
+    const saved = await window.sidelight.addDocumentToLibrary(activeDocument.id);
+    setActiveDocument(saved);
+    setDocuments((current) => [
+      saved,
+      ...current.filter((document) => document.id !== saved.id)
+    ]);
+    await window.sidelight.syncWorkspace();
+  }
+
+  async function saveLibraryGroup(group: LibraryGroup): Promise<void> {
+    const saved = await window.sidelight.saveLibraryGroup({ group });
+    setLibraryGroups((current) => [
+      saved,
+      ...current.filter((candidate) => candidate.id !== saved.id)
+    ].sort((a, b) => a.name.localeCompare(b.name)));
+    await window.sidelight.syncWorkspace();
+  }
+
+  async function saveDocumentMeta(document: PdfDocumentMeta): Promise<void> {
+    const saved = await window.sidelight.updateDocument(document);
+    setDocuments((current) => [
+      saved,
+      ...current.filter((candidate) => candidate.id !== saved.id)
+    ]);
+    setActiveDocument((current) => current?.id === saved.id ? saved : current);
+    await window.sidelight.syncWorkspace();
+  }
+
   async function loadDocumentIntoCurrentWindow(documentId: string): Promise<void> {
     const result = await window.sidelight.loadPdf(documentId);
     if (!result) {
@@ -126,13 +209,16 @@ export function App(): ReactElement {
 
   async function activateDocument(document: PdfDocumentMeta, source: PdfSourceDescriptor): Promise<void> {
     const documentId = document.id;
-    const [loadedConversations, loadedMarks, loadedBookmarks, readingState, loadedNote] = await Promise.all([
+    const [loadedConversations, loadedMarks, loadedBookmarks, readingState, loadedMainNote, loadedWorkspaceBlocks, loadedGeneratedOutline] = await Promise.all([
       window.sidelight.listConversations(documentId),
       window.sidelight.listPdfMarks(documentId),
       window.sidelight.listPdfBookmarks(documentId),
       window.sidelight.getReadingState(documentId),
-      window.sidelight.getNote(documentId)
+      window.sidelight.getNote(documentId),
+      window.sidelight.listWorkspaceBlocks(documentId),
+      window.sidelight.getGeneratedPdfOutline(documentId)
     ]);
+    const loadedNotes = await window.sidelight.listNotes(documentId);
 
     setActiveDocument(document);
     setCurrentPage(readingState?.lastPage ?? 1);
@@ -141,7 +227,10 @@ export function App(): ReactElement {
     setActiveConversationId(loadedConversations[0]?.id);
     setMarks(loadedMarks);
     setBookmarks(loadedBookmarks);
-    setNote(loadedNote);
+    setNotes(mergeNotes([loadedMainNote, ...loadedNotes]));
+    setWorkspaceBlocks(loadedWorkspaceBlocks);
+    setGeneratedOutline(loadedGeneratedOutline);
+    setOutlineGenerationError(undefined);
     setPanelOpen(Boolean(loadedConversations[0]));
   }
 
@@ -150,6 +239,7 @@ export function App(): ReactElement {
       return;
     }
 
+    clearTransientForeground();
     const anchor = anchorFromSelection(activeDocument.id, selection);
     const now = new Date().toISOString();
     const conversation: Conversation = {
@@ -168,9 +258,8 @@ export function App(): ReactElement {
       updatedAt: now
     };
 
-    await saveConversationLocally(conversation);
-    setActiveConversationId(conversation.id);
-    setPanelOpen(true);
+    const saved = await saveConversationLocally(conversation);
+    focusConversation(saved.id);
   }
 
   async function createPageChat(pageNumber: number): Promise<void> {
@@ -178,6 +267,7 @@ export function App(): ReactElement {
       return;
     }
 
+    clearTransientForeground();
     const now = new Date().toISOString();
     const conversation: Conversation = {
       id: createId('chat'),
@@ -194,9 +284,8 @@ export function App(): ReactElement {
       updatedAt: now
     };
 
-    await saveConversationLocally(conversation);
-    setActiveConversationId(conversation.id);
-    setPanelOpen(true);
+    const saved = await saveConversationLocally(conversation);
+    focusConversation(saved.id);
   }
 
   async function startAnchoredAction(mode: AiMode, selection: PdfSelectionPayload): Promise<void> {
@@ -224,7 +313,7 @@ export function App(): ReactElement {
     const streamId = createId('stream');
     let streamedContent = '';
     let finished = false;
-    setTransientAid({
+    focusTransientAid({
       id: aidId,
       mode,
       pageNumber: selection.pageNumber,
@@ -263,7 +352,7 @@ export function App(): ReactElement {
       if (event.error) {
         finish({
           content: streamedContent,
-          error: event.error
+          error: presentableAiError(event.error)
         });
         return;
       }
@@ -287,15 +376,29 @@ export function App(): ReactElement {
         streamId,
         request: {
           mode,
-          prompt: promptForMode(mode),
+          prompt: promptForMode(mode, appPreferences.aiLanguage),
           documentTitle: activeDocument.title,
-          contextText: selection.quote
+          contextText: selection.quote,
+          conversationContext: buildSelectionConversationContext(selection.pageNumber, selection.quote),
+          toolContext: buildAiDocumentToolContext({
+            document: activeDocument,
+            context: {
+              currentPage: currentPage,
+              selectedText: selection.quote
+            },
+            marks,
+            conversations,
+            pageStart: selection.pageNumber,
+            pageEnd: selection.pageNumber,
+            selectedText: selection.quote
+          }),
+          preferredLanguage: appPreferences.aiLanguage
         }
       });
     } catch (error) {
       finish({
         content: streamedContent,
-        error: error instanceof Error ? error.message : String(error)
+        error: presentableAiError(error)
       });
     }
   }
@@ -303,7 +406,8 @@ export function App(): ReactElement {
   async function sendMessage(
     conversationId: string,
     prompt: string,
-    attachments: ConversationAttachment[] = []
+    attachments: ConversationAttachment[] = [],
+    toolContext?: AiDocumentToolContext
   ): Promise<void> {
     const conversation = conversations.find((candidate) => candidate.id === conversationId);
     if (!conversation) {
@@ -328,13 +432,14 @@ export function App(): ReactElement {
       ...nextConversation,
       summary: summarizeConversation(nextConversation.mode, nextConversation.messages, nextConversation.anchor)
     });
-    await completeConversation(nextConversation, prompt, attachments);
+    await completeConversation(nextConversation, prompt, attachments, toolContext);
   }
 
   async function completeConversation(
     conversation: Conversation,
     prompt: string,
-    attachments: ConversationAttachment[] = []
+    attachments: ConversationAttachment[] = [],
+    toolContext?: AiDocumentToolContext
   ): Promise<void> {
     if (!activeDocument) {
       return;
@@ -345,6 +450,17 @@ export function App(): ReactElement {
       lastMessage?.role === 'user' && lastMessage.content === prompt
         ? conversation.messages.slice(0, -1)
         : conversation.messages;
+    const anchorPage = conversation.anchor?.pageNumber ?? conversation.pageNumber ?? currentPage;
+    const enrichedToolContext = buildAiDocumentToolContext({
+      document: activeDocument,
+      context: toolContext,
+      marks,
+      conversations,
+      pageStart: toolContext?.pageStart ?? anchorPage,
+      pageEnd: toolContext?.pageEnd ?? toolContext?.pageStart ?? anchorPage,
+      pdfText: toolContext?.pdfText,
+      selectedText: toolContext?.selectedText ?? conversation.anchor?.quote
+    });
 
     setBusy(true);
     const assistantMessage: ConversationMessage = {
@@ -362,6 +478,7 @@ export function App(): ReactElement {
     putConversationInState(draftConversation);
 
     const streamId = createId('stream');
+    setActiveStream({ streamId, conversationId: conversation.id });
     let finished = false;
     const finishWithConversation = async (conversationToSave: Conversation): Promise<void> => {
       if (finished) {
@@ -376,6 +493,8 @@ export function App(): ReactElement {
       });
       void refreshConversationSummary(saved);
       setBusy(false);
+      setActiveStream((current) => current?.streamId === streamId ? undefined : current);
+      stoppedStreamIdsRef.current.delete(streamId);
     };
 
     const unsubscribe = window.sidelight.onAiStreamEvent((event) => {
@@ -383,12 +502,29 @@ export function App(): ReactElement {
         return;
       }
 
+      if (event.toolCall) {
+        draftConversation = {
+          ...draftConversation,
+          messages: draftConversation.messages.map((message) =>
+            message.id === assistantMessage.id
+              ? { ...message, toolCalls: mergeToolCallEvents(message.toolCalls, event.toolCall!) }
+              : message
+          ),
+          updatedAt: new Date().toISOString()
+        };
+        putConversationInState(draftConversation);
+      }
+
       if (event.delta) {
         streamedContent += event.delta;
       }
 
       if (event.error) {
-        streamedContent = `AI request failed: ${event.error}`;
+        streamedContent = `AI request failed: ${presentableAiError(event.error)}`;
+      }
+
+      if (event.cancelled && !streamedContent.trim()) {
+        streamedContent = stoppedGenerationText(appPreferences.aiLanguage);
       }
 
       if (event.delta || event.error || event.done) {
@@ -411,26 +547,56 @@ export function App(): ReactElement {
       await window.sidelight.completeAiStream({
         streamId,
         request: {
-        mode: conversation.mode,
-        prompt,
-        documentTitle: activeDocument.title,
-        contextText: conversation.anchor?.quote,
+          mode: conversation.mode,
+          prompt,
+          documentTitle: activeDocument.title,
+          contextText: conversation.anchor?.quote,
           messages: history,
-          attachments
+          attachments,
+          conversationContext: buildChatConversationContext(conversation, activeDocument.title, attachments),
+          toolContext: enrichedToolContext,
+          preferredLanguage: appPreferences.aiLanguage
         }
       });
+      if (!finished && stoppedStreamIdsRef.current.has(streamId)) {
+        const stoppedConversation: Conversation = {
+          ...draftConversation,
+          messages: draftConversation.messages.map((message) =>
+            message.id === assistantMessage.id
+              ? { ...message, content: streamedContent.trim() ? streamedContent : stoppedGenerationText(appPreferences.aiLanguage) }
+              : message
+          ),
+          updatedAt: new Date().toISOString()
+        };
+        await finishWithConversation(stoppedConversation);
+      }
     } catch (error) {
+      const wasStopped = stoppedStreamIdsRef.current.has(streamId);
       const failedConversation: Conversation = {
         ...draftConversation,
         messages: draftConversation.messages.map((message) =>
           message.id === assistantMessage.id
-            ? { ...message, content: `AI request failed: ${(error as Error).message}` }
+            ? {
+                ...message,
+                content: wasStopped
+                  ? streamedContent.trim() ? streamedContent : stoppedGenerationText(appPreferences.aiLanguage)
+                  : `AI request failed: ${presentableAiError(error)}`
+              }
             : message
         ),
         updatedAt: new Date().toISOString()
       };
       await finishWithConversation(failedConversation);
     }
+  }
+
+  function stopActiveGeneration(): void {
+    if (!activeStream) {
+      return;
+    }
+
+    stoppedStreamIdsRef.current.add(activeStream.streamId);
+    void window.sidelight.cancelAiStream(activeStream.streamId);
   }
 
   function putConversationInState(conversation: Conversation): void {
@@ -454,7 +620,7 @@ export function App(): ReactElement {
       return;
     }
 
-    const aiSummary = await requestConversationSummary(conversation, activeDocument.title);
+    const aiSummary = await requestConversationSummary(conversation, activeDocument.title, appPreferences.aiLanguage);
     if (!aiSummary) {
       return;
     }
@@ -527,30 +693,207 @@ export function App(): ReactElement {
     setMarks((current) => current.filter((mark) => mark.id !== markId));
   }
 
-  async function saveAiProvider(config: AiProviderConfig): Promise<void> {
-    const saved = await window.sidelight.saveAiProvider(config);
-    setAiProvider(saved);
+  async function saveSettings(
+    aiConfig: AiProviderConfig,
+    uploadConfig: GitHubUploadConfig,
+    preferencesConfig: AppPreferences
+  ): Promise<void> {
+    const savedProvider = await window.sidelight.saveAiProvider(aiConfig);
+    const savedUpload = await window.sidelight.saveGitHubUpload(uploadConfig);
+    const savedPreferences = await window.sidelight.saveAppPreferences(preferencesConfig);
+    setAiProvider(savedProvider);
+    setGitHubUpload(savedUpload);
+    setAppPreferences(savedPreferences);
     setSettingsOpen(false);
   }
 
-  async function saveNote(markdown: string): Promise<void> {
-    if (!note) {
+  async function saveNote(noteToSave: NoteDocument): Promise<void> {
+    if (!activeDocument) {
       return;
     }
 
     const saved = await window.sidelight.saveNote({
       note: {
-        ...note,
-        markdown,
+        ...noteToSave,
+        documentId: activeDocument.id,
         updatedAt: new Date().toISOString()
       }
     });
-    setNote(saved);
+    setNotes((current) => mergeNotes([saved, ...current]));
+  }
+
+  async function deleteNote(noteId: string): Promise<void> {
+    await window.sidelight.deleteNote(noteId);
+    setNotes((current) => current.filter((note) => note.id !== noteId));
+    setWorkspaceBlocks((current) =>
+      current.filter((block) => !(block.kind === 'note' && block.sourceId === noteId))
+    );
+  }
+
+  async function saveWorkspaceBlock(block: WorkspaceBlock): Promise<void> {
+    setWorkspaceBlocks((current) => [
+      block,
+      ...current.filter((candidate) => candidate.id !== block.id)
+    ]);
+    const saved = await window.sidelight.saveWorkspaceBlock({ block });
+    setWorkspaceBlocks((current) => [
+      saved,
+      ...current.filter((candidate) => candidate.id !== saved.id)
+    ]);
+  }
+
+  async function deleteWorkspaceBlock(blockId: string): Promise<void> {
+    await window.sidelight.deleteWorkspaceBlock(blockId);
+    setWorkspaceBlocks((current) => current.filter((block) => block.id !== blockId));
+  }
+
+  async function generateAiNote(
+    pageStart: number,
+    pageEnd: number,
+    pageText: string,
+    toolContext?: AiDocumentToolContext
+  ): Promise<void> {
+    if (!activeDocument || noteBusy) {
+      return;
+    }
+
+    const rangeStart = Math.max(1, Math.floor(Math.min(pageStart, pageEnd)));
+    const rangeEnd = Math.max(rangeStart, Math.floor(Math.max(pageStart, pageEnd)));
+    const rangeMarks = marks.filter((mark) => mark.pageNumber >= rangeStart && mark.pageNumber <= rangeEnd);
+    const rangeConversations = conversations.filter((conversation) => {
+      const pageNumber = conversation.pageNumber ?? conversation.anchor?.pageNumber;
+      return pageNumber !== undefined && pageNumber >= rangeStart && pageNumber <= rangeEnd;
+    });
+    const enrichedToolContext = buildAiDocumentToolContext({
+      document: activeDocument,
+      context: toolContext,
+      marks,
+      conversations,
+      pageStart: rangeStart,
+      pageEnd: rangeEnd,
+      pdfText: pageText
+    });
+    const now = new Date().toISOString();
+    const noteToSave: NoteDocument = {
+      id: createId('note'),
+      documentId: activeDocument.id,
+      title: `AI notes p.${rangeStart}-${rangeEnd}`,
+      markdown: `# AI notes p.${rangeStart}-${rangeEnd}\n\nGenerating notes...`,
+      pageStart: rangeStart,
+      pageEnd: rangeEnd,
+      source: 'ai',
+      createdAt: now,
+      updatedAt: now
+    };
+
+    setNoteBusy(true);
+    const draft = await window.sidelight.saveNote({ note: noteToSave });
+    setNotes((current) => mergeNotes([draft, ...current]));
+
+    try {
+      const response = await window.sidelight.completeAi({
+        mode: 'summarize',
+        documentTitle: activeDocument.title,
+        prompt: notePromptForLanguage(rangeStart, rangeEnd, appPreferences.aiLanguage),
+        contextText: buildNoteContext(rangeStart, rangeEnd, pageText, rangeMarks, rangeConversations),
+        conversationContext: buildNoteConversationContext(rangeStart, rangeEnd, rangeConversations),
+        toolContext: enrichedToolContext,
+        preferredLanguage: appPreferences.aiLanguage
+      });
+      const saved = await window.sidelight.saveNote({
+        note: {
+          ...draft,
+          markdown: normalizeGeneratedNote(response.content, rangeStart, rangeEnd),
+          updatedAt: new Date().toISOString()
+        }
+      });
+      setNotes((current) => mergeNotes([saved, ...current]));
+    } catch (error) {
+      const failed = await window.sidelight.saveNote({
+        note: {
+          ...draft,
+          markdown: `# AI notes p.${rangeStart}-${rangeEnd}\n\nAI request failed: ${presentableAiError(error)}`,
+          updatedAt: new Date().toISOString()
+        }
+      });
+      setNotes((current) => mergeNotes([failed, ...current]));
+    } finally {
+      setNoteBusy(false);
+    }
+  }
+
+  async function generatePdfOutline(toolContext?: AiDocumentToolContext): Promise<void> {
+    if (!activeDocument || outlineGenerationBusy) {
+      return;
+    }
+
+    const totalPages = toolContext?.totalPages ?? activeDocument.pageCount ?? currentPage;
+    const enrichedToolContext = buildAiDocumentToolContext({
+      document: activeDocument,
+      context: toolContext,
+      marks,
+      conversations,
+      pageStart: 1,
+      pageEnd: Math.max(1, totalPages)
+    });
+
+    setOutlineGenerationBusy(true);
+    setOutlineGenerationError(undefined);
+
+    try {
+      const response = await window.sidelight.completeAi({
+        mode: 'summarize',
+        documentTitle: activeDocument.title,
+        prompt: outlinePromptForLanguage(Math.max(1, totalPages), appPreferences.aiLanguage),
+        conversationContext: [
+          'Task: create an external table of contents for a PDF that has no embedded outline.',
+          `Document: ${activeDocument.title}.`,
+          `Total pages: ${Math.max(1, totalPages)}.`,
+          'The resulting outline will be saved with the document workspace metadata and reused by PDF hash.'
+        ].join('\n'),
+        toolContext: enrichedToolContext,
+        preferredLanguage: appPreferences.aiLanguage
+      });
+      const items = parseGeneratedOutlineItems(response.content, Math.max(1, totalPages));
+      if (items.length === 0) {
+        throw new Error('The AI response did not contain a usable outline JSON array.');
+      }
+
+      const now = new Date().toISOString();
+      const saved = await window.sidelight.saveGeneratedPdfOutline({
+        outline: {
+          documentId: activeDocument.id,
+          source: 'ai',
+          items,
+          createdAt: generatedOutline?.createdAt ?? now,
+          updatedAt: now
+        }
+      });
+      setGeneratedOutline(saved);
+    } catch (error) {
+      setOutlineGenerationError(presentableAiError(error));
+    } finally {
+      setOutlineGenerationBusy(false);
+    }
   }
 
   function openConversation(conversationId: string): void {
+    focusConversation(conversationId);
+  }
+
+  function focusConversation(conversationId: string): void {
+    clearTransientForeground();
     setActiveConversationId(conversationId);
     setPanelOpen(true);
+  }
+
+  function focusTransientAid(aid: TransientAidState): void {
+    setPanelOpen(false);
+    setTransientAid(aid);
+  }
+
+  function clearTransientForeground(): void {
+    setTransientAid(undefined);
   }
 
   function updateCurrentPage(pageNumber: number): void {
@@ -561,17 +904,18 @@ export function App(): ReactElement {
       return;
     }
 
-    if (readingStateTimer.current) {
-      window.clearTimeout(readingStateTimer.current);
-    }
-
-    readingStateTimer.current = window.setTimeout(() => {
-      void window.sidelight.saveReadingState({
-        documentId,
-        lastPage: pageNumber,
-        updatedAt: new Date().toISOString()
-      });
-    }, 400);
+    const nextState: PdfReadingState = {
+      documentId,
+      lastPage: pageNumber,
+      updatedAt: new Date().toISOString()
+    };
+    setActiveDocument((current) => current?.id === documentId ? { ...current, readingState: nextState } : current);
+    setDocuments((current) =>
+      current.map((document) =>
+        document.id === documentId ? { ...document, readingState: nextState, lastOpenedAt: nextState.updatedAt } : document
+      )
+    );
+    void window.sidelight.saveReadingState(nextState);
   }
 
   if (!readerDocumentId) {
@@ -579,17 +923,24 @@ export function App(): ReactElement {
       <main className="app-shell">
         <LibraryHome
           documents={documents}
+          groups={libraryGroups}
           provider={aiProvider}
+          uiLanguage={appPreferences.uiLanguage}
           onOpenPdf={() => void openPdf()}
           onOpenDocument={(documentId) => void openDocumentWindow(documentId)}
+          onSaveGroup={(group) => void saveLibraryGroup(group)}
+          onSaveDocument={(document) => void saveDocumentMeta(document)}
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
-        {settingsOpen && aiProvider && (
+        {settingsOpen && aiProvider && githubUpload && (
           <FloatingSettingsPanel
             provider={aiProvider}
+            githubUpload={githubUpload}
+            preferences={appPreferences}
             onClose={() => setSettingsOpen(false)}
-            onSave={(config) => void saveAiProvider(config)}
+            onSave={(aiConfig, uploadConfig, preferencesConfig) =>
+              void saveSettings(aiConfig, uploadConfig, preferencesConfig)}
           />
         )}
       </main>
@@ -600,21 +951,27 @@ export function App(): ReactElement {
     <main className="app-shell">
       <PdfReader
         documents={documents}
+        libraryGroups={libraryGroups}
         source={pdfSource}
         meta={activeDocument}
+        uiLanguage={appPreferences.uiLanguage}
         activePage={currentPage}
         marks={marks}
         bookmarks={bookmarks}
         conversations={conversations}
+        workspaceBlocks={workspaceBlocks}
+        generatedOutline={generatedOutline}
         activeConversationId={activeConversationId}
         activeConversation={activeConversation}
-        note={note}
+        notes={notes}
         chatOpen={panelOpen}
         busy={busy}
+        canStopGeneration={busy && activeStream?.conversationId === activeConversation?.id}
         transientAid={transientAid}
         onOpenPdf={openPdf}
         onOpenSettings={() => setSettingsOpen(true)}
         onLoadDocument={(documentId) => void openDocumentWindow(documentId)}
+        onAddToLibrary={() => void addActiveDocumentToLibrary()}
         onPageChange={updateCurrentPage}
         onCreateMark={(kind, selection) => void saveMark(kind, selection)}
         onSelectionAction={(mode, selection) => void startAnchoredAction(mode, selection)}
@@ -625,52 +982,307 @@ export function App(): ReactElement {
         onOpenConversation={openConversation}
         onCloseConversation={() => setPanelOpen(false)}
         onCloseTransientAid={() => setTransientAid(undefined)}
-        onSendMessage={(conversationId, prompt, attachments) => void sendMessage(conversationId, prompt, attachments)}
-        onSaveNote={(markdown) => void saveNote(markdown)}
+        onSendMessage={(conversationId, prompt, attachments, toolContext) =>
+          void sendMessage(conversationId, prompt, attachments, toolContext)}
+        onStopGeneration={stopActiveGeneration}
+        noteBusy={noteBusy}
+        outlineGenerationBusy={outlineGenerationBusy}
+        outlineGenerationError={outlineGenerationError}
+        onSaveWorkspaceBlock={saveWorkspaceBlock}
+        onDeleteWorkspaceBlock={(blockId) => void deleteWorkspaceBlock(blockId)}
+        onSaveNote={saveNote}
+        onDeleteNote={(noteId) => void deleteNote(noteId)}
+        onGenerateNote={(pageStart, pageEnd, pageText, toolContext) =>
+          void generateAiNote(pageStart, pageEnd, pageText, toolContext)}
+        onGenerateOutline={(toolContext) => void generatePdfOutline(toolContext)}
       />
 
-      {settingsOpen && aiProvider && (
+      {settingsOpen && aiProvider && githubUpload && (
         <FloatingSettingsPanel
           provider={aiProvider}
+          githubUpload={githubUpload}
+          preferences={appPreferences}
           onClose={() => setSettingsOpen(false)}
-          onSave={(config) => void saveAiProvider(config)}
+          onSave={(aiConfig, uploadConfig, preferencesConfig) =>
+            void saveSettings(aiConfig, uploadConfig, preferencesConfig)}
         />
       )}
     </main>
   );
 }
 
+function appText(language: UiLanguage) {
+  if (language === 'zh-CN') {
+    return {
+      aiPreferredLanguage: 'AI 首选语言',
+      aiProvider: 'AI Provider',
+      aiReady: 'AI 已就绪',
+      apiKey: 'API key',
+      baseUrl: 'Base URL',
+      branch: 'Branch',
+      cancel: '取消',
+      availableModels: '可选模型',
+      chooseModel: '选择模型',
+      close: '关闭',
+      enabled: '启用',
+      fetchModels: '获取 models',
+      githubUpload: 'GitHub 上传',
+      group: '分组',
+      groups: '分组',
+      cloudHeld: '云端持有',
+      createGroup: '创建分组',
+      groupFilters: '分组筛选',
+      holdInCloud: '持有这个组',
+      newGroup: '新分组',
+      noGroup: '未分组',
+      noGroupsYet: '还没有分组',
+      quickOpen: '临时打开',
+      keyStored: 'Key 已保存',
+      language: '语言',
+      languageHelp: '分别控制界面文案和 AI 输出语言',
+      languageMuted: 'UI 语言只影响按钮和界面文案；AI 首选语言会影响提示词、翻译目标和生成内容。',
+      allDocuments: '全部文档',
+      clearFilter: '清除筛选',
+      latestFile: '最近文件',
+      lastOpened: '上次打开',
+      library: '资料库',
+      libraryEmptyCopy: '每个 PDF 会在独立阅读窗口中打开，并保留对话、笔记和标注。',
+      librarySections: '资料库分区',
+      loadingModels: '获取中...',
+      localDraftMode: '本地草稿模式',
+      localFirstLibraryData: '本地优先的资料库数据',
+      model: 'Model',
+      name: '名称',
+      noModelsFound: '没有获取到模型。',
+      noMatchingCopy: '换一个标题、文件名或标签试试。',
+      noMatchingPdfs: '没有匹配的 PDF',
+      noRecentFiles: '还没有最近打开的 PDF',
+      noTagsYet: '还没有标签',
+      noProviderLoaded: 'Provider 未加载',
+      openAiCompatible: 'OpenAI-compatible chat completions',
+      openFirstPdf: '打开第一个 PDF',
+      openPdf: '打开 PDF',
+      owner: 'Owner',
+      pageProgress: '阅读进度',
+      path: 'Path',
+      pdfLibrary: 'PDF 资料库',
+      pdfReadingWorkspace: 'PDF 阅读工作台',
+      recent: '最近',
+      recentDocuments: '最近文档',
+      repo: 'Repo',
+      repositoryTarget: '仓库目标',
+      save: '保存',
+      searchPdfsOrTags: '搜索 PDF 或标签',
+      showing: '当前显示',
+      settings: '设置',
+      settingsSections: '设置分区',
+      storedKeyPlaceholder: '已保存。输入新 key 可替换。',
+      storedTokenPlaceholder: '已保存。输入新 token 可替换。',
+      tags: '标签',
+      tagFilters: '标签筛选',
+      taggedDocuments: '已打标签',
+      temperature: 'Temperature',
+      title: '标题',
+      token: 'Token',
+      tokenStored: 'Token 已保存',
+      uiLanguage: 'UI 语言',
+      untagged: '无标签',
+      workspace: '工作区',
+      workspaceMuted: 'PDF 元数据、笔记、标注和对话会留在本地工作区，直到你开启上传。'
+    };
+  }
+
+  return {
+    aiPreferredLanguage: 'AI preferred language',
+    aiProvider: 'AI Provider',
+    aiReady: 'AI ready',
+    apiKey: 'API key',
+    baseUrl: 'Base URL',
+    branch: 'Branch',
+    cancel: 'Cancel',
+    availableModels: 'Available models',
+    chooseModel: 'Choose a model',
+    close: 'Close',
+    enabled: 'Enabled',
+    fetchModels: 'Fetch models',
+    githubUpload: 'GitHub Upload',
+    group: 'Group',
+    groups: 'Groups',
+    cloudHeld: 'Cloud held',
+    createGroup: 'Create group',
+    groupFilters: 'Group filters',
+    holdInCloud: 'Hold this group',
+    newGroup: 'New group',
+    noGroup: 'No group',
+    noGroupsYet: 'No groups yet',
+    quickOpen: 'Temporary open',
+    keyStored: 'Key stored',
+    language: 'Language',
+    languageHelp: 'Control interface text and AI output separately',
+    languageMuted: 'UI language changes buttons and interface text. AI preferred language changes prompts, translation targets, and generated content.',
+    allDocuments: 'All documents',
+    clearFilter: 'Clear filter',
+    latestFile: 'Latest file',
+    lastOpened: 'Last opened',
+    library: 'Library',
+    libraryEmptyCopy: 'Each PDF opens in its own reading window with persistent chats and notes.',
+    librarySections: 'Library sections',
+    loadingModels: 'Loading...',
+    localDraftMode: 'Local draft mode',
+    localFirstLibraryData: 'Local-first library data',
+    model: 'Model',
+    name: 'Name',
+    noModelsFound: 'No models were returned.',
+    noMatchingCopy: 'Try a different title, file name, or tag.',
+    noMatchingPdfs: 'No matching PDFs',
+    noRecentFiles: 'No recently opened PDFs yet',
+    noTagsYet: 'No tags yet',
+    noProviderLoaded: 'No provider loaded',
+    openAiCompatible: 'OpenAI-compatible chat completions',
+    openFirstPdf: 'Open your first PDF',
+      openPdf: 'Open PDF',
+    owner: 'Owner',
+    pageProgress: 'Reading progress',
+    path: 'Path',
+    pdfLibrary: 'PDF library',
+    pdfReadingWorkspace: 'PDF reading workspace',
+    recent: 'Recent',
+    recentDocuments: 'Recent documents',
+    repo: 'Repo',
+    repositoryTarget: 'Repository target',
+    save: 'Save',
+    searchPdfsOrTags: 'Search PDFs or tags',
+    showing: 'Showing',
+    settings: 'Settings',
+    settingsSections: 'Settings sections',
+    storedKeyPlaceholder: 'Stored. Enter a new key to replace it.',
+    storedTokenPlaceholder: 'Stored. Enter a new token to replace it.',
+    tags: 'Tags',
+    tagFilters: 'Tag filters',
+    taggedDocuments: 'Tagged',
+    temperature: 'Temperature',
+    title: 'Title',
+    token: 'Token',
+    tokenStored: 'Token stored',
+    uiLanguage: 'UI language',
+    untagged: 'untagged',
+    workspace: 'Workspace',
+    workspaceMuted: 'PDF metadata, notes, highlights, and chats stay in the local workspace until upload is enabled.'
+  };
+}
+
 function LibraryHome({
   documents,
+  groups,
   provider,
+  uiLanguage,
   onOpenPdf,
   onOpenDocument,
+  onSaveGroup,
+  onSaveDocument,
   onOpenSettings
 }: {
   documents: PdfDocumentMeta[];
+  groups: LibraryGroup[];
   provider?: SafeAiProviderConfig;
+  uiLanguage: UiLanguage;
   onOpenPdf(): void;
   onOpenDocument(documentId: string): void;
+  onSaveGroup(group: LibraryGroup): void;
+  onSaveDocument(document: PdfDocumentMeta): void;
   onOpenSettings(): void;
 }): ReactElement {
+  const ungroupedGroupId = '__ungrouped__';
   const [query, setQuery] = useState('');
+  const [scope, setScope] = useState<'library' | 'recent' | 'tags' | 'groups'>('library');
+  const [activeTag, setActiveTag] = useState<string>();
+  const [activeGroupId, setActiveGroupId] = useState<string>();
+  const [newGroupName, setNewGroupName] = useState('');
+  const t = appText(uiLanguage);
+  const sortedDocuments = useMemo(
+    () => [...documents].sort((a, b) => new Date(b.lastOpenedAt).getTime() - new Date(a.lastOpenedAt).getTime()),
+    [documents]
+  );
   const visibleDocuments = useMemo(() => {
+    const scopedDocuments = activeGroupId === ungroupedGroupId
+      ? sortedDocuments.filter((document) => (document.groupIds ?? []).length === 0)
+      : activeGroupId
+      ? sortedDocuments.filter((document) => (document.groupIds ?? []).includes(activeGroupId))
+      : activeTag
+      ? sortedDocuments.filter((document) => document.tags.includes(activeTag))
+      : scope === 'recent'
+        ? sortedDocuments.slice(0, 12)
+        : sortedDocuments;
     const needle = query.trim().toLowerCase();
     if (!needle) {
-      return documents;
+      return scopedDocuments;
     }
 
-    return documents.filter((document) =>
+    return scopedDocuments.filter((document) =>
       [document.title, document.fileName, ...document.tags]
         .join('\n')
         .toLowerCase()
         .includes(needle)
     );
-  }, [documents, query]);
+  }, [activeGroupId, activeTag, query, scope, sortedDocuments]);
   const allTags = useMemo(
     () => Array.from(new Set(documents.flatMap((document) => document.tags))).sort((a, b) => a.localeCompare(b)),
     [documents]
   );
+  const taggedCount = useMemo(() => documents.filter((document) => document.tags.length > 0).length, [documents]);
+  const latestDocument = sortedDocuments[0];
+
+  const ungroupedCount = useMemo(() => documents.filter((document) => (document.groupIds ?? []).length === 0).length, [documents]);
+  const activeGroup = groups.find((group) => group.id === activeGroupId);
+  const heldGroupCount = useMemo(() => groups.filter((group) => group.cloudHeld).length, [groups]);
+  const toolbarEyebrow =
+    scope === 'groups' ? t.groupFilters : activeTag ? t.tagFilters : scope === 'recent' ? t.recentDocuments : t.workspace;
+  const toolbarTitle =
+    activeGroup?.name ?? (activeGroupId === ungroupedGroupId ? t.noGroup : activeTag ?? (scope === 'recent' ? t.recentDocuments : scope === 'groups' ? t.groups : t.library));
+  const overviewButtonClass = (isActive: boolean): string => isActive ? 'library-stat is-active' : 'library-stat';
+
+  const selectScope = (nextScope: 'library' | 'recent' | 'tags' | 'groups'): void => {
+    setScope(nextScope);
+    if (nextScope !== 'groups') {
+      setActiveGroupId(undefined);
+    } else if (!activeGroupId && groups[0]) {
+      setActiveGroupId(groups[0].id);
+    }
+    if (nextScope !== 'tags') {
+      setActiveTag(undefined);
+    } else if (!activeTag && allTags[0]) {
+      setActiveTag(allTags[0]);
+    }
+  };
+
+  const createGroup = (): void => {
+    const name = newGroupName.trim();
+    if (!name) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const group: LibraryGroup = {
+      id: createId('group'),
+      name,
+      cloudHeld: false,
+      createdAt: now,
+      updatedAt: now
+    };
+    setNewGroupName('');
+    setScope('groups');
+    setActiveGroupId(group.id);
+    onSaveGroup(group);
+  };
+
+  const assignDocumentToGroup = (document: PdfDocumentMeta, groupId: string): void => {
+    onSaveDocument({
+      ...document,
+      inLibrary: true,
+      groupIds: groupId ? [groupId] : [],
+      updatedAt: new Date().toISOString()
+    });
+  };
 
   return (
     <section className="library-home">
@@ -680,37 +1292,80 @@ function LibraryHome({
             <Library size={22} />
             <div>
               <strong>Sidelight</strong>
-              <span>PDF reading workspace</span>
+              <span>{t.pdfReadingWorkspace}</span>
             </div>
           </div>
-          <button className="icon-button" type="button" title="AI provider" onClick={onOpenSettings}>
+          <button className="icon-button" type="button" title={t.settings} onClick={onOpenSettings}>
             <Settings size={16} />
           </button>
         </header>
 
-        <nav className="library-home__nav" aria-label="Library sections">
-          <button type="button" className="is-active">
+        <nav className="library-home__nav" aria-label={t.librarySections}>
+          <button
+            type="button"
+            className={scope === 'library' && !activeTag ? 'is-active' : ''}
+            aria-pressed={scope === 'library' && !activeTag}
+            onClick={() => selectScope('library')}
+          >
             <BookOpen size={16} />
-            <span>Library</span>
+            <span>{t.library}</span>
             <strong>{documents.length}</strong>
           </button>
-          <button type="button">
+          <button
+            type="button"
+            className={scope === 'recent' ? 'is-active' : ''}
+            aria-pressed={scope === 'recent'}
+            onClick={() => selectScope('recent')}
+          >
             <Clock3 size={16} />
-            <span>Recent</span>
+            <span>{t.recent}</span>
             <strong>{Math.min(documents.length, 12)}</strong>
           </button>
-          <button type="button">
+          <button
+            type="button"
+            className={scope === 'tags' || activeTag ? 'is-active' : ''}
+            aria-pressed={scope === 'tags' || Boolean(activeTag)}
+            onClick={() => selectScope('tags')}
+          >
             <Tags size={16} />
-            <span>Tags</span>
+            <span>{t.tags}</span>
             <strong>{allTags.length}</strong>
           </button>
+          <button
+            type="button"
+            className={scope === 'groups' ? 'is-active' : ''}
+            aria-pressed={scope === 'groups'}
+            onClick={() => selectScope('groups')}
+          >
+            <Cloud size={16} />
+            <span>{t.groups}</span>
+            <strong>{groups.length}</strong>
+          </button>
         </nav>
+
+        <form className="library-home__new-group" onSubmit={(event) => {
+          event.preventDefault();
+          createGroup();
+        }}>
+          <label htmlFor="library-new-group">{t.newGroup}</label>
+          <span>
+            <input
+              id="library-new-group"
+              value={newGroupName}
+              placeholder={t.newGroup}
+              onChange={(event) => setNewGroupName(event.target.value)}
+            />
+            <button type="submit" title={t.createGroup} disabled={!newGroupName.trim()}>
+              <Plus size={15} />
+            </button>
+          </span>
+        </form>
 
         <div className="library-home__provider">
           <Bot size={17} />
           <div>
-            <span>{provider?.hasApiKey ? 'AI ready' : 'Local draft mode'}</span>
-            <strong>{provider?.model ?? 'No provider loaded'}</strong>
+            <span>{provider?.hasApiKey ? t.aiReady : t.localDraftMode}</span>
+            <strong>{provider?.model ?? t.noProviderLoaded}</strong>
           </div>
         </div>
       </aside>
@@ -718,8 +1373,8 @@ function LibraryHome({
       <section className="library-home__main">
         <header className="library-toolbar">
           <div>
-            <span>Workspace</span>
-            <h1>Library</h1>
+            <span>{toolbarEyebrow}</span>
+            <h1>{toolbarTitle}</h1>
           </div>
           <div className="library-toolbar__actions">
             <label className="library-search">
@@ -727,62 +1382,207 @@ function LibraryHome({
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search PDFs or tags"
+                placeholder={t.searchPdfsOrTags}
               />
             </label>
             <button className="primary-button" type="button" onClick={onOpenPdf}>
               <FolderOpen size={16} />
-              Open PDF
+              {t.openPdf}
             </button>
           </div>
         </header>
 
-        <div className="library-table" role="table" aria-label="PDF library">
+        <section className="library-overview" aria-label={t.showing}>
+          <button
+            className={overviewButtonClass(scope === 'library' && !activeTag && !activeGroupId)}
+            type="button"
+            onClick={() => selectScope('library')}
+          >
+            <span>{t.allDocuments}</span>
+            <strong>{documents.length}</strong>
+            <small>{t.pdfLibrary}</small>
+          </button>
+          <button
+            className={overviewButtonClass(scope === 'recent')}
+            type="button"
+            onClick={() => selectScope('recent')}
+          >
+            <span>{t.recentDocuments}</span>
+            <strong>{Math.min(documents.length, 12)}</strong>
+            <small>{latestDocument?.title ?? t.noRecentFiles}</small>
+          </button>
+          <button
+            className={overviewButtonClass(scope === 'tags' || Boolean(activeTag))}
+            type="button"
+            onClick={() => selectScope('tags')}
+          >
+            <span>{t.taggedDocuments}</span>
+            <strong>{taggedCount}</strong>
+            <small>{allTags.length ? `${allTags.length} ${t.tags}` : t.noTagsYet}</small>
+          </button>
+          <button
+            className={overviewButtonClass(scope === 'groups' || Boolean(activeGroupId))}
+            type="button"
+            onClick={() => selectScope('groups')}
+          >
+            <span>{t.groups}</span>
+            <strong>{groups.length}</strong>
+            <small>{heldGroupCount ? `${heldGroupCount} ${t.cloudHeld}` : t.noGroupsYet}</small>
+          </button>
+        </section>
+
+        <div className="library-filterbar" aria-label={scope === 'groups' ? t.groupFilters : t.tagFilters}>
+          {scope === 'groups' ? (
+            <>
+              <span>{t.groupFilters}</span>
+              <button
+                type="button"
+                className={!activeGroupId ? 'is-active' : ''}
+                onClick={() => {
+                  setActiveGroupId(undefined);
+                  setActiveTag(undefined);
+                }}
+              >
+                {t.allDocuments}
+              </button>
+              <button
+                type="button"
+                className={activeGroupId === ungroupedGroupId ? 'is-active' : ''}
+                onClick={() => {
+                  setActiveGroupId(ungroupedGroupId);
+                  setActiveTag(undefined);
+                }}
+              >
+                {t.noGroup}
+                <small>{ungroupedCount}</small>
+              </button>
+              {groups.length === 0 && <em>{t.noGroupsYet}</em>}
+              {groups.map((group) => (
+                <button
+                  key={group.id}
+                  type="button"
+                  className={activeGroupId === group.id ? 'is-active' : ''}
+                  onClick={() => {
+                    setActiveGroupId(group.id);
+                    setActiveTag(undefined);
+                  }}
+                >
+                  {group.cloudHeld && <Cloud size={13} />}
+                  {group.name}
+                </button>
+              ))}
+              {activeGroup && (
+                <button
+                  type="button"
+                  className={activeGroup.cloudHeld ? 'library-filterbar__hold is-active' : 'library-filterbar__hold'}
+                  aria-pressed={activeGroup.cloudHeld}
+                  onClick={() => onSaveGroup({ ...activeGroup, cloudHeld: !activeGroup.cloudHeld })}
+                >
+                  <Cloud size={13} />
+                  {activeGroup.cloudHeld ? t.cloudHeld : t.holdInCloud}
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <span>{t.tagFilters}</span>
+              <button
+                type="button"
+                className={!activeTag ? 'is-active' : ''}
+                onClick={() => {
+                  setActiveTag(undefined);
+                  setScope('library');
+                }}
+              >
+                {t.allDocuments}
+              </button>
+              {allTags.length === 0 && <em>{t.noTagsYet}</em>}
+              {allTags.map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              className={activeTag === tag ? 'is-active' : ''}
+              onClick={() => {
+                setActiveTag(tag);
+                setScope('tags');
+              }}
+            >
+              {tag}
+            </button>
+              ))}
+            </>
+          )}
+        </div>
+
+        <div className="library-table" role="table" aria-label={t.pdfLibrary}>
           <div className="library-table__head" role="row">
-            <span>Title</span>
-            <span>Tags</span>
-            <span>Last opened</span>
+            <span>{t.title}</span>
+            <span>{t.group}</span>
+            <span>{t.pageProgress}</span>
           </div>
 
           {visibleDocuments.length === 0 ? (
             <section className="library-empty">
               <FileText size={38} strokeWidth={1.5} />
-              <h2>{documents.length === 0 ? 'Open your first PDF' : 'No matching PDFs'}</h2>
+              <h2>{documents.length === 0 ? t.openFirstPdf : t.noMatchingPdfs}</h2>
               <p>
                 {documents.length === 0
-                  ? 'Each PDF opens in its own reading window with persistent chats and notes.'
-                  : 'Try a different title, file name, or tag.'}
+                  ? t.libraryEmptyCopy
+                  : t.noMatchingCopy}
               </p>
               {documents.length === 0 && (
                 <button className="primary-button" type="button" onClick={onOpenPdf}>
                   <FolderOpen size={16} />
-                  Open PDF
+                  {t.openPdf}
                 </button>
               )}
             </section>
           ) : (
             <div className="library-table__body">
-              {visibleDocuments.map((document) => (
-                <button
-                  key={document.id}
-                  className="library-row"
-                  type="button"
-                  role="row"
-                  onClick={() => onOpenDocument(document.id)}
-                >
-                  <span className="library-row__title">
-                    <BookOpen size={17} />
-                    <span>
-                      <strong>{document.title}</strong>
-                      <small>{document.fileName}</small>
+              {visibleDocuments.map((document) => {
+                const selectedGroupId = (document.groupIds ?? [])[0] ?? '';
+                return (
+                  <div key={document.id} className="library-row" role="row">
+                    <button
+                      className="library-row__open"
+                      type="button"
+                      onClick={() => onOpenDocument(document.id)}
+                    >
+                      <span className="library-row__title">
+                        <BookOpen size={17} />
+                        <span>
+                          <strong>{document.title}</strong>
+                          <small>{document.fileName}</small>
+                          <small className="library-row__progress-label">{readingProgressText(document, uiLanguage)}</small>
+                        </span>
+                      </span>
+                    </button>
+                    <span className="library-row__groups">
+                      <select
+                        aria-label={`${t.group}: ${document.title}`}
+                        value={selectedGroupId}
+                        onChange={(event) => assignDocumentToGroup(document, event.target.value)}
+                      >
+                        <option value="">{t.noGroup}</option>
+                        {groups.map((group) => (
+                          <option key={group.id} value={group.id}>
+                            {group.name}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="library-row__tags">
+                        {document.tags.length
+                          ? document.tags.map((tag) => <small key={tag}>{tag}</small>)
+                          : <small>{t.untagged}</small>}
+                      </span>
                     </span>
-                  </span>
-                  <span className="library-row__tags">
-                    {document.tags.length ? document.tags.map((tag) => <small key={tag}>{tag}</small>) : <small>untagged</small>}
-                  </span>
-                  <span className="library-row__date">{formatLibraryDate(document.lastOpenedAt)}</span>
-                </button>
-              ))}
+                    <span className="library-row__status">
+                      <span>{readingProgressText(document, uiLanguage)}</span>
+                      <small>{formatLibraryDate(document.readingState?.updatedAt ?? document.lastOpenedAt)}</small>
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -793,85 +1593,306 @@ function LibraryHome({
 
 function FloatingSettingsPanel({
   provider,
+  githubUpload,
+  preferences,
   onClose,
   onSave
 }: {
   provider: SafeAiProviderConfig;
+  githubUpload: SafeGitHubUploadConfig;
+  preferences: AppPreferences;
   onClose(): void;
-  onSave(config: AiProviderConfig): void;
+  onSave(aiConfig: AiProviderConfig, uploadConfig: GitHubUploadConfig, preferencesConfig: AppPreferences): void;
 }): ReactElement {
   const [displayName, setDisplayName] = useState(provider.displayName);
   const [baseUrl, setBaseUrl] = useState(provider.baseUrl);
   const [model, setModel] = useState(provider.model);
   const [temperature, setTemperature] = useState(provider.temperature);
   const [apiKey, setApiKey] = useState('');
+  const [uploadEnabled, setUploadEnabled] = useState(githubUpload.enabled);
+  const [owner, setOwner] = useState(githubUpload.owner);
+  const [repo, setRepo] = useState(githubUpload.repo);
+  const [branch, setBranch] = useState(githubUpload.branch);
+  const [basePath, setBasePath] = useState(githubUpload.basePath);
+  const [token, setToken] = useState('');
+  const [uiLanguage, setUiLanguage] = useState<UiLanguage>(preferences.uiLanguage);
+  const [aiLanguage, setAiLanguage] = useState<AiPreferredLanguage>(preferences.aiLanguage);
+  const [modelOptions, setModelOptions] = useState<AiModelInfo[]>([]);
+  const [modelLoading, setModelLoading] = useState(false);
+  const [modelError, setModelError] = useState<string>();
+  const t = appText(uiLanguage);
+
+  const fetchModels = async (): Promise<void> => {
+    setModelLoading(true);
+    setModelError(undefined);
+
+    try {
+      const models = await window.sidelight.listAiModels({
+        displayName: displayName.trim() || 'OpenAI-compatible',
+        baseUrl: baseUrl.trim(),
+        model: model.trim() || provider.model,
+        temperature,
+        apiKey: apiKey.trim() || undefined
+      });
+      setModelOptions(models);
+      if (!model.trim() && models[0]) {
+        setModel(models[0].id);
+      }
+      if (models.length === 0) {
+        setModelError(t.noModelsFound);
+      }
+    } catch (error) {
+      setModelOptions([]);
+      setModelError(presentableAiError(error));
+    } finally {
+      setModelLoading(false);
+    }
+  };
 
   const submit = (event: FormEvent): void => {
     event.preventDefault();
-    onSave({
-      displayName: displayName.trim() || 'OpenAI-compatible',
-      baseUrl: baseUrl.trim(),
-      model: model.trim(),
-      temperature,
-      apiKey: apiKey.trim() || undefined
-    });
+    onSave(
+      {
+        displayName: displayName.trim() || 'OpenAI-compatible',
+        baseUrl: baseUrl.trim(),
+        model: model.trim(),
+        temperature,
+        apiKey: apiKey.trim() || undefined
+      },
+      {
+        enabled: uploadEnabled,
+        owner,
+        repo,
+        branch,
+        basePath,
+        token: token.trim() || undefined
+      },
+      {
+        uiLanguage,
+        aiLanguage
+      }
+    );
   };
 
   return (
-    <section className="floating-settings">
-      <header>
-        <div>
-          <span>{provider.hasApiKey ? 'Key stored' : 'Local draft mode'}</span>
-          <strong>AI provider</strong>
-        </div>
-        <button className="icon-button" type="button" title="Close" onClick={onClose}>
-          <X size={15} />
-        </button>
-      </header>
+    <div className="settings-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="floating-settings" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <header>
+          <div>
+            <span>{provider.hasApiKey ? t.keyStored : t.localDraftMode}</span>
+            <strong id="settings-title">{t.settings}</strong>
+          </div>
+          <button className="icon-button" type="button" title={t.close} onClick={onClose}>
+            <X size={15} />
+          </button>
+        </header>
 
-      <form className="settings-form" onSubmit={submit}>
-        <div className="settings-form__badge">
-          <Bot size={18} />
-          <span>OpenAI-compatible chat completions</span>
-        </div>
-        <label>
-          Name
-          <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
-        </label>
-        <label>
-          Base URL
-          <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
-        </label>
-        <label>
-          Model
-          <input value={model} onChange={(event) => setModel(event.target.value)} />
-        </label>
-        <label>
-          API key
-          <input
-            value={apiKey}
-            type="password"
-            onChange={(event) => setApiKey(event.target.value)}
-            placeholder={provider.hasApiKey ? 'Stored. Enter a new key to replace it.' : 'sk-...'}
-          />
-        </label>
-        <label>
-          Temperature
-          <input
-            value={temperature}
-            type="number"
-            min="0"
-            max="2"
-            step="0.1"
-            onChange={(event) => setTemperature(Number(event.target.value))}
-          />
-        </label>
-        <button className="primary-button" type="submit" disabled={!baseUrl.trim() || !model.trim()}>
-          <Check size={15} />
-          Save
-        </button>
-      </form>
-    </section>
+        <form className="settings-form" onSubmit={submit}>
+          <nav className="settings-nav" aria-label={t.settingsSections}>
+            <a href="#settings-ai">
+              <Bot size={15} />
+              {t.aiProvider}
+            </a>
+            <a href="#settings-language">
+              <LanguagesIcon />
+              {t.language}
+            </a>
+            <a href="#settings-github">
+              <Github size={15} />
+              {t.githubUpload}
+            </a>
+            <a href="#settings-workspace">
+              <SlidersHorizontal size={15} />
+              {t.workspace}
+            </a>
+          </nav>
+
+          <div className="settings-sections">
+            <section className="settings-section" id="settings-ai">
+              <div className="settings-section__heading">
+                <Bot size={17} />
+                <div>
+                  <strong>{t.aiProvider}</strong>
+                  <span>{t.openAiCompatible}</span>
+                </div>
+              </div>
+              <div className="settings-grid">
+                <label>
+                  {t.name}
+                  <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+                </label>
+                <label className="settings-model-field">
+                  {t.model}
+                  <span className="settings-model-control">
+                    <input
+                      value={model}
+                      list="settings-model-options"
+                      onChange={(event) => setModel(event.target.value)}
+                    />
+                    <button
+                      className="quiet-button settings-model-fetch"
+                      type="button"
+                      disabled={!baseUrl.trim() || modelLoading}
+                      onClick={() => void fetchModels()}
+                    >
+                      <RefreshCw size={14} />
+                      {modelLoading ? t.loadingModels : t.fetchModels}
+                    </button>
+                  </span>
+                  <datalist id="settings-model-options">
+                    {modelOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.ownedBy ?? option.id}
+                      </option>
+                    ))}
+                  </datalist>
+                  {modelOptions.length > 0 && (
+                    <select
+                      aria-label={t.availableModels}
+                      value={modelOptions.some((option) => option.id === model) ? model : ''}
+                      onChange={(event) => setModel(event.target.value)}
+                    >
+                      <option value="" disabled>{t.chooseModel}</option>
+                      {modelOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.id}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {modelError && <small className="settings-field-status">{modelError}</small>}
+                </label>
+                <label className="settings-field--wide">
+                  {t.baseUrl}
+                  <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
+                </label>
+                <label className="settings-field--wide">
+                  {t.apiKey}
+                  <input
+                    value={apiKey}
+                    type="password"
+                    onChange={(event) => setApiKey(event.target.value)}
+                    placeholder={provider.hasApiKey ? t.storedKeyPlaceholder : 'sk-...'}
+                  />
+                </label>
+                <label>
+                  {t.temperature}
+                  <input
+                    value={temperature}
+                    type="number"
+                    min="0"
+                    max="2"
+                    step="0.1"
+                    onChange={(event) => setTemperature(Number(event.target.value))}
+                  />
+                </label>
+              </div>
+            </section>
+
+            <section className="settings-section" id="settings-language">
+              <div className="settings-section__heading">
+                <SlidersHorizontal size={17} />
+                <div>
+                  <strong>{t.language}</strong>
+                  <span>{t.languageHelp}</span>
+                </div>
+              </div>
+              <div className="settings-grid">
+                <label>
+                  {t.uiLanguage}
+                  <select value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value as UiLanguage)}>
+                    <option value="en">English</option>
+                    <option value="zh-CN">简体中文</option>
+                  </select>
+                </label>
+                <label>
+                  {t.aiPreferredLanguage}
+                  <select
+                    value={aiLanguage}
+                    onChange={(event) => setAiLanguage(event.target.value as AiPreferredLanguage)}
+                  >
+                    <option value="English">English</option>
+                    <option value="Chinese">中文</option>
+                    <option value="Simplified Chinese">简体中文</option>
+                  </select>
+                </label>
+              </div>
+              <div className="settings-muted-row">
+                {t.languageMuted}
+              </div>
+            </section>
+
+            <section className="settings-section" id="settings-github">
+              <div className="settings-section__heading">
+                <Github size={17} />
+                <div>
+                  <strong>{t.githubUpload}</strong>
+                  <span>{githubUpload.hasToken ? t.tokenStored : t.repositoryTarget}</span>
+                </div>
+                <label className="settings-switch">
+                  <input
+                    type="checkbox"
+                    checked={uploadEnabled}
+                    onChange={(event) => setUploadEnabled(event.target.checked)}
+                  />
+                  {t.enabled}
+                </label>
+              </div>
+              <div className="settings-grid">
+                <label>
+                  {t.owner}
+                  <input value={owner} onChange={(event) => setOwner(event.target.value)} placeholder="octocat" />
+                </label>
+                <label>
+                  {t.repo}
+                  <input value={repo} onChange={(event) => setRepo(event.target.value)} placeholder="notebook" />
+                </label>
+                <label>
+                  {t.branch}
+                  <input value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="main" />
+                </label>
+                <label>
+                  {t.path}
+                  <input value={basePath} onChange={(event) => setBasePath(event.target.value)} placeholder="sidelight" />
+                </label>
+                <label className="settings-field--wide">
+                  {t.token}
+                  <input
+                    value={token}
+                    type="password"
+                    onChange={(event) => setToken(event.target.value)}
+                    placeholder={githubUpload.hasToken ? t.storedTokenPlaceholder : 'github_pat_...'}
+                  />
+                </label>
+              </div>
+            </section>
+
+            <section className="settings-section" id="settings-workspace">
+              <div className="settings-section__heading">
+                <SlidersHorizontal size={17} />
+                <div>
+                  <strong>{t.workspace}</strong>
+                  <span>{t.localFirstLibraryData}</span>
+                </div>
+              </div>
+              <div className="settings-muted-row">
+                {t.workspaceMuted}
+              </div>
+            </section>
+          </div>
+
+          <footer className="settings-actions">
+            <button className="quiet-button" type="button" onClick={onClose}>
+              {t.cancel}
+            </button>
+            <button className="primary-button" type="submit" disabled={!baseUrl.trim() || !model.trim()}>
+              <Check size={15} />
+              {t.save}
+            </button>
+          </footer>
+        </form>
+      </section>
+    </div>
   );
 }
 
@@ -944,18 +1965,19 @@ function FloatingChatPanel({
   );
 }
 
-function promptForMode(mode: AiMode): string {
+function promptForMode(mode: AiMode, language: AiPreferredLanguage = 'Simplified Chinese'): string {
+  const suffix = `Respond in ${language}.`;
   switch (mode) {
     case 'translate':
-      return 'Translate this passage into fluent Chinese, while preserving important English technical terms in parentheses.';
+      return `Translate this passage into fluent ${language}, while preserving important English technical terms in parentheses.`;
     case 'summarize':
-      return 'Give me the gist of this passage, then list the key concepts and any assumptions it depends on.';
+      return `Give me the gist of this passage, then list the key concepts and any assumptions it depends on. ${suffix}`;
     case 'lesson':
-      return 'Turn this passage into teachable Markdown notes with concepts, examples, and questions to check understanding.';
+      return `Turn this passage into teachable Markdown notes with concepts, examples, and questions to check understanding. ${suffix}`;
     case 'explain':
-      return 'Explain this passage carefully. Define concepts, unpack hidden assumptions, and keep the answer grounded in the text.';
+      return `Explain this passage carefully. Define concepts, unpack hidden assumptions, and keep the answer grounded in the text. ${suffix}`;
     default:
-      return 'Help me understand this selected passage.';
+      return `Help me understand this selected passage. ${suffix}`;
   }
 }
 
@@ -978,7 +2000,8 @@ function summarizeConversation(
 
 async function requestConversationSummary(
   conversation: Conversation,
-  documentTitle: string
+  documentTitle: string,
+  language: AiPreferredLanguage
 ): Promise<ConversationSummary | undefined> {
   const transcript = conversation.messages
     .map((message) => `${message.role}: ${message.content}`)
@@ -996,17 +2019,100 @@ async function requestConversationSummary(
       contextText: conversation.anchor?.quote,
       prompt: [
         'Summarize this PDF reading chat for a compact sidebar item.',
+        `Write title, brief, and keywords in ${language}.`,
         'Return JSON only with this exact shape:',
         '{"title":"short title under 64 characters","brief":"one sentence under 140 characters","keywords":["keyword"]}',
         '',
         transcript
-      ].join('\n')
+      ].join('\n'),
+      preferredLanguage: language
     });
 
     return parseConversationSummary(response.content);
   } catch (error) {
     console.warn('Conversation summary could not be refreshed', error);
     return undefined;
+  }
+}
+
+function notePromptForLanguage(pageStart: number, pageEnd: number, language: AiPreferredLanguage): string {
+  return [
+    `Create a concise markdown study note for pages ${pageStart}-${pageEnd}.`,
+    'Use headings, bullets, key terms, and a short recap.',
+    'Ground the note in the PDF text, highlights, and previous conversations.',
+    'Do not include raw transcripts unless needed.',
+    `Write the note in ${language}.`
+  ].join(' ');
+}
+
+function outlinePromptForLanguage(totalPages: number, language: AiPreferredLanguage): string {
+  return [
+    'Create an external PDF table of contents for the currently open PDF.',
+    'Use the PDF tools. First check the embedded outline; if it is empty, inspect page text with view_current_pdf.',
+    totalPages <= 48
+      ? 'For this short PDF, inspect enough page ranges to cover the full document.'
+      : 'For this longer PDF, inspect the beginning, ending, and representative middle page ranges before proposing sections.',
+    'Return JSON only, with this exact shape:',
+    '{"items":[{"title":"Section title","level":0,"pageNumber":1}]}',
+    'Rules: pageNumber is 1-based, level starts at 0, keep titles compact, include only real sections supported by the PDF text, and sort items by pageNumber.',
+    `Write titles in ${language}, preserving important original technical terms.`
+  ].join(' ');
+}
+
+function parseGeneratedOutlineItems(content: string, totalPages: number): PdfGeneratedOutlineItem[] {
+  const parsed = parseOutlineJson(content);
+  const rawItems = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray((parsed as { items?: unknown[] } | undefined)?.items)
+      ? (parsed as { items: unknown[] }).items
+      : [];
+
+  const seen = new Set<string>();
+  return rawItems
+    .map((item, index) => {
+      const candidate = item as { title?: unknown; level?: unknown; pageNumber?: unknown; page?: unknown };
+      const title = String(candidate.title ?? '').replace(/\s+/g, ' ').trim();
+      const rawPage = Number(candidate.pageNumber ?? candidate.page);
+      const pageNumber = Number.isFinite(rawPage)
+        ? Math.max(1, Math.min(totalPages, Math.floor(rawPage)))
+        : undefined;
+      const rawLevel = Number(candidate.level);
+      return {
+        id: createId('outline'),
+        title: compactSentence(title, 110),
+        level: Number.isFinite(rawLevel) ? Math.max(0, Math.min(6, Math.floor(rawLevel))) : 0,
+        ...(pageNumber ? { pageNumber } : {}),
+        order: index
+      };
+    })
+    .filter((item) => item.title)
+    .sort((a, b) => (a.pageNumber ?? Number.MAX_SAFE_INTEGER) - (b.pageNumber ?? Number.MAX_SAFE_INTEGER) || a.order - b.order)
+    .filter((item) => {
+      const key = `${item.level}:${item.pageNumber ?? ''}:${item.title.toLowerCase()}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .map(({ order: _order, ...item }) => item)
+    .slice(0, 180);
+}
+
+function parseOutlineJson(content: string): unknown {
+  const clean = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  try {
+    return JSON.parse(clean);
+  } catch {
+    const objectMatch = clean.match(/\{[\s\S]*\}/);
+    if (objectMatch) {
+      return JSON.parse(objectMatch[0]);
+    }
+    const arrayMatch = clean.match(/\[[\s\S]*\]/);
+    if (arrayMatch) {
+      return JSON.parse(arrayMatch[0]);
+    }
+    throw new Error('No JSON outline was found in the AI response.');
   }
 }
 
@@ -1049,6 +2155,243 @@ function compactSentence(text: string, limit: number): string {
   return `${clean.slice(0, limit - 1).trim()}...`;
 }
 
+function buildNoteContext(
+  pageStart: number,
+  pageEnd: number,
+  pageText: string,
+  marks: PdfMark[],
+  conversations: Conversation[]
+): string {
+  const highlights = marks.length
+    ? marks.map((mark) => `- p.${mark.pageNumber} ${mark.kind}: ${mark.quote}`).join('\n')
+    : '- No highlights in this page range.';
+  const chatDigest = conversations.length
+    ? conversations.map((conversation) => {
+        const transcript = conversation.messages
+          .map((message) => `${message.role}: ${message.content}`)
+          .join('\n')
+          .slice(0, 2200);
+        return [
+          `## Conversation p.${conversation.pageNumber ?? conversation.anchor?.pageNumber ?? '-'}: ${conversation.summary.title}`,
+          conversation.anchor ? `Anchor: ${conversation.anchor.quote}` : undefined,
+          transcript
+        ].filter(Boolean).join('\n');
+      }).join('\n\n')
+    : 'No conversations in this page range.';
+
+  return [
+    `Document pages: ${pageStart}-${pageEnd}`,
+    '',
+    'PDF text:',
+    pageText.trim().slice(0, 18000) || 'No extractable PDF text was available for this page range.',
+    '',
+    'Highlights:',
+    highlights.slice(0, 6000),
+    '',
+    'Relevant conversations:',
+    chatDigest.slice(0, 10000)
+  ].join('\n');
+}
+
+function buildAiDocumentToolContext({
+  document,
+  context,
+  marks,
+  conversations,
+  pageStart,
+  pageEnd,
+  pdfText,
+  selectedText
+}: {
+  document: PdfDocumentMeta;
+  context?: AiDocumentToolContext;
+  marks: PdfMark[];
+  conversations: Conversation[];
+  pageStart?: number;
+  pageEnd?: number;
+  pdfText?: string;
+  selectedText?: string;
+}): AiDocumentToolContext {
+  const fallbackPage = context?.currentPage ?? document.readingState?.lastPage ?? 1;
+  const start = clampPageNumber(pageStart ?? context?.pageStart ?? fallbackPage);
+  const end = clampPageNumber(pageEnd ?? context?.pageEnd ?? start, start);
+  const pageMarks = marks.filter((mark) => mark.pageNumber >= start && mark.pageNumber <= end);
+  const pageConversations = conversations.filter((conversation) => {
+    const pageNumber = conversation.pageNumber ?? conversation.anchor?.pageNumber;
+    return pageNumber !== undefined && pageNumber >= start && pageNumber <= end;
+  });
+
+  return {
+    ...context,
+    documentId: document.id,
+    documentTitle: document.title,
+    fileName: document.fileName,
+    currentPage: context?.currentPage ?? fallbackPage,
+    totalPages: context?.totalPages ?? document.pageCount,
+    pageStart: start,
+    pageEnd: end,
+    selectedText: selectedText ?? context?.selectedText,
+    pdfText: pdfText ?? context?.pdfText,
+    highlights: mergeAiHighlights(context?.highlights, pageMarks),
+    conversations: mergeAiConversations(context?.conversations, pageConversations)
+  };
+}
+
+function buildChatConversationContext(
+  conversation: Conversation,
+  documentTitle: string,
+  attachments: ConversationAttachment[]
+): string {
+  const pageNumber = conversation.pageNumber ?? conversation.anchor?.pageNumber;
+  return [
+    `Conversation mode: ${conversation.mode}.`,
+    `Document: ${documentTitle}.`,
+    pageNumber ? `Conversation is attached to page ${pageNumber}.` : undefined,
+    conversation.anchor ? `Anchor quote: ${conversation.anchor.quote}` : undefined,
+    conversation.summary.title ? `Conversation title: ${conversation.summary.title}.` : undefined,
+    conversation.summary.brief ? `Conversation brief: ${conversation.summary.brief}.` : undefined,
+    attachments.length ? `The latest user message includes images: ${attachments.map((attachment) => attachment.name).join(', ')}.` : undefined
+  ].filter(Boolean).join('\n');
+}
+
+function buildNoteConversationContext(
+  pageStart: number,
+  pageEnd: number,
+  conversations: Conversation[]
+): string {
+  return [
+    'Task: generate a study note for the current PDF range.',
+    `Target pages: ${pageStart}-${pageEnd}.`,
+    conversations.length
+      ? `There are ${conversations.length} existing conversations attached to this page range; use them as supporting context when relevant.`
+      : 'There are no existing conversations attached to this page range.'
+  ].join('\n');
+}
+
+function buildSelectionConversationContext(pageNumber: number, quote: string): string {
+  return [
+    `Selection action on page ${pageNumber}.`,
+    `Selected quote: ${quote}`
+  ].join('\n');
+}
+
+function mergeAiHighlights(existing: AiDocumentToolContext['highlights'], marks: PdfMark[]): AiDocumentToolContext['highlights'] {
+  const rows = [
+    ...(existing ?? []),
+    ...marks.map((mark) => ({
+      kind: mark.kind,
+      pageNumber: mark.pageNumber,
+      quote: compactSentence(mark.quote, 700)
+    }))
+  ];
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = `${row.kind}:${row.pageNumber}:${row.quote}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  }).slice(0, 48);
+}
+
+function mergeAiConversations(
+  existing: AiDocumentToolContext['conversations'],
+  conversations: Conversation[]
+): AiDocumentToolContext['conversations'] {
+  const rows = [
+    ...(existing ?? []),
+    ...conversations.map((conversation) => ({
+      title: conversation.summary.title,
+      brief: conversation.summary.brief,
+      pageNumber: conversation.pageNumber ?? conversation.anchor?.pageNumber,
+      anchorQuote: conversation.anchor?.quote ? compactSentence(conversation.anchor.quote, 700) : undefined,
+      transcript: conversation.messages
+        .map((message) => `${message.role}: ${message.content}`)
+        .join('\n')
+        .slice(0, 3200)
+    }))
+  ];
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = `${row.title}:${row.pageNumber ?? ''}:${row.anchorQuote ?? ''}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  }).slice(0, 12);
+}
+
+function mergeToolCallEvents(
+  current: AiToolCallEvent[] | undefined,
+  event: AiToolCallEvent
+): AiToolCallEvent[] {
+  return [
+    event,
+    ...(current ?? []).filter((candidate) => candidate.id !== event.id)
+  ].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+}
+
+function clampPageNumber(value: number, min = 1): number {
+  const page = Number.isFinite(value) ? Math.floor(value) : min;
+  return Math.max(min, page);
+}
+
+function normalizeGeneratedNote(content: string, pageStart: number, pageEnd: number): string {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return `# AI notes p.${pageStart}-${pageEnd}\n\nNo note content was generated.`;
+  }
+
+  return /^#\s/.test(trimmed) ? trimmed : `# AI notes p.${pageStart}-${pageEnd}\n\n${trimmed}`;
+}
+
+function presentableAiError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const clean = summarizeErrorText(message);
+  return clean || 'The AI provider returned an unreadable error.';
+}
+
+function stoppedGenerationText(language: AiPreferredLanguage): string {
+  return language === 'English' ? 'Response stopped.' : '已停止回答。';
+}
+
+function summarizeErrorText(message: string): string {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  if (/<(?:!doctype|html|head|body|script|style|div|meta|title)\b/i.test(trimmed)) {
+    const title = trimmed.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
+    const heading = trimmed.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1];
+    return limitErrorText(stripHtmlForError(title ?? heading ?? trimmed));
+  }
+
+  return limitErrorText(trimmed.replace(/\s+/g, ' '));
+}
+
+function stripHtmlForError(value: string): string {
+  return value
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function limitErrorText(text: string): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  return normalized.length > 240 ? `${normalized.slice(0, 237)}...` : normalized;
+}
+
 function formatLibraryDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -1061,6 +2404,16 @@ function formatLibraryDate(value: string): string {
     hour: '2-digit',
     minute: '2-digit'
   }).format(date);
+}
+
+function readingProgressText(document: PdfDocumentMeta, language: UiLanguage): string {
+  const page = Math.max(1, Math.floor(document.readingState?.lastPage ?? 1));
+  const pageCount = document.pageCount ? Math.max(1, Math.floor(document.pageCount)) : undefined;
+  if (language === 'zh-CN') {
+    return pageCount ? `读到第 ${page} / ${pageCount} 页` : `读到第 ${page} 页`;
+  }
+
+  return pageCount ? `Page ${page} of ${pageCount}` : `Page ${page}`;
 }
 
 function extractKeywords(text: string): string[] {

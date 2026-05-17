@@ -9,7 +9,7 @@ interface MarkdownViewProps {
 }
 
 export function MarkdownView({ children }: MarkdownViewProps): ReactElement {
-  const markdown = normalizeLatexDelimiters(children);
+  const markdown = normalizeLatexDelimiters(cleanStoredAiError(children));
 
   return (
     <ReactMarkdown
@@ -26,6 +26,36 @@ export function MarkdownView({ children }: MarkdownViewProps): ReactElement {
       {markdown}
     </ReactMarkdown>
   );
+}
+
+function cleanStoredAiError(markdown: string): string {
+  if (!/^AI request failed:/i.test(markdown.trim()) || !/<(?:!doctype|html|head|body|script|style|div|meta|title)\b/i.test(markdown)) {
+    return markdown;
+  }
+
+  const title = markdown.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
+  const heading = markdown.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1];
+  const summary = stripHtml(title ?? heading ?? markdown);
+  return summary ? `AI request failed: ${limitErrorText(summary)}` : 'AI request failed: The provider returned an HTML error page.';
+}
+
+function stripHtml(value: string): string {
+  return value
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function limitErrorText(value: string): string {
+  return value.length > 240 ? `${value.slice(0, 237)}...` : value;
 }
 
 function normalizeLatexDelimiters(markdown: string): string {

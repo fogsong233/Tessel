@@ -3,25 +3,65 @@ export type DocumentId = string;
 export type ConversationId = string;
 export type AnchorId = string;
 export type NoteId = string;
+export type WorkspaceBlockId = string;
+export type LibraryGroupId = string;
 
 export type AiMode = 'ask' | 'explain' | 'translate' | 'summarize' | 'lesson';
 export type ConversationRole = 'user' | 'assistant' | 'system';
 export type PdfMarkKind = 'highlight' | 'underline';
 export type ConversationAttachmentKind = 'image';
+export type DocumentFormat = 'pdf' | 'markdown' | 'text' | 'image' | 'html' | 'epub' | 'unknown';
+export type DocumentSourceKind = 'local-file' | 'cloud-file' | 'url';
+export type WorkspaceBlockKind = 'conversation' | 'note' | 'snapshot' | 'card' | 'quote' | 'image' | 'link' | 'embed';
+export type WorkspaceBlockAnchor = 'page' | 'viewport' | 'document' | 'selection';
+export type WorkspaceBlockContentKind = 'markdown' | 'text' | 'image' | 'html' | 'external' | 'custom';
+export type UiLanguage = 'en' | 'zh-CN';
+export type AiPreferredLanguage = 'English' | 'Chinese' | 'Simplified Chinese';
 
 export const pdfRangeChunkSize = 512 * 1024;
 
-export interface PdfDocumentMeta {
+export interface DocumentFingerprint {
+  algorithm: string;
+  hash: string;
+  byteSize?: number;
+  sampledBytes?: number;
+}
+
+export interface DocumentSourceRef {
+  kind: DocumentSourceKind;
+  uri: string;
+  filePath?: string;
+}
+
+export interface LibraryDocumentMeta {
   id: DocumentId;
   title: string;
   fileName: string;
   filePath: string;
+  format: DocumentFormat;
+  source?: DocumentSourceRef;
+  fingerprint?: DocumentFingerprint;
   sha256: string;
-  pageCount?: number;
+  hashAlgorithm?: string;
+  inLibrary?: boolean;
+  groupIds?: LibraryGroupId[];
   tags: string[];
   createdAt: ISODate;
   updatedAt: ISODate;
   lastOpenedAt: ISODate;
+}
+
+export interface PdfDocumentMeta extends LibraryDocumentMeta {
+  pageCount?: number;
+  readingState?: PdfReadingState;
+}
+
+export interface LibraryGroup {
+  id: LibraryGroupId;
+  name: string;
+  cloudHeld: boolean;
+  createdAt: ISODate;
+  updatedAt: ISODate;
 }
 
 export interface PdfOpenResult {
@@ -98,6 +138,7 @@ export interface ConversationMessage {
   role: ConversationRole;
   content: string;
   attachments?: ConversationAttachment[];
+  toolCalls?: AiToolCallEvent[];
   createdAt: ISODate;
 }
 
@@ -108,6 +149,21 @@ export interface ConversationAttachment {
   mimeType: string;
   dataUrl: string;
   createdAt: ISODate;
+}
+
+export type AiToolCallStatus = 'started' | 'completed' | 'error';
+
+export interface AiToolCallEvent {
+  id: string;
+  name: string;
+  status: AiToolCallStatus;
+  pageStart?: number;
+  pageEnd?: number;
+  maxItems?: number;
+  maxChars?: number;
+  resultSummary?: string;
+  error?: string;
+  updatedAt: ISODate;
 }
 
 export interface ConversationSummary {
@@ -133,6 +189,30 @@ export interface NoteDocument {
   documentId: DocumentId;
   title: string;
   markdown: string;
+  pageStart: number;
+  pageEnd: number;
+  anchor?: TextAnchor;
+  source?: 'manual' | 'ai';
+  createdAt: ISODate;
+  updatedAt: ISODate;
+}
+
+export interface WorkspaceBlock {
+  id: WorkspaceBlockId;
+  documentId: DocumentId;
+  kind: WorkspaceBlockKind;
+  anchor: WorkspaceBlockAnchor;
+  sourceId?: string;
+  sourceKind?: WorkspaceBlockKind | DocumentSourceKind | 'manual' | 'selection';
+  contentKind?: WorkspaceBlockContentKind;
+  pageNumber?: number;
+  title: string;
+  body?: string;
+  payload?: Record<string, unknown>;
+  x: number;
+  y: number;
+  width: number;
+  height?: number;
   createdAt: ISODate;
   updatedAt: ISODate;
 }
@@ -149,6 +229,71 @@ export interface SafeAiProviderConfig extends Omit<AiProviderConfig, 'apiKey'> {
   hasApiKey: boolean;
 }
 
+export interface GitHubUploadConfig {
+  enabled: boolean;
+  owner: string;
+  repo: string;
+  branch: string;
+  basePath: string;
+  token?: string;
+}
+
+export interface SafeGitHubUploadConfig extends Omit<GitHubUploadConfig, 'token'> {
+  hasToken: boolean;
+}
+
+export interface AppPreferences {
+  uiLanguage: UiLanguage;
+  aiLanguage: AiPreferredLanguage;
+}
+
+export interface AiPdfOutlineItem {
+  title: string;
+  level: number;
+  pageNumber?: number;
+}
+
+export interface PdfGeneratedOutlineItem extends AiPdfOutlineItem {
+  id: string;
+}
+
+export interface PdfGeneratedOutline {
+  documentId: DocumentId;
+  source: 'ai';
+  items: PdfGeneratedOutlineItem[];
+  createdAt: ISODate;
+  updatedAt: ISODate;
+}
+
+export interface AiPdfHighlightContext {
+  kind: PdfMarkKind;
+  pageNumber: number;
+  quote: string;
+}
+
+export interface AiConversationContext {
+  title: string;
+  brief?: string;
+  pageNumber?: number;
+  anchorQuote?: string;
+  transcript?: string;
+}
+
+export interface AiDocumentToolContext {
+  documentId?: DocumentId;
+  documentTitle?: string;
+  fileName?: string;
+  currentPage?: number;
+  totalPages?: number;
+  pageStart?: number;
+  pageEnd?: number;
+  selectedText?: string;
+  pdfText?: string;
+  outline?: AiPdfOutlineItem[];
+  highlights?: AiPdfHighlightContext[];
+  conversations?: AiConversationContext[];
+}
+
 export interface AiCompletionRequest {
   mode: AiMode;
   prompt: string;
@@ -156,11 +301,19 @@ export interface AiCompletionRequest {
   contextText?: string;
   messages?: ConversationMessage[];
   attachments?: ConversationAttachment[];
+  conversationContext?: string;
+  toolContext?: AiDocumentToolContext;
+  preferredLanguage?: AiPreferredLanguage;
 }
 
 export interface AiCompletionResponse {
   content: string;
   usedProvider: string;
+}
+
+export interface AiModelInfo {
+  id: string;
+  ownedBy?: string;
 }
 
 export interface AiStreamRequest {
@@ -171,7 +324,9 @@ export interface AiStreamRequest {
 export interface AiStreamEvent {
   streamId: string;
   delta?: string;
+  toolCall?: AiToolCallEvent;
   done?: boolean;
+  cancelled?: boolean;
   error?: string;
   usedProvider?: string;
 }
@@ -184,6 +339,14 @@ export interface SaveNoteInput {
   note: NoteDocument;
 }
 
+export interface SaveWorkspaceBlockInput {
+  block: WorkspaceBlock;
+}
+
+export interface SaveLibraryGroupInput {
+  group: LibraryGroup;
+}
+
 export interface SavePdfMarkInput {
   mark: PdfMark;
 }
@@ -192,11 +355,21 @@ export interface SavePdfBookmarkInput {
   bookmark: PdfUserBookmark;
 }
 
+export interface SavePdfGeneratedOutlineInput {
+  outline: PdfGeneratedOutline;
+}
+
 export interface SidelightApi {
   listDocuments(): Promise<PdfDocumentMeta[]>;
+  listLibraryGroups(): Promise<LibraryGroup[]>;
+  saveLibraryGroup(input: SaveLibraryGroupInput): Promise<LibraryGroup>;
+  deleteLibraryGroup(groupId: LibraryGroupId): Promise<void>;
   openPdf(): Promise<PdfOpenResult | null>;
   openDocumentWindow(documentId: DocumentId): Promise<PdfDocumentMeta | null>;
   loadPdf(documentId: DocumentId): Promise<PdfOpenResult | null>;
+  addDocumentToLibrary(documentId: DocumentId): Promise<PdfDocumentMeta>;
+  updateDocument(document: PdfDocumentMeta): Promise<PdfDocumentMeta>;
+  syncWorkspace(): Promise<void>;
   readPdfRange(request: PdfRangeRequest): Promise<ArrayBuffer>;
   listPdfMarks(documentId: DocumentId): Promise<PdfMark[]>;
   savePdfMark(input: SavePdfMarkInput): Promise<PdfMark>;
@@ -204,17 +377,32 @@ export interface SidelightApi {
   listPdfBookmarks(documentId: DocumentId): Promise<PdfUserBookmark[]>;
   savePdfBookmark(input: SavePdfBookmarkInput): Promise<PdfUserBookmark>;
   deletePdfBookmark(bookmarkId: string): Promise<void>;
+  getGeneratedPdfOutline(documentId: DocumentId): Promise<PdfGeneratedOutline | null>;
+  saveGeneratedPdfOutline(input: SavePdfGeneratedOutlineInput): Promise<PdfGeneratedOutline>;
+  deleteGeneratedPdfOutline(documentId: DocumentId): Promise<void>;
   getReadingState(documentId: DocumentId): Promise<PdfReadingState | null>;
   saveReadingState(state: PdfReadingState): Promise<PdfReadingState>;
   listConversations(documentId: DocumentId): Promise<Conversation[]>;
   saveConversation(input: SaveConversationInput): Promise<Conversation>;
+  listNotes(documentId: DocumentId): Promise<NoteDocument[]>;
   getNote(documentId: DocumentId): Promise<NoteDocument>;
   saveNote(input: SaveNoteInput): Promise<NoteDocument>;
+  deleteNote(noteId: NoteId): Promise<void>;
+  listWorkspaceBlocks(documentId: DocumentId): Promise<WorkspaceBlock[]>;
+  saveWorkspaceBlock(input: SaveWorkspaceBlockInput): Promise<WorkspaceBlock>;
+  deleteWorkspaceBlock(blockId: WorkspaceBlockId): Promise<void>;
   getAiProvider(): Promise<SafeAiProviderConfig>;
   saveAiProvider(config: AiProviderConfig): Promise<SafeAiProviderConfig>;
+  getGitHubUpload(): Promise<SafeGitHubUploadConfig>;
+  saveGitHubUpload(config: GitHubUploadConfig): Promise<SafeGitHubUploadConfig>;
+  getAppPreferences(): Promise<AppPreferences>;
+  saveAppPreferences(config: AppPreferences): Promise<AppPreferences>;
+  listAiModels(config: AiProviderConfig): Promise<AiModelInfo[]>;
   completeAi(request: AiCompletionRequest): Promise<AiCompletionResponse>;
   completeAiStream(input: AiStreamRequest): Promise<void>;
+  cancelAiStream(streamId: string): Promise<void>;
   onAiStreamEvent(listener: (event: AiStreamEvent) => void): () => void;
+  onLibraryChanged(listener: () => void): () => void;
 }
 
 export const defaultAiProvider: SafeAiProviderConfig = {
@@ -223,4 +411,18 @@ export const defaultAiProvider: SafeAiProviderConfig = {
   model: 'gpt-4.1-mini',
   temperature: 0.2,
   hasApiKey: false
+};
+
+export const defaultGitHubUpload: SafeGitHubUploadConfig = {
+  enabled: false,
+  owner: '',
+  repo: '',
+  branch: 'main',
+  basePath: 'sidelight',
+  hasToken: false
+};
+
+export const defaultAppPreferences: AppPreferences = {
+  uiLanguage: 'en',
+  aiLanguage: 'Simplified Chinese'
 };
