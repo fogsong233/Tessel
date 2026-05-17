@@ -8556,24 +8556,25 @@ body.is-resizing-workspace-block * {
   background: var(--ui-hover);
 }
 
-/* Opaque muted marks avoid alpha stacking artifacts on formulas and overlapping text runs. */
+/* Muted solid marks stay readable without borders that pile up on formula glyph boxes. */
 .pdfViewer .textLayer ::selection {
   color: inherit;
   background: var(--selection-chat-color, #cfe3f5);
 }
 
 .pdf-mark {
-  background: var(--mark-color, var(--selection-highlight-color, #d8ead4));
-  mix-blend-mode: darken;
+  border: 0;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--mark-color, #d8ead4) 46%, #ffffff 54%);
+  box-shadow: none;
+  mix-blend-mode: multiply;
   opacity: 1;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mark-color, #d8ead4) 76%, #000000 24%);
+  outline: 0;
 }
 
 .pdf-mark:hover {
-  background: color-mix(in srgb, var(--mark-color, #d8ead4) 86%, #ffffff 14%);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--mark-color, #d8ead4) 62%, #000000 38%),
-    0 0 0 2px rgba(32, 33, 35, 0.08);
+  background: color-mix(in srgb, var(--mark-color, #d8ead4) 58%, #ffffff 42%);
+  box-shadow: none;
 }
 
 .pdf-mark--underline {

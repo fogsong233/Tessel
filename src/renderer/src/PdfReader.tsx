@@ -508,6 +508,7 @@ export function PdfReader({
   const zoomPageLockRef = useRef<ZoomPageLock>();
   const zoomLockVersionRef = useRef(0);
   const pendingRevealScrollTopRef = useRef<number>();
+  const lastPdfReadingIntentRef = useRef(0);
 
   const [status, setStatus] = useState<LoadStatus>('idle');
   const [loadProgress, setLoadProgress] = useState(0);
@@ -529,6 +530,7 @@ export function PdfReader({
   const [workspaceBlockLayouts, setWorkspaceBlockLayouts] = useState<Record<string, WorkspaceBlockLayout>>({});
   const [pendingRevealBlockId, setPendingRevealBlockId] = useState<string>();
   const [optimisticWorkspaceBlocks, setOptimisticWorkspaceBlocks] = useState<WorkspaceBlock[]>([]);
+  const [pdfReadingSignal, setPdfReadingSignal] = useState(0);
 
   const effectiveWorkspaceBlocks = useMemo(() => {
     const byId = new Map<string, WorkspaceBlock>();
@@ -608,12 +610,14 @@ export function PdfReader({
 
     return neededGutter > 0 ? Math.max(420, neededGutter) : 0;
   }, [effectiveWorkspaceBlocks]);
-  const hasOpenDock = (chatOpen && activeConversation) || Boolean(transientAid) || Boolean(noteEditorNote);
+  const chatPanelOpen = chatOpen && Boolean(activeConversation);
+  const hasTransientAid = Boolean(transientAid);
+  const hasOpenDock = chatPanelOpen || hasTransientAid || Boolean(noteEditorNote);
   const activeDockTab: DockTab | undefined = transientAid
     ? undefined
     : noteEditorNote
       ? 'notes'
-      : chatOpen && activeConversation
+      : chatPanelOpen
         ? 'chat'
         : dockTab;
   const defaultDockWidth = noteEditorNote ? 880 : hasOpenDock ? 560 : 372;
@@ -648,11 +652,11 @@ export function PdfReader({
       closeNoteForForeground(note?.id);
     }
 
-    if (nextPanel !== 'transient' && transientAid) {
+    if (nextPanel !== 'transient' && hasTransientAid) {
       onCloseTransientAid();
     }
 
-    if (nextPanel !== 'chat' && chatOpen && activeConversation) {
+    if (nextPanel !== 'chat' && chatPanelOpen) {
       onCloseConversation();
     }
 
@@ -663,25 +667,24 @@ export function PdfReader({
       setNoteEditorNote(note);
     }
   }, [
-    activeConversation,
-    chatOpen,
+    chatPanelOpen,
     closeNoteForForeground,
+    hasTransientAid,
     onCloseConversation,
-    onCloseTransientAid,
-    transientAid
+    onCloseTransientAid
   ]);
 
   useEffect(() => {
-    if (chatOpen && activeConversation) {
+    if (chatPanelOpen) {
       replaceForegroundPanel('chat');
     }
-  }, [activeConversation?.id, chatOpen, replaceForegroundPanel]);
+  }, [activeConversation?.id, chatPanelOpen, replaceForegroundPanel]);
 
   useEffect(() => {
-    if (transientAid) {
+    if (hasTransientAid) {
       replaceForegroundPanel('transient');
     }
-  }, [replaceForegroundPanel, transientAid?.id]);
+  }, [hasTransientAid, replaceForegroundPanel, transientAid?.id]);
 
   const renderMarks = useCallback(() => {
     if (!viewerRef.current) {
@@ -733,14 +736,14 @@ export function PdfReader({
 
     setDockTab(nextTab);
 
-    if (transientAid) {
+    if (hasTransientAid) {
       onCloseTransientAid();
     }
 
-    if (nextTab !== 'chat' && chatOpen && activeConversation) {
+    if (nextTab !== 'chat' && chatPanelOpen) {
       onCloseConversation();
     }
-  }, [activeConversation, chatOpen, closeNoteForForeground, onCloseConversation, onCloseTransientAid, transientAid]);
+  }, [chatPanelOpen, closeNoteForForeground, hasTransientAid, onCloseConversation, onCloseTransientAid]);
 
   const openDockConversation = useCallback((conversationId: string): void => {
     replaceForegroundPanel('chat');
@@ -1323,10 +1326,10 @@ export function PdfReader({
   }, [meta, pinImageFilesToCanvas]);
 
   useEffect(() => {
-    if (chatOpen && activeConversation) {
+    if (chatPanelOpen) {
       setDockTab('chat');
     }
-  }, [activeConversation, chatOpen]);
+  }, [activeConversation?.id, chatPanelOpen]);
 
   useEffect(() => {
     renderMarks();
@@ -1401,7 +1404,7 @@ export function PdfReader({
     };
   }, [hasOpenDock, leftPanelOpen, source?.documentId, status]);
 
-  const beginZoomPageLock = useCallback((pageNumber: number): number => {
+  const beginZoomPageLock = useCallback((pageNumber: number, enforceScroll = false): number => {
     const normalizedPage = Math.max(1, Math.floor(pageNumber));
     const version = zoomLockVersionRef.current + 1;
     zoomLockVersionRef.current = version;
@@ -1411,12 +1414,13 @@ export function PdfReader({
     }
 
     zoomPageLockRef.current = {
+      enforceScroll,
       pageNumber: normalizedPage,
       releaseTimer: window.setTimeout(() => {
         if (zoomPageLockRef.current?.version === version) {
           zoomPageLockRef.current = undefined;
         }
-      }, 900),
+      }, enforceScroll ? 700 : 900),
       version
     };
     setPageDraft(String(normalizedPage));
@@ -1445,6 +1449,20 @@ export function PdfReader({
     setPageDraftFocused(false);
     setPageDraft(String(activePageRef.current));
   }, []);
+
+  const notePdfReadingIntent = useCallback((target: EventTarget | null): void => {
+    if (!busy || shouldIgnoreCanvasFocus(target)) {
+      return;
+    }
+
+    const now = window.performance.now();
+    if (now - lastPdfReadingIntentRef.current < 250) {
+      return;
+    }
+
+    lastPdfReadingIntentRef.current = now;
+    setPdfReadingSignal((current) => current + 1);
+  }, [busy]);
 
   const finishZoomPageLock = useCallback((version: number, pageNumber: number): void => {
     const normalizedPage = Math.max(1, Math.floor(pageNumber));
@@ -1747,13 +1765,18 @@ export function PdfReader({
       return;
     }
 
-    clearZoomPageLock();
+    const lockVersion = beginZoomPageLock(pageNumber, true);
     activePageRef.current = pageNumber;
-    setPageDraft(String(pageNumber));
     onPageChangeRef.current(pageNumber);
     runtime.pdfViewer.currentPageNumber = pageNumber;
     runtime.pdfViewer.scrollPageIntoView({ pageNumber });
-  }, [clearZoomPageLock]);
+    window.requestAnimationFrame(() => {
+      if (zoomPageLockRef.current?.version === lockVersion) {
+        runtime.pdfViewer.currentPageNumber = pageNumber;
+        runtime.pdfViewer.scrollPageIntoView({ pageNumber });
+      }
+    });
+  }, [beginZoomPageLock]);
 
   const executeSearch = useCallback((again = false, previous = false): void => {
     const runtime = runtimeRef.current;
@@ -1983,7 +2006,9 @@ export function PdfReader({
                   className="pdf-viewport"
                   ref={containerRef}
                   onMouseUp={handleSelectionMouseUp}
+                  onWheel={(event) => notePdfReadingIntent(event.target)}
                   onPointerDown={(event) => {
+                    notePdfReadingIntent(event.target);
                     if (!shouldIgnoreCanvasFocus(event.target)) {
                       event.currentTarget.focus({ preventScroll: true });
                     }
@@ -2018,6 +2043,7 @@ export function PdfReader({
                         allNotes={notes}
                         noteEditorNote={noteEditorNote}
                         noteBusy={noteBusy}
+                        pdfReadingSignal={pdfReadingSignal}
                         text={t}
                         pageConversationCount={pageConversationCount}
                         activeTab={activeDockTab}
@@ -2460,6 +2486,7 @@ function ReaderDock({
   allNotes,
   noteEditorNote,
   noteBusy,
+  pdfReadingSignal,
   pageConversationCount,
   text,
   activeTab,
@@ -2500,6 +2527,7 @@ function ReaderDock({
   allNotes: NoteDocument[];
   noteEditorNote?: NoteDocument;
   noteBusy: boolean;
+  pdfReadingSignal: number;
   pageConversationCount: number;
   text: ReaderText;
   activeTab?: DockTab;
@@ -2617,6 +2645,7 @@ function ReaderDock({
           busy={busy}
           canStopGeneration={canStopGeneration}
           conversation={activeConversation}
+          pdfReadingSignal={pdfReadingSignal}
           text={t}
           onClose={onCloseConversation}
           onPin={() => onPinConversation(activeConversation)}
@@ -3475,6 +3504,7 @@ function DockChatPanel({
   busy,
   canStopGeneration,
   conversation,
+  pdfReadingSignal,
   text,
   onClose,
   onPin,
@@ -3485,6 +3515,7 @@ function DockChatPanel({
   busy: boolean;
   canStopGeneration: boolean;
   conversation: Conversation;
+  pdfReadingSignal: number;
   text: ReaderText;
   onClose(): void;
   onPin(): void;
@@ -3538,6 +3569,12 @@ function DockChatPanel({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [conversation.id, conversation.messages]);
+
+  useEffect(() => {
+    if (pdfReadingSignal > 0) {
+      shouldFollowMessagesRef.current = false;
+    }
+  }, [pdfReadingSignal]);
 
   const submit = (event: FormEvent): void => {
     event.preventDefault();

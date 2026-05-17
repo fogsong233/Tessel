@@ -311,7 +311,8 @@ test.describe('Sidelight Electron reading flow', () => {
     await expect(reader.locator('.dock-chat-panel')).toBeVisible();
     await expect(reader.locator('.pdf-mark[data-color-role="chat"]').first()).toBeVisible();
     await expect.poll(async () => pdfMarkVisualSnapshot(reader, 'chat')).toMatchObject({
-      mixBlendMode: 'darken',
+      boxShadow: 'none',
+      mixBlendMode: 'multiply',
       opacity: '1'
     });
     await expect.poll(async () => Math.abs((await firstPageWidth(reader)) - widthBeforeChat)).toBeLessThan(1);
@@ -1436,6 +1437,7 @@ async function chatBottomGap(page: Page): Promise<number> {
 
 async function pdfMarkVisualSnapshot(page: Page, colorRole: string): Promise<{
   backgroundColor: string;
+  boxShadow: string;
   mixBlendMode: string;
   opacity: string;
 }> {
@@ -1443,6 +1445,7 @@ async function pdfMarkVisualSnapshot(page: Page, colorRole: string): Promise<{
     const style = window.getComputedStyle(element);
     return {
       backgroundColor: style.backgroundColor,
+      boxShadow: style.boxShadow,
       mixBlendMode: style.mixBlendMode,
       opacity: style.opacity
     };
