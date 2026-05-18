@@ -310,11 +310,11 @@ test.describe('Sidelight Electron reading flow', () => {
     await reader.locator('.selection-toolbar').getByRole('button', { name: /^Chat$/i }).click();
     await expect(reader.locator('.dock-chat-panel')).toBeVisible();
     await expect(reader.locator('.pdf-mark-visual[data-color-role="chat"]').first()).toBeVisible();
-    await expect(reader.locator('.pdf-mark-hit[data-color-role="chat"]').first()).toBeVisible();
+    await expect(reader.locator('.pdf-mark-hit')).toHaveCount(0);
     await expect.poll(async () => pdfMarkVisualSnapshot(reader, 'chat')).toMatchObject({
       boxShadow: 'none',
       hasPaint: true,
-      layerOpacity: '0.24',
+      layerOpacity: '0.48',
       mixBlendMode: 'normal',
       opacity: '1',
       visualZIndex: '5'
@@ -326,6 +326,31 @@ test.describe('Sidelight Electron reading flow', () => {
     await expect.poll(async () => dockChromeGap(reader)).toBeGreaterThanOrEqual(10);
     await expect.poll(async () => dockChromeGap(reader)).toBeLessThanOrEqual(18);
     await expect.poll(async () => headerActionCenterDelta(reader, '.dock-chat-panel')).toBeLessThan(1.5);
+
+    await selectFirstPdfText(reader);
+    await reader.locator('.selection-toolbar').getByRole('button', { name: /Underline/i }).click();
+    await expect(reader.locator('.pdf-mark-visual--underline').first()).toBeVisible();
+    await expect.poll(async () => pdfUnderlineSnapshot(reader)).toMatchObject({
+      backgroundColor: 'rgb(143, 164, 184)',
+      layerOpacity: '1',
+      layerZIndex: '6'
+    });
+
+    await selectFirstPdfText(reader);
+    await reader.locator('.selection-toolbar').getByRole('button', { name: /Highlight/i }).click();
+    await expect(reader.locator('.pdf-mark-visual[data-color-role="highlight"]').first()).toBeVisible();
+    await expect.poll(async () => markCenterTopElement(reader, 'highlight')).not.toContain('pdf-mark-hit');
+    await reader.locator('.dock-iconbar').getByRole('button', { name: 'Highlights' }).click();
+    await clickMarkVisualCenter(reader, 'highlight');
+    await expect(reader.locator('.mark-popover')).toBeVisible();
+    await expect.poll(async () => markPopoverDesignSnapshot(reader)).toMatchObject({
+      actionsDisplay: 'flex',
+      actionFontSize: '0px',
+      borderRadius: '10px',
+      quoteUserSelect: 'text'
+    });
+    await reader.locator('.mark-popover').getByTitle('Close').click();
+    await reader.locator('.dock-iconbar').getByRole('button', { name: 'Chats' }).click();
 
     await selectFirstPdfText(reader);
     const widthBeforeForegroundTranslate = await firstPageWidth(reader);
@@ -1459,6 +1484,78 @@ async function pdfMarkVisualSnapshot(page: Page, colorRole: string): Promise<{
       mixBlendMode: style.mixBlendMode,
       opacity: style.opacity,
       visualZIndex: window.getComputedStyle(element.parentElement as Element).zIndex
+    };
+  });
+}
+
+async function pdfUnderlineSnapshot(page: Page): Promise<{
+  backgroundColor: string;
+  layerOpacity: string;
+  layerZIndex: string;
+}> {
+  return page.locator('.pdf-mark-visual--underline').first().evaluate((element) => {
+    const style = window.getComputedStyle(element);
+    const layerStyle = window.getComputedStyle(element.parentElement as Element);
+    return {
+      backgroundColor: style.backgroundColor,
+      layerOpacity: layerStyle.opacity,
+      layerZIndex: layerStyle.zIndex
+    };
+  });
+}
+
+async function clickMarkVisualCenter(page: Page, colorRole: string): Promise<void> {
+  const point = await markVisiblePoint(page, colorRole);
+  await page.mouse.click(point.x, point.y);
+}
+
+async function markCenterTopElement(page: Page, colorRole: string): Promise<string> {
+  const point = await markVisiblePoint(page, colorRole);
+  return page.evaluate(({ x, y }) => {
+    const topElement = document.elementFromPoint(x, y);
+    return topElement instanceof HTMLElement ? topElement.className : '';
+  }, point);
+}
+
+async function markVisiblePoint(page: Page, colorRole: string): Promise<{ x: number; y: number }> {
+  return page.locator(`.pdf-mark-visual[data-color-role="${colorRole}"]`).first().evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const viewport = document.querySelector<HTMLElement>('.pdf-viewport')?.getBoundingClientRect();
+    if (!viewport) {
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    }
+
+    const left = Math.max(rect.left, viewport.left + 2);
+    const right = Math.min(rect.right, viewport.right - 2);
+    const top = Math.max(rect.top, viewport.top + 2);
+    const bottom = Math.min(rect.bottom, viewport.bottom - 2);
+    if (right <= left || bottom <= top) {
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    }
+
+    return {
+      x: left + (right - left) / 2,
+      y: top + (bottom - top) / 2
+    };
+  });
+}
+
+async function markPopoverDesignSnapshot(page: Page): Promise<{
+  actionFontSize: string;
+  actionsDisplay: string;
+  borderRadius: string;
+  quoteUserSelect: string;
+}> {
+  return page.locator('.mark-popover').evaluate((element) => {
+    const style = window.getComputedStyle(element);
+    const actions = element.querySelector<HTMLElement>('.mark-popover__actions');
+    const action = element.querySelector<HTMLElement>('.mark-popover__actions button');
+    const quote = element.querySelector<HTMLElement>('p');
+    return {
+      actionFontSize: action ? window.getComputedStyle(action).fontSize : '',
+      actionsDisplay: actions ? window.getComputedStyle(actions).display : '',
+      borderRadius: style.borderRadius,
+      quoteUserSelect: quote ? window.getComputedStyle(quote).userSelect : ''
     };
   });
 }

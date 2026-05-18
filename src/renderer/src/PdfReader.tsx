@@ -686,47 +686,49 @@ export function PdfReader({
     }
   }, [hasTransientAid, replaceForegroundPanel, transientAid?.id]);
 
+  const activateMark = useCallback((markId: string, clientX: number, clientY: number): void => {
+    setSelectionPopover(undefined);
+    const mark = marksRef.current.find((candidate) => candidate.id === markId);
+    if (mark && dockTabRef.current === 'chat') {
+      const conversation = conversationsRef.current.find((candidate) => conversationMatchesMark(candidate, mark));
+      if (conversation) {
+        setDockTab('chat');
+        if (transientAidRef.current) {
+          onCloseTransientAidRef.current();
+        }
+        onOpenConversationRef.current(conversation.id);
+        return;
+      }
+    }
+
+    if (mark && dockTabRef.current === 'notes') {
+      const note = notesRef.current.find((candidate) => noteMatchesMark(candidate, mark));
+      if (note) {
+        if (transientAidRef.current) {
+          onCloseTransientAidRef.current();
+        }
+        if (chatOpenRef.current && activeConversationRef.current) {
+          onCloseConversationRef.current();
+        }
+        setDockTab('notes');
+        setNoteEditorNote(note);
+        return;
+      }
+    }
+
+    setActiveMark({
+      markId,
+      left: Math.max(12, Math.min(clientX + 10, window.innerWidth - 332)),
+      top: Math.max(12, Math.min(clientY + 10, window.innerHeight - 220))
+    });
+  }, []);
+
   const renderMarks = useCallback(() => {
     if (!viewerRef.current) {
       return;
     }
 
-    renderMarkLayers(viewerRef.current, marksRef.current, selectionColorsRef.current, (markId, event) => {
-      setSelectionPopover(undefined);
-      const mark = marksRef.current.find((candidate) => candidate.id === markId);
-      if (mark && dockTabRef.current === 'chat') {
-        const conversation = conversationsRef.current.find((candidate) => conversationMatchesMark(candidate, mark));
-        if (conversation) {
-          setDockTab('chat');
-          if (transientAidRef.current) {
-            onCloseTransientAidRef.current();
-          }
-          onOpenConversationRef.current(conversation.id);
-          return;
-        }
-      }
-
-      if (mark && dockTabRef.current === 'notes') {
-        const note = notesRef.current.find((candidate) => noteMatchesMark(candidate, mark));
-        if (note) {
-          if (transientAidRef.current) {
-            onCloseTransientAidRef.current();
-          }
-          if (chatOpenRef.current && activeConversationRef.current) {
-            onCloseConversationRef.current();
-          }
-          setDockTab('notes');
-          setNoteEditorNote(note);
-          return;
-        }
-      }
-
-      setActiveMark({
-        markId,
-        left: Math.max(12, Math.min(event.clientX + 10, window.innerWidth - 312)),
-        top: Math.max(12, Math.min(event.clientY + 10, window.innerHeight - 220))
-      });
-    });
+    renderMarkLayers(viewerRef.current, marksRef.current, selectionColorsRef.current);
   }, []);
 
   const switchDockTab = useCallback((nextTab: DockTab): void => {
@@ -1897,29 +1899,59 @@ export function PdfReader({
     onGenerateNote(pageStart, pageEnd, pageText, buildDocumentToolContext({ pageStart, pageEnd, pdfText: pageText }));
   }, [buildDocumentToolContext, onGenerateNote]);
 
-  const handleSelectionMouseUp = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    const target = event.target as HTMLElement;
-    if (target.closest('.selection-toolbar, .mark-popover, .reader-float-dock')) {
+  const handleSelectionMouseUp = useCallback((event: Pick<
+    React.MouseEvent<HTMLDivElement> | React.PointerEvent<HTMLDivElement> | MouseEvent | PointerEvent,
+    'clientX' | 'clientY' | 'target'
+  >) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('.selection-toolbar, .mark-popover, .reader-float-dock, .reader-dock-lane')) {
       return;
     }
 
+    const clientX = event.clientX;
+    const clientY = event.clientY;
     window.setTimeout(() => {
       const selection = selectionFromWindow(viewerRef.current);
       const stage = stageRef.current;
       if (!selection || !stage) {
         setSelectionPopover(undefined);
+        const clickedMark = viewerRef.current
+          ? findMarkAtClientPoint(viewerRef.current, marksRef.current, clientX, clientY)
+          : undefined;
+        if (clickedMark) {
+          activateMark(clickedMark.id, clientX, clientY);
+          return;
+        }
+        setActiveMark(undefined);
         return;
       }
 
       const stageRect = stage.getBoundingClientRect();
       setSelectionPopover({
         selection,
-        left: Math.max(12, Math.min(event.clientX - stageRect.left, stageRect.width - 560)),
-        top: Math.max(12, Math.min(event.clientY - stageRect.top + 12, stageRect.height - 120))
+        left: Math.max(12, Math.min(clientX - stageRect.left, stageRect.width - 560)),
+        top: Math.max(12, Math.min(clientY - stageRect.top + 12, stageRect.height - 120))
       });
       setActiveMark(undefined);
     }, 0);
-  }, []);
+  }, [activateMark]);
+
+  useEffect(() => {
+    const viewport = containerRef.current;
+    if (!viewport) {
+      return undefined;
+    }
+
+    const handleNativeMouseUp = (event: MouseEvent | PointerEvent): void => {
+      handleSelectionMouseUp(event);
+    };
+    viewport.addEventListener('mouseup', handleNativeMouseUp, true);
+    viewport.addEventListener('pointerup', handleNativeMouseUp, true);
+    return () => {
+      viewport.removeEventListener('mouseup', handleNativeMouseUp, true);
+      viewport.removeEventListener('pointerup', handleNativeMouseUp, true);
+    };
+  }, [handleSelectionMouseUp, source]);
 
   return (
     <section className="reader">
@@ -4533,8 +4565,7 @@ function dedupeAreas(areas: PdfMarkArea[]): PdfMarkArea[] {
 function renderMarkLayers(
   viewerElement: HTMLDivElement,
   marks: PdfMark[],
-  selectionColors: SelectionColorPreferences,
-  onMarkClick: (markId: string, event: MouseEvent) => void
+  selectionColors: SelectionColorPreferences
 ): void {
   viewerElement.querySelectorAll('.sidelight-mark-layer').forEach((layer) => layer.remove());
 
@@ -4557,9 +4588,9 @@ function renderMarkLayers(
     visualLayer.className = 'sidelight-mark-layer sidelight-mark-layer--visual';
     pageElement.prepend(visualLayer);
 
-    const hitLayer = document.createElement('div');
-    hitLayer.className = 'sidelight-mark-layer sidelight-mark-layer--hit';
-    pageElement.appendChild(hitLayer);
+    const underlineLayer = document.createElement('div');
+    underlineLayer.className = 'sidelight-mark-layer sidelight-mark-layer--underline';
+    pageElement.appendChild(underlineLayer);
 
     const renderedAreas = new Set<string>();
     for (const mark of pageMarks) {
@@ -4583,30 +4614,69 @@ function renderMarkLayers(
           `pdf-mark-visual--${colorRole}`
         ].filter(Boolean).join(' ');
         visualNode.dataset.colorRole = colorRole;
+        visualNode.dataset.markId = mark.id;
         visualNode.setAttribute('aria-hidden', 'true');
         visualNode.style.setProperty('--mark-color', selectionColorForRole(colorRole, selectionColors));
         applyMarkAreaStyle(visualNode, area);
-        visualLayer.appendChild(visualNode);
-
-        const node = document.createElement('button');
-        node.type = 'button';
-        node.className = [
-          'pdf-mark-hit',
-          mark.kind === 'underline' ? 'pdf-mark--underline' : '',
-          `pdf-mark-hit--${colorRole}`
-        ].filter(Boolean).join(' ');
-        node.title = mark.quote;
-        node.dataset.colorRole = colorRole;
-        node.style.setProperty('--mark-color', selectionColorForRole(colorRole, selectionColors));
-        applyMarkAreaStyle(node, area);
-        node.addEventListener('click', (event) => {
-          event.stopPropagation();
-          onMarkClick(mark.id, event);
-        });
-        hitLayer.appendChild(node);
+        if (mark.kind === 'underline') {
+          visualNode.style.top = `${area.top + area.height}%`;
+          visualNode.style.height = '2px';
+        }
+        (mark.kind === 'underline' ? underlineLayer : visualLayer).appendChild(visualNode);
       }
     }
   }
+}
+
+function findMarkAtClientPoint(
+  viewerElement: HTMLDivElement,
+  marks: PdfMark[],
+  clientX: number,
+  clientY: number
+): PdfMark | undefined {
+  const renderedMarkIdsAtPoint = new Set(
+    Array.from(viewerElement.querySelectorAll<HTMLElement>('.pdf-mark-visual[data-mark-id]'))
+      .filter((node) => {
+        const rect = node.getBoundingClientRect();
+        return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+      })
+      .map((node) => node.dataset.markId)
+      .filter((markId): markId is string => Boolean(markId))
+  );
+  if (renderedMarkIdsAtPoint.size > 0) {
+    const renderedMark = marks.find((mark) => renderedMarkIdsAtPoint.has(mark.id));
+    if (renderedMark) {
+      return renderedMark;
+    }
+  }
+
+  for (const pageElement of Array.from(viewerElement.querySelectorAll<HTMLElement>('.page[data-page-number]'))) {
+    const pageRect = pageElement.getBoundingClientRect();
+    if (clientX < pageRect.left || clientX > pageRect.right || clientY < pageRect.top || clientY > pageRect.bottom) {
+      continue;
+    }
+
+    const pageNumber = Number(pageElement.dataset.pageNumber);
+    const left = ((clientX - pageRect.left) / Math.max(1, pageRect.width)) * 100;
+    const top = ((clientY - pageRect.top) / Math.max(1, pageRect.height)) * 100;
+    for (const mark of marks) {
+      if (mark.areas.some((area) => {
+        if (area.pageIndex + 1 !== pageNumber) {
+          return false;
+        }
+
+        const tolerance = mark.kind === 'underline' ? 0.5 : 0.15;
+        return left >= area.left - tolerance &&
+          left <= area.left + area.width + tolerance &&
+          top >= area.top - tolerance &&
+          top <= area.top + area.height + tolerance;
+      })) {
+        return mark;
+      }
+    }
+  }
+
+  return undefined;
 }
 
 function applyMarkAreaStyle(node: HTMLElement, area: PdfMarkArea): void {

@@ -754,11 +754,15 @@ input:disabled {
 
 .sidelight-mark-layer--visual {
   z-index: 5;
-  opacity: var(--pdf-mark-overlay-opacity, 0.24);
+  opacity: var(--pdf-mark-overlay-opacity, 0.48);
   isolation: isolate;
 }
 
 .sidelight-mark-layer--hit {
+  z-index: 6;
+}
+
+.sidelight-mark-layer--underline {
   z-index: 6;
 }
 
@@ -818,15 +822,16 @@ input:disabled {
 
 .pdf-mark-visual--underline,
 .pdf-mark-hit.pdf-mark--underline {
-  height: 0 !important;
-  border-bottom: 2px solid rgba(0, 0, 0, 0.68);
-  border-radius: 0;
-  background: transparent;
-  transform: translateY(100%);
+  height: 2px !important;
+  border-bottom: 0;
+  border-radius: 999px;
+  background: var(--selection-underline-color, #8fa4b8);
+  transform: translateY(-100%);
 }
 
 .pdf-mark-hit.pdf-mark--underline {
   border-bottom-color: transparent;
+  background: transparent;
 }
 
 .pdf-mark-visual--underline::before {
@@ -867,58 +872,85 @@ input:disabled {
 .mark-popover {
   position: fixed;
   z-index: 45;
-  width: 300px;
+  display: grid;
+  width: 320px;
   max-width: calc(100vw - 24px);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+  color: var(--ui-text);
+  border: 1px solid var(--ui-border);
+  border-radius: 10px;
+  background: var(--ui-surface);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.16);
 }
 
 .mark-popover header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 36px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--line);
-  background: #fafafa;
+  min-height: 42px;
+  padding: 7px 8px 7px 12px;
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--ui-surface);
 }
 
 .mark-popover header span {
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 12px;
+  font-weight: 720;
+}
+
+.mark-popover .icon-button {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  color: var(--ui-muted);
+  border-color: transparent;
+  border-radius: 8px;
+  background: transparent;
 }
 
 .mark-popover p {
-  max-height: 96px;
+  max-height: 128px;
   margin: 0;
   overflow: auto;
-  padding: 9px 10px;
-  color: var(--text);
+  padding: 10px 12px;
+  color: var(--ui-text);
+  background: var(--ui-surface-soft);
   font-size: 12px;
   line-height: 1.45;
+  user-select: text;
 }
 
 .mark-popover__actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 8px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--ui-border);
+  background: var(--ui-surface);
 }
 
 .mark-popover__actions button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-height: 30px;
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: #ffffff;
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  color: var(--ui-text);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 0;
+}
+
+.mark-popover__actions button:hover,
+.mark-popover .icon-button:hover {
+  color: var(--ui-text);
+  border-color: var(--ui-border);
+  background: var(--ui-hover);
 }
 
 .floating-chat {
@@ -8654,14 +8686,15 @@ body.is-resizing-workspace-block * {
 
 .pdf-mark-visual--underline,
 .pdf-mark-hit.pdf-mark--underline {
-  border-bottom-color: var(--mark-color, var(--selection-underline-color, #8fa4b8));
-  background: transparent;
+  border-bottom: 0;
+  background: var(--selection-underline-color, #8fa4b8);
   box-shadow: none;
   mix-blend-mode: normal;
 }
 
 .pdf-mark-hit.pdf-mark--underline {
   border-bottom-color: transparent;
+  background: transparent;
 }
 
 .pdf-mark-visual--underline::before {
