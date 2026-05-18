@@ -376,9 +376,11 @@ test.describe('Sidelight Electron reading flow', () => {
     await expect.poll(async () => dockListDesignSnapshot(reader)).toMatchObject({
       cardShadow: 'none',
       cardTransform: 'none',
+      cardWithinList: true,
       listOverflow: 'visible',
       searchInputMinWidth: '0px'
     });
+    await expect.poll(async () => (await dockListDesignSnapshot(reader)).cardRightInset).toBeGreaterThan(3);
     await reader.locator('.trace-card').first().click();
     await expect(reader.locator('.dock-chat-panel')).toBeVisible();
     const chatScrollTopBeforePin = await setViewportScrollTop(reader, 96);
@@ -1694,8 +1696,10 @@ async function dockChromeGap(page: Page): Promise<number> {
 }
 
 async function dockListDesignSnapshot(page: Page): Promise<{
+  cardRightInset: number;
   cardShadow: string;
   cardTransform: string;
+  cardWithinList: boolean;
   listOverflow: string;
   searchInputMinWidth: string;
 }> {
@@ -1703,10 +1707,19 @@ async function dockListDesignSnapshot(page: Page): Promise<{
     const card = document.querySelector<HTMLElement>('.trace-card');
     const list = document.querySelector<HTMLElement>('.trace-list');
     const searchInput = document.querySelector<HTMLElement>('.panel-search .p-inputtext');
+    const cardRect = card?.getBoundingClientRect();
+    const listRect = list?.getBoundingClientRect();
 
     return {
+      cardRightInset: cardRect && listRect ? listRect.right - cardRect.right : Number.NaN,
       cardShadow: card ? window.getComputedStyle(card).boxShadow : '',
       cardTransform: card ? window.getComputedStyle(card).transform : '',
+      cardWithinList: Boolean(
+        cardRect &&
+          listRect &&
+          cardRect.left >= listRect.left - 0.5 &&
+          cardRect.right <= listRect.right + 0.5
+      ),
       listOverflow: list ? window.getComputedStyle(list).overflow : '',
       searchInputMinWidth: searchInput ? window.getComputedStyle(searchInput).minWidth : ''
     };

@@ -8788,6 +8788,60 @@ body.is-resizing-workspace-block * {
   background: var(--ui-surface);
 }
 
+/* Dock list cards sit inside PrimeReact ScrollPanel; keep their rounded edge inside the clipped pane. */
+.reader-float-dock .trace-scroll,
+.reader-float-dock .trace-scroll .p-scrollpanel-wrapper,
+.reader-float-dock .trace-scroll .p-scrollpanel-content,
+.dock-search-panel .trace-scroll,
+.dock-search-panel .trace-scroll .p-scrollpanel-wrapper,
+.dock-search-panel .trace-scroll .p-scrollpanel-content {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.reader-float-dock .trace-scroll .p-scrollpanel-content,
+.dock-search-panel .trace-scroll .p-scrollpanel-content {
+  width: 100%;
+}
+
+.reader-float-dock .trace-list,
+.dock-search-panel .trace-list {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: visible;
+  padding-right: 6px;
+}
+
+.reader-float-dock .trace-card,
+.reader-float-dock .trace-card.p-button,
+.dock-search-panel .trace-card {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 8px;
+  transform: none;
+}
+
+.reader-float-dock .trace-card:hover,
+.reader-float-dock .trace-card.p-button:hover,
+.reader-float-dock .trace-card.is-active,
+.reader-float-dock .trace-card.p-button.is-active,
+.dock-search-panel .trace-card:hover,
+.dock-search-panel .trace-card.is-active {
+  transform: none;
+  box-shadow: none;
+}
+
+.reader-float-dock .trace-card.is-active,
+.reader-float-dock .trace-card.p-button.is-active {
+  border-color: var(--ui-border-strong);
+  background-color: var(--ui-active);
+  background-image: linear-gradient(90deg, var(--ui-ink) 0 3px, transparent 3px);
+  background-repeat: no-repeat;
+}
+
 @media (max-width: 980px) {
   .settings-color-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
