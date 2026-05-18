@@ -307,6 +307,26 @@ export function App(): ReactElement {
     }
   }
 
+  async function quoteSelectionInActiveConversation(selection: PdfSelectionPayload): Promise<void> {
+    if (!activeDocument || !activeConversation || busy) {
+      return;
+    }
+
+    await ensureSelectionMark('highlight', selection, 'chat');
+    focusConversation(activeConversation.id);
+    await sendMessage(
+      activeConversation.id,
+      promptForQuotedSelection(selection, appPreferences.aiLanguage),
+      [],
+      {
+        currentPage: selection.pageNumber,
+        pageStart: selection.pageNumber,
+        pageEnd: selection.pageNumber,
+        selectedText: selection.quote
+      }
+    );
+  }
+
   async function runTransientAid(mode: TransientAidMode, selection: PdfSelectionPayload): Promise<void> {
     if (!activeDocument) {
       return;
@@ -1000,6 +1020,7 @@ export function App(): ReactElement {
         onPageChange={updateCurrentPage}
         onCreateMark={(kind, selection, colorRole) => void saveMark(kind, selection, colorRole)}
         onSelectionAction={(mode, selection) => void startAnchoredAction(mode, selection)}
+        onQuoteSelection={(selection) => void quoteSelectionInActiveConversation(selection)}
         onAddBookmark={(pageNumber) => void addBookmark(pageNumber)}
         onDeleteBookmark={(bookmarkId) => void deleteBookmark(bookmarkId)}
         onDeleteMark={(markId) => void deleteMark(markId)}
@@ -2098,6 +2119,24 @@ function promptForMode(mode: AiMode, language: AiPreferredLanguage = 'Simplified
     default:
       return `Help me understand this selected passage. ${suffix}`;
   }
+}
+
+function promptForQuotedSelection(selection: PdfSelectionPayload, language: AiPreferredLanguage): string {
+  if (language === 'English') {
+    return [
+      `Quoted p.${selection.pageNumber}:`,
+      `> ${selection.quote}`,
+      '',
+      'Continue the current conversation using this passage as the new reference. Connect it to the earlier context and explain what matters.'
+    ].join('\n');
+  }
+
+  return [
+    `引用 p.${selection.pageNumber}:`,
+    `> ${selection.quote}`,
+    '',
+    '请结合这段新引用继续当前对话，说明它和上文问题的关系，并解释关键点。'
+  ].join('\n');
 }
 
 function summarizeConversation(

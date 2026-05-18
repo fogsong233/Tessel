@@ -52,6 +52,7 @@ import {
   Search,
   Settings,
   Pin,
+  Quote,
   Sparkles,
   Square,
   Trash2,
@@ -134,6 +135,7 @@ interface PdfReaderProps {
   onPageChange(pageNumber: number): void;
   onCreateMark(kind: PdfMarkKind, selection: PdfSelectionPayload, colorRole?: SelectionColorRole): void;
   onSelectionAction(mode: AiMode, selection: PdfSelectionPayload): void;
+  onQuoteSelection(selection: PdfSelectionPayload): void;
   onAddBookmark(pageNumber: number): void;
   onDeleteBookmark(bookmarkId: string): void;
   onDeleteMark(markId: string): void;
@@ -280,7 +282,7 @@ function readerText(language: UiLanguage) {
 	      notes: '笔记',
 	      notePreview: '预览',
 	      emptyNotePreview: '暂无内容',
-	      openChat: '打开对话',
+      openChat: '打开对话',
       openNote: '打开笔记',
       openPdf: '打开 PDF',
       outline: '目录',
@@ -290,6 +292,8 @@ function readerText(language: UiLanguage) {
       pdfFailedHelp: 'PDF.js 无法读取这个文档。',
       readingOutline: '正在读取 PDF 目录...',
       readingSidePanel: '阅读侧边栏',
+      quote: '引用',
+      quoteSelection: '引用到当前对话',
       removeBookmark: '移除书签',
       removeImage: '移除图片',
       resizeSidePanel: '调整侧边栏宽度',
@@ -384,7 +388,7 @@ function readerText(language: UiLanguage) {
 	    notes: 'Notes',
 	    notePreview: 'Preview',
 	    emptyNotePreview: 'No content',
-	      openChat: 'Open chat',
+      openChat: 'Open chat',
       openNote: 'Open note',
       openPdf: 'Open PDF',
     outline: 'Outline',
@@ -394,6 +398,8 @@ function readerText(language: UiLanguage) {
     pdfFailedHelp: 'The document could not be read by PDF.js.',
     readingOutline: 'Reading PDF outline...',
     readingSidePanel: 'Reading side panel',
+    quote: 'Quote',
+    quoteSelection: 'Quote in current chat',
     removeBookmark: 'Remove bookmark',
       removeImage: 'Remove image',
     resizeSidePanel: 'Resize side panel',
@@ -467,6 +473,7 @@ export function PdfReader({
   onPageChange,
   onCreateMark,
   onSelectionAction,
+  onQuoteSelection,
   onAddBookmark,
   onDeleteBookmark,
   onDeleteMark,
@@ -2142,6 +2149,13 @@ export function PdfReader({
                     }}
                     onSelectionAction={(mode, selection) => {
                       onSelectionAction(mode, selection);
+                      clearSelection();
+                      setSelectionPopover(undefined);
+                    }}
+                    canQuoteSelection={chatPanelOpen}
+                    quoteSelectionDisabled={busy}
+                    onQuoteSelection={(selection) => {
+                      onQuoteSelection(selection);
                       clearSelection();
                       setSelectionPopover(undefined);
                     }}
@@ -3944,15 +3958,21 @@ function toolCallPageRange(toolCall: AiToolCallEvent): string | undefined {
 function SelectionToolbar({
   popover,
   text,
+  canQuoteSelection,
+  quoteSelectionDisabled,
   onCreateMark,
   onCreateNote,
+  onQuoteSelection,
   onSelectionAction,
   onClose
 }: {
   popover: SelectionPopover;
   text: ReaderText;
+  canQuoteSelection: boolean;
+  quoteSelectionDisabled: boolean;
   onCreateMark(kind: PdfMarkKind, selection: PdfSelectionPayload, colorRole?: SelectionColorRole): void;
   onCreateNote(selection: PdfSelectionPayload): void;
+  onQuoteSelection(selection: PdfSelectionPayload): void;
   onSelectionAction(mode: AiMode, selection: PdfSelectionPayload): void;
   onClose(): void;
 }): ReactElement {
@@ -3987,6 +4007,18 @@ function SelectionToolbar({
         <MessageCircle size={15} />
         {text.chat}
       </button>
+      {canQuoteSelection && (
+        <button
+          type="button"
+          className="selection-toolbar__action selection-toolbar__action--quote"
+          title={text.quoteSelection}
+          disabled={quoteSelectionDisabled}
+          onClick={() => onQuoteSelection(selection)}
+        >
+          <Quote size={15} />
+          {text.quote}
+        </button>
+      )}
       <button
         type="button"
         className="selection-toolbar__action selection-toolbar__action--note"

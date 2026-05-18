@@ -286,6 +286,7 @@ test.describe('Sidelight Electron reading flow', () => {
     const initialPageWidth = await firstPageWidth(reader);
 
     await selectFirstPdfText(reader);
+    await expect(reader.locator('.selection-toolbar').getByRole('button', { name: /^Quote$/i })).toHaveCount(0);
     await reader.getByRole('button', { name: /Summary/i }).click();
     await expect(reader.locator('.transient-aid-panel')).toBeVisible();
     await expect(reader.locator('.transient-aid-panel')).toContainText('Summary');
@@ -326,6 +327,15 @@ test.describe('Sidelight Electron reading flow', () => {
     await expect.poll(async () => dockChromeGap(reader)).toBeGreaterThanOrEqual(10);
     await expect.poll(async () => dockChromeGap(reader)).toBeLessThanOrEqual(18);
     await expect.poll(async () => headerActionCenterDelta(reader, '.dock-chat-panel')).toBeLessThan(1.5);
+
+    await selectFirstPdfText(reader);
+    await expect(reader.locator('.selection-toolbar').getByRole('button', { name: /^Quote$/i })).toBeVisible();
+    await reader.locator('.selection-toolbar').getByRole('button', { name: /^Quote$/i }).click();
+    await expect(reader.locator('.dock-chat-panel .chat-message--user').filter({ hasText: /Quoted p\.1|引用 p\.1/ })).toContainText(
+      'Sidelight integration passage Alpha Beta'
+    );
+    await expect(reader.locator('.dock-chat-panel')).toContainText('local draft');
+    await expect(reader.locator('.dock-chat-panel .typing-dot')).toHaveCount(0);
 
     await selectFirstPdfText(reader);
     await reader.locator('.selection-toolbar').getByRole('button', { name: /Underline/i }).click();

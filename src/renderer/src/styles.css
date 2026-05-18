@@ -8735,6 +8735,10 @@ body.is-resizing-workspace-block * {
   --selection-action-color: var(--selection-chat-color, #cfe3f5);
 }
 
+.selection-toolbar__action--quote {
+  --selection-action-color: var(--selection-chat-color, #cfe3f5);
+}
+
 .selection-toolbar__action--note {
   --selection-action-color: var(--selection-note-color, #f5e3a6);
 }
