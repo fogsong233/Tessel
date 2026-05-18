@@ -2165,10 +2165,6 @@ export function PdfReader({
                       clearSelection();
                       setSelectionPopover(undefined);
                     }}
-                    onClose={() => {
-                      clearSelection();
-                      setSelectionPopover(undefined);
-                    }}
                   />
                 )}
 
@@ -3964,8 +3960,7 @@ function SelectionToolbar({
   onCreateMark,
   onCreateNote,
   onQuoteSelection,
-  onSelectionAction,
-  onClose
+  onSelectionAction
 }: {
   popover: SelectionPopover;
   text: ReaderText;
@@ -3975,7 +3970,6 @@ function SelectionToolbar({
   onCreateNote(selection: PdfSelectionPayload): void;
   onQuoteSelection(selection: PdfSelectionPayload): void;
   onSelectionAction(mode: AiMode, selection: PdfSelectionPayload): void;
-  onClose(): void;
 }): ReactElement {
   const { selection } = popover;
 
@@ -4046,10 +4040,6 @@ function SelectionToolbar({
       >
         <Languages size={15} />
         {text.translate}
-      </button>
-      <button type="button" className="selection-toolbar__close" title={text.close} onClick={onClose}>
-        <X size={15} />
-        {text.close}
       </button>
     </div>
   );

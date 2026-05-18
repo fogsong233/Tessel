@@ -8959,8 +8959,7 @@ body.is-resizing-workspace-block * {
 }
 
 .selection-toolbar button,
-.selection-toolbar .selection-toolbar__action,
-.selection-toolbar .selection-toolbar__close {
+.selection-toolbar .selection-toolbar__action {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
   align-items: center;
@@ -8992,8 +8991,7 @@ body.is-resizing-workspace-block * {
 }
 
 .selection-toolbar button:hover:not(:disabled),
-.selection-toolbar .selection-toolbar__action:hover:not(:disabled),
-.selection-toolbar .selection-toolbar__close:hover:not(:disabled) {
+.selection-toolbar .selection-toolbar__action:hover:not(:disabled) {
   color: var(--ui-text);
   background: var(--ui-hover);
 }
@@ -9006,11 +9004,6 @@ body.is-resizing-workspace-block * {
 
 .selection-toolbar button:disabled {
   opacity: 0.45;
-}
-
-.selection-toolbar .selection-toolbar__close {
-  margin-top: 2px;
-  color: var(--ui-muted);
 }
 
 .settings-color-grid {
