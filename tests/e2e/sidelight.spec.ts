@@ -100,6 +100,8 @@ test.describe('Sidelight Electron reading flow', () => {
     await expect
       .poll(async () => viewportHorizontalScrollInfo(reader))
       .toMatchObject({ canScroll: true });
+    const postZoomHorizontalDrift = await zoomThenNudgeHorizontalScroll(reader, await firstPageZoomAnchor(reader));
+    expect(postZoomHorizontalDrift).toBeLessThan(2);
     await expect.poll(async () => pdfPageToDockGap(reader)).toBeLessThan(90);
     await reader.locator('.pdf-viewport').evaluate((element) => {
       (element as HTMLElement).scrollLeft = 0;
@@ -1169,6 +1171,37 @@ async function zoomInOnFirstPage(page: Page): Promise<void> {
     deltaY: -300
   });
   await expect.poll(async () => firstPageWidth(page)).toBeGreaterThan(pageWidthBefore * 1.05);
+}
+
+async function zoomThenNudgeHorizontalScroll(page: Page, anchor: ZoomAnchorProbe): Promise<number> {
+  return page.locator('.pdf-viewport').evaluate(
+    async (element, zoomAnchor) => {
+      const node = element as HTMLElement;
+      node.dispatchEvent(
+        new WheelEvent('wheel', {
+          bubbles: true,
+          cancelable: true,
+          clientX: zoomAnchor.clientX,
+          clientY: zoomAnchor.clientY,
+          ctrlKey: true,
+          deltaY: -300
+        })
+      );
+
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      const maxScrollLeft = Math.max(0, node.scrollWidth - node.clientWidth);
+      const direction = node.scrollLeft > maxScrollLeft / 2 ? -1 : 1;
+      let targetScrollLeft = Math.min(maxScrollLeft, Math.max(0, node.scrollLeft + direction * 120));
+      if (Math.abs(targetScrollLeft - node.scrollLeft) < 16) {
+        targetScrollLeft = Math.min(maxScrollLeft, Math.max(0, node.scrollLeft - direction * 120));
+      }
+
+      node.scrollLeft = targetScrollLeft;
+      await new Promise((resolve) => window.setTimeout(resolve, 160));
+      return Math.abs(node.scrollLeft - targetScrollLeft);
+    },
+    anchor
+  );
 }
 
 async function viewportHorizontalScrollInfo(page: Page): Promise<{ canScroll: boolean }> {

@@ -1390,7 +1390,7 @@ export function PdfReader({
       window.cancelAnimationFrame(frame);
       window.cancelAnimationFrame(secondFrame);
     };
-  }, [activeConversationId, alignDockRight, dockTab, hasOpenDock, noteEditorNote?.id, scale, source, transientAid?.id]);
+  }, [activeConversationId, alignDockRight, dockTab, hasOpenDock, noteEditorNote?.id, source, transientAid?.id]);
 
   useEffect(() => {
     if (leftPanelOpen || hasOpenDock || status !== 'ready') {
@@ -4482,25 +4482,31 @@ function prepareZoomScrollSpace(container: HTMLElement, anchor: ZoomAnchor, scal
 }
 
 function restoreZoomAnchor(container: HTMLElement, anchor: ZoomAnchor, scaleRatio: number, onRestored?: () => void): void {
-  const restore = (): void => {
+  const restore = (): { left: number; top: number } => {
     if (anchor.pageNumber && anchor.pageOffsetX !== undefined && anchor.pageOffsetY !== undefined) {
       const page = container.querySelector<HTMLElement>(`.page[data-page-number="${anchor.pageNumber}"]`);
       if (page) {
         const pageRect = page.getBoundingClientRect();
         container.scrollLeft += pageRect.left + anchor.pageOffsetX * scaleRatio - anchor.clientX;
         container.scrollTop += pageRect.top + anchor.pageOffsetY * scaleRatio - anchor.clientY;
-        return;
+        return { left: container.scrollLeft, top: container.scrollTop };
       }
     }
 
     container.scrollLeft = anchor.scrollLeft * scaleRatio + anchor.offsetX * (scaleRatio - 1);
     container.scrollTop = anchor.scrollTop * scaleRatio + anchor.offsetY * (scaleRatio - 1);
+    return { left: container.scrollLeft, top: container.scrollTop };
   };
 
   window.requestAnimationFrame(() => {
-    restore();
+    const restoredScroll = restore();
     window.requestAnimationFrame(() => {
-      restore();
+      const userScrolledAfterRestore =
+        Math.abs(container.scrollLeft - restoredScroll.left) > 2 ||
+        Math.abs(container.scrollTop - restoredScroll.top) > 2;
+      if (!userScrolledAfterRestore) {
+        restore();
+      }
       onRestored?.();
     });
   });
