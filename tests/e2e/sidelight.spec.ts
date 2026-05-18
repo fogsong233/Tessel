@@ -141,6 +141,16 @@ test.describe('Sidelight Electron reading flow', () => {
     await library.bringToFront();
     const fixtureRow = library.locator('.library-row').filter({ hasText: 'fixture.pdf' });
     await expect(fixtureRow).toContainText('Page 2');
+    await library.getByRole('button', { name: 'Cover grid' }).click();
+    const fixtureCover = library.locator('.library-cover-card').filter({ hasText: 'fixture.pdf' });
+    await expect(fixtureCover).toContainText('Page 2');
+    await expect.poll(async () => libraryCoverGridSnapshot(library)).toMatchObject({
+      cardCount: 1,
+      cardOverflow: false,
+      gridOverflowX: false
+    });
+    await library.getByRole('button', { name: 'List view' }).click();
+    await expect(fixtureRow).toContainText('Page 2');
 
     await library.locator('.library-home__new-group input').fill('Research');
     await library.locator('.library-home__new-group button').click();
@@ -1192,6 +1202,26 @@ async function readerControlOverflowSnapshot(page: Page): Promise<{
       pageControlOverflow: overflow(document.querySelector<HTMLElement>('.page-control')),
       separatorVisible: Boolean(separatorBox && separatorBox.width >= 8 && separatorBox.height >= 8),
       zoomControlOverflow: overflow(document.querySelector<HTMLElement>('.zoom-control'))
+    };
+  });
+}
+
+async function libraryCoverGridSnapshot(page: Page): Promise<{
+  cardCount: number;
+  cardOverflow: boolean;
+  gridOverflowX: boolean;
+}> {
+  return page.locator('.library-cover-grid').evaluate((element) => {
+    const grid = element as HTMLElement;
+    const gridBox = grid.getBoundingClientRect();
+    const cards = Array.from(grid.querySelectorAll<HTMLElement>('.library-cover-card'));
+    return {
+      cardCount: cards.length,
+      cardOverflow: cards.some((card) => {
+        const cardBox = card.getBoundingClientRect();
+        return cardBox.left < gridBox.left - 0.5 || cardBox.right > gridBox.right + 0.5;
+      }),
+      gridOverflowX: grid.scrollWidth > grid.clientWidth + 1
     };
   });
 }

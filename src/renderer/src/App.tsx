@@ -9,6 +9,8 @@ import {
   FolderOpen,
   Github,
   Languages as LanguagesIcon,
+  LayoutGrid,
+  LayoutList,
   Library,
   MessageCircle,
   Palette,
@@ -1097,6 +1099,7 @@ function appText(language: UiLanguage) {
       library: '资料库',
       libraryEmptyCopy: '每个 PDF 会在独立阅读窗口中打开，并保留对话、笔记和标注。',
       librarySections: '资料库分区',
+      listView: '列表',
       loadingModels: '获取中...',
       localDraftMode: '本地草稿模式',
       localFirstLibraryData: '本地优先的资料库数据',
@@ -1141,6 +1144,8 @@ function appText(language: UiLanguage) {
       uiLanguage: 'UI 语言',
       underlineColor: '下划线',
       untagged: '无标签',
+      coverView: '封面',
+      viewMode: '显示方式',
       workspace: '工作区',
       workspaceMuted: 'PDF 元数据、笔记、标注和对话会留在本地工作区，直到你开启上传。'
     };
@@ -1184,6 +1189,7 @@ function appText(language: UiLanguage) {
     library: 'Library',
     libraryEmptyCopy: 'Each PDF opens in its own reading window with persistent chats and notes.',
     librarySections: 'Library sections',
+    listView: 'List view',
     loadingModels: 'Loading...',
     localDraftMode: 'Local draft mode',
     localFirstLibraryData: 'Local-first library data',
@@ -1228,6 +1234,8 @@ function appText(language: UiLanguage) {
     uiLanguage: 'UI language',
     underlineColor: 'Underline',
     untagged: 'untagged',
+    coverView: 'Cover grid',
+    viewMode: 'View mode',
     workspace: 'Workspace',
     workspaceMuted: 'PDF metadata, notes, highlights, and chats stay in the local workspace until upload is enabled.'
   };
@@ -1260,6 +1268,9 @@ function LibraryHome({
   const [activeTag, setActiveTag] = useState<string>();
   const [activeGroupId, setActiveGroupId] = useState<string>();
   const [newGroupName, setNewGroupName] = useState('');
+  const [viewMode, setViewMode] = useState<'list' | 'covers'>(() =>
+    window.localStorage.getItem('sidelight.libraryViewMode') === 'covers' ? 'covers' : 'list'
+  );
   const t = appText(uiLanguage);
   const sortedDocuments = useMemo(
     () => [...documents].sort((a, b) => new Date(b.lastOpenedAt).getTime() - new Date(a.lastOpenedAt).getTime()),
@@ -1302,6 +1313,10 @@ function LibraryHome({
   const toolbarTitle =
     activeGroup?.name ?? (activeGroupId === ungroupedGroupId ? t.noGroup : activeTag ?? (scope === 'recent' ? t.recentDocuments : scope === 'groups' ? t.groups : t.library));
   const overviewButtonClass = (isActive: boolean): string => isActive ? 'library-stat is-active' : 'library-stat';
+
+  useEffect(() => {
+    window.localStorage.setItem('sidelight.libraryViewMode', viewMode);
+  }, [viewMode]);
 
   const selectScope = (nextScope: 'library' | 'recent' | 'tags' | 'groups'): void => {
     setScope(nextScope);
@@ -1439,6 +1454,28 @@ function LibraryHome({
             <h1>{toolbarTitle}</h1>
           </div>
           <div className="library-toolbar__actions">
+            <div className="library-view-toggle" role="group" aria-label={t.viewMode}>
+              <button
+                type="button"
+                className={viewMode === 'list' ? 'is-active' : ''}
+                aria-pressed={viewMode === 'list'}
+                title={t.listView}
+                onClick={() => setViewMode('list')}
+              >
+                <LayoutList size={15} />
+                {t.listView}
+              </button>
+              <button
+                type="button"
+                className={viewMode === 'covers' ? 'is-active' : ''}
+                aria-pressed={viewMode === 'covers'}
+                title={t.coverView}
+                onClick={() => setViewMode('covers')}
+              >
+                <LayoutGrid size={15} />
+                {t.coverView}
+              </button>
+            </div>
             <label className="library-search">
               <Search size={16} />
               <input
@@ -1576,12 +1613,18 @@ function LibraryHome({
           )}
         </div>
 
-        <div className="library-table" role="table" aria-label={t.pdfLibrary}>
-          <div className="library-table__head" role="row">
-            <span>{t.title}</span>
-            <span>{t.group}</span>
-            <span>{t.pageProgress}</span>
-          </div>
+        <div
+          className={viewMode === 'list' ? 'library-table' : 'library-table library-table--covers'}
+          role={viewMode === 'list' ? 'table' : 'list'}
+          aria-label={t.pdfLibrary}
+        >
+          {viewMode === 'list' && (
+            <div className="library-table__head" role="row">
+              <span>{t.title}</span>
+              <span>{t.group}</span>
+              <span>{t.pageProgress}</span>
+            </div>
+          )}
 
           {visibleDocuments.length === 0 ? (
             <section className="library-empty">
@@ -1599,7 +1642,7 @@ function LibraryHome({
                 </button>
               )}
             </section>
-          ) : (
+          ) : viewMode === 'list' ? (
             <div className="library-table__body">
               {visibleDocuments.map((document) => {
                 const selectedGroupId = (document.groupIds ?? [])[0] ?? '';
@@ -1643,6 +1686,54 @@ function LibraryHome({
                       <small>{formatLibraryDate(document.readingState?.updatedAt ?? document.lastOpenedAt)}</small>
                     </span>
                   </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="library-cover-grid">
+              {visibleDocuments.map((document) => {
+                const selectedGroupId = (document.groupIds ?? [])[0] ?? '';
+                return (
+                  <article key={document.id} className="library-cover-card" role="listitem">
+                    <button
+                      className="library-cover-card__open"
+                      type="button"
+                      onClick={() => onOpenDocument(document.id)}
+                    >
+                      <span className="library-cover-card__cover" aria-hidden="true">
+                        <span>PDF</span>
+                        <BookOpen size={24} />
+                        <strong>{document.title}</strong>
+                      </span>
+                      <span className="library-cover-card__title">
+                        <strong>{document.title}</strong>
+                        <small>{document.fileName}</small>
+                      </span>
+                      <span className="library-cover-card__progress">
+                        <span>{readingProgressText(document, uiLanguage)}</span>
+                        <small>{formatLibraryDate(document.readingState?.updatedAt ?? document.lastOpenedAt)}</small>
+                      </span>
+                    </button>
+                    <div className="library-cover-card__meta">
+                      <select
+                        aria-label={`${t.group}: ${document.title}`}
+                        value={selectedGroupId}
+                        onChange={(event) => assignDocumentToGroup(document, event.target.value)}
+                      >
+                        <option value="">{t.noGroup}</option>
+                        {groups.map((group) => (
+                          <option key={group.id} value={group.id}>
+                            {group.name}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="library-cover-card__tags">
+                        {document.tags.length
+                          ? document.tags.map((tag) => <small key={tag}>{tag}</small>)
+                          : <small>{t.untagged}</small>}
+                      </span>
+                    </div>
+                  </article>
                 );
               })}
             </div>
