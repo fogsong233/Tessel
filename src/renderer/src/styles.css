@@ -514,7 +514,7 @@ input:disabled {
 }
 
 .pdfViewer .textLayer {
-  opacity: 0.24;
+  opacity: 0.42;
 }
 
 .pdf-state {
@@ -8881,7 +8881,12 @@ body.is-resizing-workspace-block * {
 /* Muted highlighter bands stay readable without formula-sized color blocks. */
 .pdfViewer .textLayer ::selection {
   color: inherit;
-  background: var(--selection-chat-color, #cfe3f5);
+  background: #79aee8;
+}
+
+.pdfViewer .textLayer ::-moz-selection {
+  color: inherit;
+  background: #79aee8;
 }
 
 .pdf-mark-visual,
