@@ -48,6 +48,7 @@ import {
   ListTree,
   MessageCircle,
   Minus,
+  Move,
   Plus,
   Search,
   Settings,
@@ -186,6 +187,11 @@ interface SelectionPopover {
   selection: PdfSelectionPayload;
 }
 
+interface DockOffset {
+  x: number;
+  y: number;
+}
+
 interface PdfOutlineItem {
   id: string;
   title: string;
@@ -297,6 +303,7 @@ function readerText(language: UiLanguage) {
       quoteSelection: '引用到当前对话',
       removeBookmark: '移除书签',
       removeImage: '移除图片',
+      moveSidePanel: '移动侧边工具',
       resizeSidePanel: '调整侧边栏宽度',
       save: '保存',
       search: '搜索',
@@ -403,6 +410,7 @@ function readerText(language: UiLanguage) {
     quoteSelection: 'Quote in current chat',
     removeBookmark: 'Remove bookmark',
       removeImage: 'Remove image',
+    moveSidePanel: 'Move reading dock',
     resizeSidePanel: 'Resize side panel',
     save: 'Save',
       search: 'Search',
@@ -533,6 +541,7 @@ export function PdfReader({
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [dockTab, setDockTab] = useState<DockTab>('chat');
   const [dockWidth, setDockWidth] = useState<number>();
+  const [dockOffset, setDockOffset] = useState<DockOffset>({ x: 0, y: 0 });
   const [searchQuery, setSearchQuery] = useState('');
   const [noteEditorNote, setNoteEditorNote] = useState<NoteDocument>();
   const [workspaceBlockLayouts, setWorkspaceBlockLayouts] = useState<Record<string, WorkspaceBlockLayout>>({});
@@ -638,10 +647,12 @@ export function PdfReader({
     () => ({
       '--dock-panel-width': `${resolvedDockWidth}px`,
       '--dock-lane-width': `${resolvedDockWidth + dockHandleGutter}px`,
+      '--dock-offset-x': `${dockOffset.x}px`,
+      '--dock-offset-y': `${dockOffset.y}px`,
       ...selectionColorCssVars(resolvedSelectionColors),
       ...(workspaceLeftGutter > 0 ? { '--canvas-left-gutter': `${workspaceLeftGutter}px` } : {})
     }) as CSSProperties,
-    [resolvedDockWidth, resolvedSelectionColors, workspaceLeftGutter]
+    [dockOffset.x, dockOffset.y, resolvedDockWidth, resolvedSelectionColors, workspaceLeftGutter]
   );
 
   const closeNoteForForeground = useCallback((nextNoteId?: string): void => {
@@ -1823,16 +1834,55 @@ export function PdfReader({
     executeSearch(false);
   };
 
+  const startDockMove = useCallback((event: ReactMouseEvent<HTMLButtonElement>): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    document.body.classList.add('is-moving-dock');
+
+    const container = containerRef.current;
+    const dock = container?.querySelector<HTMLElement>('.reader-float-dock');
+    const viewportRect = container?.getBoundingClientRect();
+    const dockRect = dock?.getBoundingClientRect();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const origin = dockOffset;
+
+    const minX = viewportRect && dockRect ? origin.x + viewportRect.left + 12 - dockRect.left : -720;
+    const maxX = viewportRect && dockRect ? origin.x + viewportRect.right - 12 - dockRect.right : 160;
+    const minY = viewportRect && dockRect ? origin.y + viewportRect.top + 12 - dockRect.top : -96;
+    const maxY = viewportRect && dockRect ? origin.y + viewportRect.bottom - 96 - dockRect.top : 520;
+
+    const handleMouseMove = (moveEvent: MouseEvent): void => {
+      setDockOffset({
+        x: clamp(origin.x + moveEvent.clientX - startX, minX, maxX),
+        y: clamp(origin.y + moveEvent.clientY - startY, minY, maxY)
+      });
+    };
+
+    const stopMove = (): void => {
+      document.body.classList.remove('is-moving-dock');
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('pointerup', stopMove);
+      window.removeEventListener('pointercancel', stopMove);
+      window.removeEventListener('mouseup', stopMove);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('pointerup', stopMove, { once: true });
+    window.addEventListener('pointercancel', stopMove, { once: true });
+    window.addEventListener('mouseup', stopMove, { once: true });
+  }, [dockOffset]);
+
   const startDockResize = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     document.body.classList.add('is-resizing-dock');
 
-	    const startX = event.clientX;
-	    const startWidth = resolvedDockWidth;
-	    const minWidth = noteEditorNote ? 640 : 320;
-	    const maxWidth = Math.min(noteEditorNote ? 1040 : 760, Math.max(minWidth, window.innerWidth - 180));
-	    let edgeScrollDelta = 0;
+    const startX = event.clientX;
+    const startWidth = resolvedDockWidth;
+    const minWidth = noteEditorNote ? 640 : 320;
+    const maxWidth = Math.min(noteEditorNote ? 1040 : 760, Math.max(minWidth, window.innerWidth - 180));
+    let edgeScrollDelta = 0;
     let lastClientX = startX;
 
     const handlePointerMove = (moveEvent: PointerEvent): void => {
@@ -1848,8 +1898,8 @@ export function PdfReader({
         }
       }
 
-	      const nextWidth = clamp(startWidth + moveEvent.clientX - startX + edgeScrollDelta, minWidth, maxWidth);
-	      setDockWidth(nextWidth);
+      const nextWidth = clamp(startWidth + moveEvent.clientX - startX + edgeScrollDelta, minWidth, maxWidth);
+      setDockWidth(nextWidth);
       lastClientX = moveEvent.clientX;
     };
 
@@ -1863,7 +1913,7 @@ export function PdfReader({
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', stopResize, { once: true });
     window.addEventListener('pointercancel', stopResize, { once: true });
-	  }, [noteEditorNote, resolvedDockWidth]);
+  }, [noteEditorNote, resolvedDockWidth]);
 
   const buildDocumentToolContext = useCallback((input: {
     conversation?: Conversation;
@@ -2116,6 +2166,7 @@ export function PdfReader({
                         onPinConversation={pinConversationToCanvas}
                         onPinImage={pinImageToCanvas}
                         onPinNote={pinNoteToCanvas}
+                        onStartMove={startDockMove}
                         onTabChange={switchDockTab}
                       />
                       <button
@@ -2554,6 +2605,7 @@ function ReaderDock({
   onPinConversation,
   onPinImage,
   onPinNote,
+  onStartMove,
   onTabChange
 }: {
   activeConversation?: Conversation;
@@ -2595,6 +2647,7 @@ function ReaderDock({
   onPinConversation(conversation: Conversation): void;
   onPinImage(attachment: ConversationAttachment, conversation?: Conversation): void;
   onPinNote(note: NoteDocument): void;
+  onStartMove(event: ReactMouseEvent<HTMLButtonElement>): void;
   onTabChange(tab: DockTab): void;
 }): ReactElement {
   const panelOpen = (chatOpen && activeConversation) || transientAid || noteEditorNote;
@@ -2679,6 +2732,17 @@ function ReaderDock({
             onClick={createPrimaryItem}
           >
             <Plus size={17} />
+          </Button>
+          <Button
+            type="button"
+            text
+            rounded
+            className="dock-move-button"
+            title={t.moveSidePanel}
+            aria-label={t.moveSidePanel}
+            onMouseDown={onStartMove}
+          >
+            <Move size={17} />
           </Button>
         </span>
       </nav>

@@ -139,6 +139,12 @@ test.describe('Sidelight Electron reading flow', () => {
     });
     await expect.poll(async () => pdfPageWidth(reader, 2)).toBeGreaterThan(pageTwoWidthBefore);
     await expect.poll(async () => persistedReadingState(userDataDir)).toMatchObject({ lastPage: 2 });
+    await revealDockMoveButton(reader);
+    const dockBeforeDrag = await dockPanelBox(reader);
+    await dragDockMoveButton(reader, -150, 42);
+    const dockAfterDrag = await dockPanelBox(reader);
+    expect(dockAfterDrag.left).toBeLessThan(dockBeforeDrag.left - 80);
+    expect(dockAfterDrag.top).toBeGreaterThan(dockBeforeDrag.top + 20);
     await reader.close();
     await library.bringToFront();
     const fixtureRow = library.locator('.library-row').filter({ hasText: 'fixture.pdf' });
@@ -400,7 +406,7 @@ test.describe('Sidelight Electron reading flow', () => {
     await reader.locator('.dock-iconbar').getByRole('button', { name: 'Chats' }).click();
     await expect(reader.locator('.trace-card').first()).toBeVisible();
     await expect(reader.locator('.dock-iconbar').getByRole('button', { name: 'Chats' })).toHaveClass(/is-active/);
-    await expect(reader.locator('.dock-iconbar__actions').getByRole('button')).toHaveAttribute('aria-label', 'New page chat');
+    await expect(reader.locator('.dock-iconbar__actions').getByRole('button', { name: 'New page chat' })).toHaveAttribute('aria-label', 'New page chat');
     await expect.poll(async () => dockListDesignSnapshot(reader)).toMatchObject({
       cardShadow: 'none',
       cardTransform: 'none',
@@ -777,7 +783,7 @@ test.describe('Sidelight Electron reading flow', () => {
     await reader.locator('.dock-iconbar').getByRole('button', { name: 'Notes' }).click();
     await expect(reader.locator('.notes-panel')).toBeVisible();
     await expect(reader.locator('.markdown-note-editor .cm-content')).toHaveCount(0);
-    await expect(reader.locator('.dock-iconbar__actions').getByRole('button')).toHaveAttribute('aria-label', 'New page note');
+    await expect(reader.locator('.dock-iconbar__actions').getByRole('button', { name: 'New page note' })).toHaveAttribute('aria-label', 'New page note');
 
     await reader.locator('.dock-iconbar__actions').getByRole('button', { name: 'New page note' }).click();
     await expect(reader.locator('.dock-note-editor-panel')).toBeVisible();
@@ -1355,6 +1361,24 @@ async function dockLaneBox(page: Page): Promise<{ left: number; top: number }> {
       top: rect.top
     };
   });
+}
+
+async function dockPanelBox(page: Page): Promise<{ left: number; top: number }> {
+  return page.locator('.reader-float-dock').evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top
+    };
+  });
+}
+
+async function revealDockMoveButton(page: Page): Promise<void> {
+  const button = page.getByRole('button', { name: 'Move reading dock' });
+  await button.evaluate((element) => {
+    element.scrollIntoView({ block: 'nearest', inline: 'center' });
+  });
+  await expect(button).toBeVisible();
 }
 
 async function composerHeight(page: Page): Promise<number> {
@@ -2047,6 +2071,19 @@ async function dragDockResizeHandle(page: Page, deltaX: number): Promise<void> {
   await page.mouse.move(startX, startY);
   await page.mouse.down();
   await page.mouse.move(startX + deltaX, startY, { steps: 8 });
+  await page.mouse.up();
+}
+
+async function dragDockMoveButton(page: Page, deltaX: number, deltaY: number): Promise<void> {
+  const button = page.getByRole('button', { name: 'Move reading dock' });
+  const box = await button.boundingBox();
+  expect(box).toBeTruthy();
+
+  const startX = box!.x + box!.width / 2;
+  const startY = box!.y + box!.height / 2;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX + deltaX, startY + deltaY, { steps: 8 });
   await page.mouse.up();
 }
 

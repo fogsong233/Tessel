@@ -9096,6 +9096,29 @@ body.is-resizing-workspace-block * {
   background-repeat: no-repeat;
 }
 
+.reader-float-dock,
+.reader-float-dock.is-chat-open {
+  transform: translate(var(--dock-offset-x, 0px), var(--dock-offset-y, 0px));
+}
+
+.dock-iconbar .dock-move-button.p-button {
+  cursor: grab;
+}
+
+.dock-iconbar .dock-move-button.p-button:active,
+body.is-moving-dock {
+  cursor: grabbing;
+}
+
+body.is-moving-dock {
+  user-select: none;
+}
+
+body.is-moving-dock .reader-float-dock,
+body.is-moving-dock .reader-float-dock.is-chat-open {
+  transition: none;
+}
+
 @media (max-width: 980px) {
   .settings-color-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
