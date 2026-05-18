@@ -244,6 +244,17 @@ export interface SafeGitHubUploadConfig extends Omit<GitHubUploadConfig, 'token'
   hasToken: boolean;
 }
 
+export type WorkspaceSyncMode = 'sync' | 'upload';
+export type WorkspaceSyncStatus = 'skipped' | 'uploaded';
+
+export interface WorkspaceSyncResult {
+  mode: WorkspaceSyncMode;
+  status: WorkspaceSyncStatus;
+  documentCount: number;
+  uploadedAt?: ISODate;
+  message: string;
+}
+
 export interface AppPreferences {
   uiLanguage: UiLanguage;
   aiLanguage: AiPreferredLanguage;
@@ -381,7 +392,8 @@ export interface SidelightApi {
   loadPdf(documentId: DocumentId): Promise<PdfOpenResult | null>;
   addDocumentToLibrary(documentId: DocumentId): Promise<PdfDocumentMeta>;
   updateDocument(document: PdfDocumentMeta): Promise<PdfDocumentMeta>;
-  syncWorkspace(): Promise<void>;
+  syncWorkspace(): Promise<WorkspaceSyncResult>;
+  uploadWorkspace(): Promise<WorkspaceSyncResult>;
   readPdfRange(request: PdfRangeRequest): Promise<ArrayBuffer>;
   listPdfMarks(documentId: DocumentId): Promise<PdfMark[]>;
   savePdfMark(input: SavePdfMarkInput): Promise<PdfMark>;

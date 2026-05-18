@@ -20,6 +20,7 @@ import {
   Settings,
   SlidersHorizontal,
   Tags,
+  UploadCloud,
   X
 } from 'lucide-react';
 import {
@@ -51,7 +52,8 @@ import {
   SafeGitHubUploadConfig,
   TextAnchor,
   UiLanguage,
-  WorkspaceBlock
+  WorkspaceBlock,
+  WorkspaceSyncResult
 } from '../../shared/domain';
 import { createId } from '../../shared/ids';
 import { mergeNoteDocuments as mergeNotes } from '../../shared/notes';
@@ -742,7 +744,8 @@ export function App(): ReactElement {
   async function saveSettings(
     aiConfig: AiProviderConfig,
     uploadConfig: GitHubUploadConfig,
-    preferencesConfig: AppPreferences
+    preferencesConfig: AppPreferences,
+    options: { close?: boolean } = {}
   ): Promise<void> {
     const savedProvider = await window.sidelight.saveAiProvider(aiConfig);
     const savedUpload = await window.sidelight.saveGitHubUpload(uploadConfig);
@@ -750,7 +753,23 @@ export function App(): ReactElement {
     setAiProvider(savedProvider);
     setGitHubUpload(savedUpload);
     setAppPreferences(savedPreferences);
-    setSettingsOpen(false);
+    if (options.close !== false) {
+      setSettingsOpen(false);
+    }
+  }
+
+  async function runGitHubWorkspaceAction(
+    mode: WorkspaceSyncResult['mode'],
+    aiConfig: AiProviderConfig,
+    uploadConfig: GitHubUploadConfig,
+    preferencesConfig: AppPreferences
+  ): Promise<WorkspaceSyncResult> {
+    await saveSettings(aiConfig, uploadConfig, preferencesConfig, { close: false });
+    const result = mode === 'sync'
+      ? await window.sidelight.syncWorkspace()
+      : await window.sidelight.uploadWorkspace();
+    await refreshSettings();
+    return result;
   }
 
   async function saveNote(noteToSave: NoteDocument): Promise<void> {
@@ -987,6 +1006,7 @@ export function App(): ReactElement {
             onClose={() => setSettingsOpen(false)}
             onSave={(aiConfig, uploadConfig, preferencesConfig) =>
               void saveSettings(aiConfig, uploadConfig, preferencesConfig)}
+            onGitHubAction={runGitHubWorkspaceAction}
           />
         )}
       </main>
@@ -1053,6 +1073,7 @@ export function App(): ReactElement {
           onClose={() => setSettingsOpen(false)}
           onSave={(aiConfig, uploadConfig, preferencesConfig) =>
             void saveSettings(aiConfig, uploadConfig, preferencesConfig)}
+          onGitHubAction={runGitHubWorkspaceAction}
         />
       )}
     </main>
@@ -1078,6 +1099,11 @@ function appText(language: UiLanguage) {
       enabled: '启用',
       fetchModels: '获取 models',
       githubUpload: 'GitHub 上传',
+      githubManualHelp: '启动时会自动同步；这里也可以手动同步或直接上传当前本地快照。',
+      githubSyncNow: '同步',
+      githubSyncing: '同步中...',
+      githubUploadNow: '上传',
+      githubUploading: '上传中...',
       group: '分组',
       groups: '分组',
       cloudHeld: '云端持有',
@@ -1168,6 +1194,11 @@ function appText(language: UiLanguage) {
     enabled: 'Enabled',
     fetchModels: 'Fetch models',
     githubUpload: 'GitHub Upload',
+    githubManualHelp: 'Sidelight syncs on launch; you can also sync now or upload the current local snapshot.',
+    githubSyncNow: 'Sync now',
+    githubSyncing: 'Syncing...',
+    githubUploadNow: 'Upload now',
+    githubUploading: 'Uploading...',
     group: 'Group',
     groups: 'Groups',
     cloudHeld: 'Cloud held',
@@ -1749,12 +1780,19 @@ function FloatingSettingsPanel({
   githubUpload,
   preferences,
   onClose,
+  onGitHubAction,
   onSave
 }: {
   provider: SafeAiProviderConfig;
   githubUpload: SafeGitHubUploadConfig;
   preferences: AppPreferences;
   onClose(): void;
+  onGitHubAction(
+    mode: WorkspaceSyncResult['mode'],
+    aiConfig: AiProviderConfig,
+    uploadConfig: GitHubUploadConfig,
+    preferencesConfig: AppPreferences
+  ): Promise<WorkspaceSyncResult>;
   onSave(aiConfig: AiProviderConfig, uploadConfig: GitHubUploadConfig, preferencesConfig: AppPreferences): void;
 }): ReactElement {
   const [displayName, setDisplayName] = useState(provider.displayName);
@@ -1774,7 +1812,33 @@ function FloatingSettingsPanel({
   const [modelOptions, setModelOptions] = useState<AiModelInfo[]>([]);
   const [modelLoading, setModelLoading] = useState(false);
   const [modelError, setModelError] = useState<string>();
+  const [githubAction, setGithubAction] = useState<WorkspaceSyncResult['mode']>();
+  const [githubStatus, setGithubStatus] = useState<string>();
+  const [githubError, setGithubError] = useState<string>();
   const t = appText(uiLanguage);
+
+  const currentAiConfig = (): AiProviderConfig => ({
+    displayName: displayName.trim() || 'OpenAI-compatible',
+    baseUrl: baseUrl.trim(),
+    model: model.trim(),
+    temperature,
+    apiKey: apiKey.trim() || undefined
+  });
+
+  const currentUploadConfig = (): GitHubUploadConfig => ({
+    enabled: uploadEnabled,
+    owner,
+    repo,
+    branch,
+    basePath,
+    token: token.trim() || undefined
+  });
+
+  const currentPreferences = (): AppPreferences => ({
+    uiLanguage,
+    aiLanguage,
+    selectionColors: normalizeSelectionColors(selectionColors)
+  });
 
   const fetchModels = async (): Promise<void> => {
     setModelLoading(true);
@@ -1805,28 +1869,21 @@ function FloatingSettingsPanel({
 
   const submit = (event: FormEvent): void => {
     event.preventDefault();
-    onSave(
-      {
-        displayName: displayName.trim() || 'OpenAI-compatible',
-        baseUrl: baseUrl.trim(),
-        model: model.trim(),
-        temperature,
-        apiKey: apiKey.trim() || undefined
-      },
-      {
-        enabled: uploadEnabled,
-        owner,
-        repo,
-        branch,
-        basePath,
-        token: token.trim() || undefined
-      },
-      {
-        uiLanguage,
-        aiLanguage,
-        selectionColors: normalizeSelectionColors(selectionColors)
-      }
-    );
+    onSave(currentAiConfig(), currentUploadConfig(), currentPreferences());
+  };
+
+  const runGithubAction = async (mode: WorkspaceSyncResult['mode']): Promise<void> => {
+    setGithubAction(mode);
+    setGithubStatus(undefined);
+    setGithubError(undefined);
+    try {
+      const result = await onGitHubAction(mode, currentAiConfig(), currentUploadConfig(), currentPreferences());
+      setGithubStatus(result.message);
+    } catch (error) {
+      setGithubError(presentableAiError(error));
+    } finally {
+      setGithubAction(undefined);
+    }
   };
 
   const updateSelectionColor = (role: SelectionColorRole, color: string): void => {
@@ -1835,6 +1892,10 @@ function FloatingSettingsPanel({
       [role]: color
     }));
   };
+  const canRunGithubAction = uploadEnabled &&
+    owner.trim().length > 0 &&
+    repo.trim().length > 0 &&
+    (token.trim().length > 0 || githubUpload.hasToken);
 
   return (
     <div className="settings-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -2072,6 +2133,29 @@ function FloatingSettingsPanel({
                     placeholder={githubUpload.hasToken ? t.storedTokenPlaceholder : 'github_pat_...'}
                   />
                 </label>
+              </div>
+              <div className="settings-github-actions">
+                <button
+                  className="quiet-button"
+                  type="button"
+                  disabled={!canRunGithubAction || Boolean(githubAction)}
+                  onClick={() => void runGithubAction('sync')}
+                >
+                  <RefreshCw size={14} />
+                  {githubAction === 'sync' ? t.githubSyncing : t.githubSyncNow}
+                </button>
+                <button
+                  className="quiet-button"
+                  type="button"
+                  disabled={!canRunGithubAction || Boolean(githubAction)}
+                  onClick={() => void runGithubAction('upload')}
+                >
+                  <UploadCloud size={14} />
+                  {githubAction === 'upload' ? t.githubUploading : t.githubUploadNow}
+                </button>
+                <small className={githubError ? 'settings-field-status is-error' : 'settings-field-status'}>
+                  {githubError ?? githubStatus ?? t.githubManualHelp}
+                </small>
               </div>
             </section>
 

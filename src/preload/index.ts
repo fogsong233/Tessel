@@ -27,6 +27,7 @@ const api: SidelightApi = {
   addDocumentToLibrary: (documentId) => ipcRenderer.invoke('pdf:addToLibrary', documentId),
   updateDocument: (document: PdfDocumentMeta) => ipcRenderer.invoke('pdf:updateDocument', document),
   syncWorkspace: () => ipcRenderer.invoke('sync:workspace'),
+  uploadWorkspace: () => ipcRenderer.invoke('sync:uploadWorkspace'),
   readPdfRange: (request) => ipcRenderer.invoke('pdf:readRange', request),
   listPdfMarks: (documentId) => ipcRenderer.invoke('pdf:listMarks', documentId),
   savePdfMark: (input) => ipcRenderer.invoke('pdf:saveMark', input),

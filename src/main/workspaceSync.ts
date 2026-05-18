@@ -12,7 +12,9 @@ import {
   PdfMark,
   PdfReadingState,
   PdfUserBookmark,
-  WorkspaceBlock
+  WorkspaceBlock,
+  WorkspaceSyncMode,
+  WorkspaceSyncResult
 } from '../shared/domain';
 import {
   cloudAssetPathForDocument,
@@ -190,16 +192,67 @@ export async function uploadWorkspaceSyncToGitHub(input: {
   store: WorkspaceStoreData;
   workspaceDir: string;
   manifest: WorkspaceSyncManifest;
+  mergeRemote?: boolean;
+  mode: WorkspaceSyncMode;
   token?: string;
-}): Promise<void> {
+}): Promise<WorkspaceSyncResult> {
   const upload = input.store.githubUpload;
+  const documentCount = input.manifest.documents.length;
   if (!upload.enabled || !input.token || !upload.owner || !upload.repo) {
-    return;
+    return {
+      mode: input.mode,
+      status: 'skipped',
+      documentCount,
+      message: 'GitHub upload is disabled or missing owner, repo, or token.'
+    };
   }
 
   const syncDir = join(input.workspaceDir, 'sync');
   const branch = upload.branch || 'main';
   const message = `Sync Sidelight workspace ${input.manifest.updatedAt}`;
+  let manifest = input.manifest;
+  const remoteDocuments = new Map<string, WorkspaceDocumentSnapshot>();
+
+  if (input.mergeRemote !== false) {
+    const remoteManifestFile = await githubGetFile({
+      owner: upload.owner,
+      repo: upload.repo,
+      branch,
+      basePath: upload.basePath,
+      token: input.token,
+      relativePath: 'manifest.json'
+    });
+    const remoteManifest = remoteManifestFile?.content
+      ? tryParseJson<WorkspaceSyncManifest>(remoteManifestFile.content)
+      : undefined;
+
+    if (remoteManifest) {
+      manifest = mergeWorkspaceManifests(remoteManifest, input.manifest);
+      for (const document of remoteManifest.documents) {
+        const remoteFile = await githubGetFile({
+          owner: upload.owner,
+          repo: upload.repo,
+          branch,
+          basePath: upload.basePath,
+          token: input.token,
+          relativePath: document.jsonPath
+        });
+        if (!remoteFile?.content) {
+          continue;
+        }
+
+        const remoteSnapshot = tryParseJson<WorkspaceDocumentSnapshot>(remoteFile.content);
+        if (remoteSnapshot) {
+          remoteDocuments.set(document.jsonPath, remoteSnapshot);
+          await writeJsonFile(join(syncDir, document.jsonPath), remoteSnapshot);
+        }
+      }
+    }
+  }
+  if (manifest !== input.manifest) {
+    await writeJsonFile(join(syncDir, 'manifest.json'), manifest);
+  }
+
   const putFile = (relativePath: string, content: Buffer | string): Promise<void> =>
     githubPutFile({
       owner: upload.owner,
@@ -212,26 +265,16 @@ export async function uploadWorkspaceSyncToGitHub(input: {
       content: typeof content === 'string' ? Buffer.from(content, 'utf8') : content
     });
 
-  await putFile('manifest.json', `${JSON.stringify(input.manifest, null, 2)}\n`);
+  await putFile('manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
   await putFile('settings.json', await readFile(join(syncDir, 'settings.json')));
 
   for (const document of input.manifest.documents) {
     const localJsonPath = join(syncDir, document.jsonPath);
     let snapshot = JSON.parse(await readFile(localJsonPath, 'utf8')) as WorkspaceDocumentSnapshot;
-    const remote = await githubGetFile({
-      owner: upload.owner,
-      repo: upload.repo,
-      branch,
-      basePath: upload.basePath,
-      token: input.token,
-      relativePath: document.jsonPath
-    });
-    if (remote?.content) {
-      const remoteSnapshot = tryParseJson<WorkspaceDocumentSnapshot>(remote.content);
-      if (remoteSnapshot) {
-        snapshot = mergeDocumentSnapshots(remoteSnapshot, snapshot);
-        await writeJsonFile(localJsonPath, snapshot);
-      }
+    const remoteSnapshot = remoteDocuments.get(document.jsonPath);
+    if (remoteSnapshot) {
+      snapshot = mergeDocumentSnapshots(remoteSnapshot, snapshot);
+      await writeJsonFile(localJsonPath, snapshot);
     }
     await putFile(document.jsonPath, `${JSON.stringify(snapshot, null, 2)}\n`);
 
@@ -242,6 +285,14 @@ export async function uploadWorkspaceSyncToGitHub(input: {
       }
     }
   }
+
+  return {
+    mode: input.mode,
+    status: 'uploaded',
+    documentCount: manifest.documents.length,
+    uploadedAt: input.manifest.updatedAt,
+    message: `${input.mode === 'sync' ? 'Synced' : 'Uploaded'} ${manifest.documents.length} document${manifest.documents.length === 1 ? '' : 's'} to GitHub.`
+  };
 }
 
 function safeUploadSettings(upload: Omit<GitHubUploadConfig, 'token'>): Omit<GitHubUploadConfig, 'token'> {
@@ -251,6 +302,21 @@ function safeUploadSettings(upload: Omit<GitHubUploadConfig, 'token'>): Omit<Git
     repo: upload.repo,
     branch: upload.branch,
     basePath: upload.basePath
+  };
+}
+
+function mergeWorkspaceManifests(
+  remote: WorkspaceSyncManifest,
+  local: WorkspaceSyncManifest
+): WorkspaceSyncManifest {
+  const documentsByPath = new Map(remote.documents.map((document) => [document.jsonPath, document]));
+  for (const document of local.documents) {
+    documentsByPath.set(document.jsonPath, document);
+  }
+
+  return {
+    ...local,
+    documents: Array.from(documentsByPath.values()).sort((a, b) => a.title.localeCompare(b.title))
   };
 }
 
@@ -288,11 +354,18 @@ async function githubGetFile(
   request: GitHubFileTarget,
   options: { includeContent?: boolean } = {}
 ): Promise<{ sha: string; content?: string } | undefined> {
-  const response = await fetch(githubContentsUrl(request), {
+  const response = await fetch(githubContentsUrl(request, { ref: true }), {
     headers: githubHeaders(request.token)
   });
   if (response.status === 404) {
     return undefined;
+  }
+  if (response.status === 409) {
+    const body = await response.text().catch(() => '');
+    if (isEmptyRepositoryMessage(body)) {
+      return undefined;
+    }
+    throw new Error(githubErrorMessageFromBody(response, request.relativePath, body));
   }
   if (!response.ok) {
     throw new Error(await githubErrorMessage(response, request.relativePath));
@@ -307,7 +380,7 @@ async function githubGetFile(
 
 async function githubPutFile(request: GitHubPutFileRequest): Promise<void> {
   const existing = await githubGetFile(request, { includeContent: false });
-  const response = await fetch(githubContentsUrl(request), {
+  const write = (includeBranch: boolean): Promise<Response> => fetch(githubContentsUrl(request), {
     method: 'PUT',
     headers: {
       ...githubHeaders(request.token),
@@ -315,25 +388,36 @@ async function githubPutFile(request: GitHubPutFileRequest): Promise<void> {
     },
     body: JSON.stringify({
       message: request.message,
-      branch: request.branch,
       content: request.content.toString('base64'),
+      ...(includeBranch ? { branch: request.branch } : {}),
       ...(existing?.sha ? { sha: existing.sha } : {})
     })
   });
+
+  let response = await write(true);
+  if (!response.ok && response.status === 409 && !existing?.sha) {
+    const body = await response.text().catch(() => '');
+    if (isEmptyRepositoryMessage(body)) {
+      response = await write(false);
+    } else {
+      throw new Error(githubErrorMessageFromBody(response, request.relativePath, body));
+    }
+  }
 
   if (!response.ok) {
     throw new Error(await githubErrorMessage(response, request.relativePath));
   }
 }
 
-function githubContentsUrl(request: GitHubFileTarget): string {
+function githubContentsUrl(request: GitHubFileTarget, options: { ref?: boolean } = {}): string {
   const uploadPath = [normalizeUploadPath(request.basePath), request.relativePath.replace(/^\/+/, '')]
     .filter(Boolean)
     .join('/');
   const encodedPath = uploadPath.split('/').map((part) => encodeURIComponent(part)).join('/');
   const owner = encodeURIComponent(request.owner);
   const repo = encodeURIComponent(request.repo);
-  return `https://api.github.com/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(request.branch)}`;
+  const baseUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${encodedPath}`;
+  return options.ref ? `${baseUrl}?ref=${encodeURIComponent(request.branch)}` : baseUrl;
 }
 
 function normalizeUploadPath(path: string): string {
@@ -351,8 +435,16 @@ function githubHeaders(token: string): Record<string, string> {
 
 async function githubErrorMessage(response: Response, relativePath: string): Promise<string> {
   const body = await response.text().catch(() => '');
+  return githubErrorMessageFromBody(response, relativePath, body);
+}
+
+function githubErrorMessageFromBody(response: Response, relativePath: string, body: string): string {
   const detail = body.trim().slice(0, 320);
   return `GitHub sync failed for ${relativePath}: ${response.status} ${response.statusText}${detail ? ` ${detail}` : ''}`;
+}
+
+function isEmptyRepositoryMessage(body: string): boolean {
+  return /empty/i.test(body) && /repo|repository|git/i.test(body);
 }
 
 function tryParseJson<T>(raw: string): T | undefined {

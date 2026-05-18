@@ -221,6 +221,8 @@ test.describe('Sidelight Electron reading flow', () => {
       await expect(settings.locator('#settings-ai')).toContainText('AI Provider');
       await expect(settings.locator('#settings-language')).toContainText('AI preferred language');
       await expect(settings.locator('#settings-github')).toContainText('GitHub Upload');
+      await expect(settings.getByRole('button', { name: 'Sync now' })).toBeDisabled();
+      await expect(settings.getByRole('button', { name: 'Upload now' })).toBeDisabled();
       await expect
         .poll(async () => centeredDialogDelta(library, '.floating-settings'))
         .toBeLessThan(4);
@@ -236,6 +238,8 @@ test.describe('Sidelight Electron reading flow', () => {
       await settings.getByLabel('Path').fill('/uploads/sidelight/');
       await settings.getByLabel('Token').fill('github_pat_secret_for_test');
       await settings.getByLabel('Enabled').check();
+      await expect(settings.getByRole('button', { name: 'Sync now' })).toBeEnabled();
+      await expect(settings.getByRole('button', { name: 'Upload now' })).toBeEnabled();
       await settings.getByLabel('AI preferred language').selectOption('English');
       await setColorInput(settings.getByLabel('Note selection'), '#f6dda0');
       await settings.getByLabel('UI language').selectOption('zh-CN');

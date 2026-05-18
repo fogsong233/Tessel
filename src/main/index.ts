@@ -264,6 +264,7 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
   ipcMain.handle('settings:getAppPreferences', () => store.getAppPreferences());
   ipcMain.handle('settings:saveAppPreferences', (_event, config: AppPreferences) => store.saveAppPreferences(config));
   ipcMain.handle('sync:workspace', () => store.syncWorkspace());
+  ipcMain.handle('sync:uploadWorkspace', () => store.uploadWorkspace());
   ipcMain.handle('ai:listModels', async (_event, config: AiProviderConfig) => {
     const stored = await store.getAiProviderWithSecret();
     return aiService.listModels({
@@ -376,6 +377,9 @@ if (hasSingleInstanceLock) {
 
     registerIpc(store, aiService);
     createWindow();
+    void store.syncWorkspace().catch((error: unknown) => {
+      console.warn('Startup GitHub sync failed', error);
+    });
 
     const startupPdfPaths = pdfPathsFromArgv(process.argv);
     const queuedPdfPaths = [...pendingSystemPdfPaths, ...startupPdfPaths];

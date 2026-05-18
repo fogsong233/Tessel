@@ -5518,6 +5518,35 @@ body.is-resizing-workspace-block * {
   line-height: 1.45;
 }
 
+.settings-github-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--ui-border, #ececec);
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.settings-github-actions .quiet-button {
+  min-height: 32px;
+  white-space: nowrap;
+}
+
+.settings-github-actions .settings-field-status {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ui-muted, #707070);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-field-status.is-error {
+  color: #9b2f25;
+}
+
 .settings-actions {
   grid-column: 1 / -1;
   display: flex;

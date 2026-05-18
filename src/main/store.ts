@@ -19,6 +19,8 @@ import {
   PdfUserBookmark,
   SafeAiProviderConfig,
   SafeGitHubUploadConfig,
+  WorkspaceSyncMode,
+  WorkspaceSyncResult,
   WorkspaceBlock
 } from '../shared/domain';
 import {
@@ -502,14 +504,24 @@ export class JsonWorkspaceStore {
     return store.appPreferences;
   }
 
-  async syncWorkspace(): Promise<void> {
+  async syncWorkspace(): Promise<WorkspaceSyncResult> {
+    return this.syncWorkspaceToGitHub('sync');
+  }
+
+  async uploadWorkspace(): Promise<WorkspaceSyncResult> {
+    return this.syncWorkspaceToGitHub('upload');
+  }
+
+  private async syncWorkspaceToGitHub(mode: WorkspaceSyncMode): Promise<WorkspaceSyncResult> {
     const store = await this.read();
     const workspaceDir = dirname(this.storePath);
     const manifest = await writeWorkspaceSyncSnapshot({ store, workspaceDir });
-    await uploadWorkspaceSyncToGitHub({
+    return uploadWorkspaceSyncToGitHub({
       store,
       workspaceDir,
       manifest,
+      mergeRemote: mode === 'sync',
+      mode,
       token: this.decryptSecret(store.githubUpload.encryptedToken, store.githubUpload.encryption)
     });
   }
