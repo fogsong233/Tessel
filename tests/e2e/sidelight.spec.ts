@@ -296,6 +296,12 @@ test.describe('Sidelight Electron reading flow', () => {
     const initialPageWidth = await firstPageWidth(reader);
 
     await selectFirstPdfText(reader);
+    await expect.poll(async () => selectionToolbarDesignSnapshot(reader)).toMatchObject({
+      actionBackgroundTransparent: true,
+      actionBorderless: true,
+      flexDirection: 'column',
+      iconCircular: true
+    });
     await expect(reader.locator('.selection-toolbar').getByRole('button', { name: /^Quote$/i })).toHaveCount(0);
     await reader.getByRole('button', { name: /Summary/i }).click();
     await expect(reader.locator('.transient-aid-panel')).toBeVisible();
@@ -1222,6 +1228,33 @@ async function libraryCoverGridSnapshot(page: Page): Promise<{
         return cardBox.left < gridBox.left - 0.5 || cardBox.right > gridBox.right + 0.5;
       }),
       gridOverflowX: grid.scrollWidth > grid.clientWidth + 1
+    };
+  });
+}
+
+async function selectionToolbarDesignSnapshot(page: Page): Promise<{
+  actionBackgroundTransparent: boolean;
+  actionBorderless: boolean;
+  flexDirection: string;
+  iconCircular: boolean;
+}> {
+  return page.locator('.selection-toolbar').evaluate((element) => {
+    const toolbar = element as HTMLElement;
+    const action = toolbar.querySelector<HTMLElement>('.selection-toolbar__action');
+    const icon = action?.querySelector<SVGElement>('svg');
+    const actionStyle = action ? window.getComputedStyle(action) : undefined;
+    const iconStyle = icon ? window.getComputedStyle(icon) : undefined;
+    const iconBox = icon?.getBoundingClientRect();
+
+    return {
+      actionBackgroundTransparent: actionStyle?.backgroundColor === 'rgba(0, 0, 0, 0)',
+      actionBorderless: actionStyle?.borderTopWidth === '0px',
+      flexDirection: window.getComputedStyle(toolbar).flexDirection,
+      iconCircular: Boolean(
+        iconStyle &&
+          iconBox &&
+          Number.parseFloat(iconStyle.borderTopLeftRadius) >= Math.min(iconBox.width, iconBox.height) / 2 - 1
+      )
     };
   });
 }

@@ -56,6 +56,7 @@ import {
   Sparkles,
   Square,
   Trash2,
+  Underline,
   X
 } from 'lucide-react';
 import {
@@ -1936,8 +1937,8 @@ export function PdfReader({
       const stageRect = stage.getBoundingClientRect();
       setSelectionPopover({
         selection,
-        left: Math.max(12, Math.min(clientX - stageRect.left, stageRect.width - 560)),
-        top: Math.max(12, Math.min(clientY - stageRect.top + 12, stageRect.height - 120))
+        left: Math.max(12, Math.min(clientX - stageRect.left + 12, stageRect.width - 220)),
+        top: Math.max(12, Math.min(clientY - stageRect.top + 12, stageRect.height - 320))
       });
       setActiveMark(undefined);
     }, 0);
@@ -3995,7 +3996,7 @@ function SelectionToolbar({
         title={text.underline}
         onClick={() => onCreateMark('underline', selection, 'underline')}
       >
-        <Sparkles size={15} />
+        <Underline size={15} />
         {text.underline}
       </button>
       <button
@@ -4048,6 +4049,7 @@ function SelectionToolbar({
       </button>
       <button type="button" className="selection-toolbar__close" title={text.close} onClick={onClose}>
         <X size={15} />
+        {text.close}
       </button>
     </div>
   );
