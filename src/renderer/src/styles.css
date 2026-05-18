@@ -822,11 +822,16 @@ input:disabled {
 
 .pdf-mark-visual--underline,
 .pdf-mark-hit.pdf-mark--underline {
-  height: 2px !important;
+  height: 1.5px !important;
   border-bottom: 0;
   border-radius: 999px;
-  background: var(--selection-underline-color, #8fa4b8);
-  transform: translateY(-100%);
+  background-color: transparent;
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--selection-underline-color, #8fa4b8) 0 5px,
+    transparent 5px 9px
+  );
+  transform: translateY(2.5px);
 }
 
 .pdf-mark-hit.pdf-mark--underline {
@@ -8925,7 +8930,12 @@ body.is-resizing-workspace-block * {
 .pdf-mark-visual--underline,
 .pdf-mark-hit.pdf-mark--underline {
   border-bottom: 0;
-  background: var(--selection-underline-color, #8fa4b8);
+  background-color: transparent;
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--selection-underline-color, #8fa4b8) 0 5px,
+    transparent 5px 9px
+  );
   box-shadow: none;
   mix-blend-mode: normal;
 }

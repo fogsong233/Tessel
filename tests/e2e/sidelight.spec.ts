@@ -365,9 +365,13 @@ test.describe('Sidelight Electron reading flow', () => {
     await reader.locator('.selection-toolbar').getByRole('button', { name: /Underline/i }).click();
     await expect(reader.locator('.pdf-mark-visual--underline').first()).toBeVisible();
     await expect.poll(async () => pdfUnderlineSnapshot(reader)).toMatchObject({
-      backgroundColor: 'rgb(143, 164, 184)',
+      backgroundColor: 'rgba(0, 0, 0, 0)',
+      borderBottomStyle: 'none',
+      hasDashedPaint: true,
+      height: '1.5px',
       layerOpacity: '1',
-      layerZIndex: '6'
+      layerZIndex: '6',
+      transform: 'matrix(1, 0, 0, 1, 0, 2.5)'
     });
 
     await selectFirstPdfText(reader);
@@ -1622,16 +1626,24 @@ async function pdfMarkVisualSnapshot(page: Page, colorRole: string): Promise<{
 
 async function pdfUnderlineSnapshot(page: Page): Promise<{
   backgroundColor: string;
+  borderBottomStyle: string;
+  hasDashedPaint: boolean;
+  height: string;
   layerOpacity: string;
   layerZIndex: string;
+  transform: string;
 }> {
   return page.locator('.pdf-mark-visual--underline').first().evaluate((element) => {
     const style = window.getComputedStyle(element);
     const layerStyle = window.getComputedStyle(element.parentElement as Element);
     return {
       backgroundColor: style.backgroundColor,
+      borderBottomStyle: style.borderBottomStyle,
+      hasDashedPaint: style.backgroundImage.includes('repeating-linear-gradient'),
+      height: style.height,
       layerOpacity: layerStyle.opacity,
-      layerZIndex: layerStyle.zIndex
+      layerZIndex: layerStyle.zIndex,
+      transform: style.transform
     };
   });
 }
