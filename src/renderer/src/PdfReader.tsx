@@ -4656,6 +4656,77 @@ function dedupeAreas(areas: PdfMarkArea[]): PdfMarkArea[] {
   });
 }
 
+function mergeUnderlineAreas(areas: PdfMarkArea[]): PdfMarkArea[] {
+  const lineGroups: Array<{
+    bottom: number;
+    center: number;
+    count: number;
+    height: number;
+    intervals: Array<{ left: number; right: number }>;
+    pageIndex: number;
+    tolerance: number;
+    top: number;
+  }> = [];
+
+  for (const area of [...areas].sort((left, right) => left.top - right.top || left.left - right.left)) {
+    if (area.width <= 0 || area.height <= 0) {
+      continue;
+    }
+
+    const center = area.top + area.height / 2;
+    const tolerance = Math.max(0.28, Math.min(0.85, area.height * 0.45));
+    const group = lineGroups.find((candidate) => (
+      candidate.pageIndex === area.pageIndex &&
+      Math.abs(candidate.center - center) <= Math.max(candidate.tolerance, tolerance)
+    ));
+
+    if (!group) {
+      lineGroups.push({
+        bottom: area.top + area.height,
+        center,
+        count: 1,
+        height: area.height,
+        intervals: [{ left: area.left, right: area.left + area.width }],
+        pageIndex: area.pageIndex,
+        tolerance,
+        top: area.top
+      });
+      continue;
+    }
+
+    group.center = ((group.center * group.count) + center) / (group.count + 1);
+    group.count += 1;
+    group.bottom = Math.max(group.bottom, area.top + area.height);
+    group.height = Math.max(group.height, area.height);
+    group.intervals.push({ left: area.left, right: area.left + area.width });
+    group.tolerance = Math.max(group.tolerance, tolerance);
+    group.top = Math.min(group.top, area.top);
+  }
+
+  return lineGroups.flatMap((group) => {
+    const gapTolerance = Math.max(0.8, Math.min(2.2, group.height * 0.85));
+    const intervals = [...group.intervals].sort((left, right) => left.left - right.left);
+    const mergedIntervals: Array<{ left: number; right: number }> = [];
+
+    for (const interval of intervals) {
+      const current = mergedIntervals[mergedIntervals.length - 1];
+      if (!current || interval.left > current.right + gapTolerance) {
+        mergedIntervals.push({ ...interval });
+      } else {
+        current.right = Math.max(current.right, interval.right);
+      }
+    }
+
+    return mergedIntervals.map((interval) => ({
+      pageIndex: group.pageIndex,
+      left: clamp(interval.left, 0, 100),
+      top: group.bottom,
+      width: clamp(interval.right, 0, 100) - clamp(interval.left, 0, 100),
+      height: 0
+    })).filter((area) => area.width > 0.1);
+  });
+}
+
 function renderMarkLayers(
   viewerElement: HTMLDivElement,
   marks: PdfMark[],
@@ -4688,12 +4759,11 @@ function renderMarkLayers(
 
     const renderedAreas = new Set<string>();
     for (const mark of pageMarks) {
-      for (const [areaIndex, area] of mark.areas.entries()) {
-        if (area.pageIndex + 1 !== pageNumber) {
-          continue;
-        }
+      const pageAreas = mark.areas.filter((area) => area.pageIndex + 1 === pageNumber);
+      const areasToRender = mark.kind === 'underline' ? mergeUnderlineAreas(pageAreas) : pageAreas;
 
-        const key = `${mark.id}:${areaIndex}`;
+      for (const [areaIndex, area] of areasToRender.entries()) {
+        const key = `${mark.id}:${mark.kind}:${areaIndex}`;
         if (renderedAreas.has(key)) {
           continue;
         }
