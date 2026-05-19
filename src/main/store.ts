@@ -31,6 +31,7 @@ import {
   titleFromFileName
 } from './documentIdentity';
 import {
+  hydrateOpenDocumentsFromSyncSnapshots,
   hydrateDocumentWorkspaceFromSnapshot,
   uploadWorkspaceSyncToGitHub,
   WorkspaceStoreData,
@@ -516,7 +517,7 @@ export class JsonWorkspaceStore {
     const store = await this.read();
     const workspaceDir = dirname(this.storePath);
     const manifest = await writeWorkspaceSyncSnapshot({ store, workspaceDir });
-    return uploadWorkspaceSyncToGitHub({
+    const result = await uploadWorkspaceSyncToGitHub({
       store,
       workspaceDir,
       manifest,
@@ -524,6 +525,9 @@ export class JsonWorkspaceStore {
       mode,
       token: this.decryptSecret(store.githubUpload.encryptedToken, store.githubUpload.encryption)
     });
+    await hydrateOpenDocumentsFromSyncSnapshots({ store, workspaceDir });
+    await this.write(store);
+    return result;
   }
 
   private async read(): Promise<StoreFile> {

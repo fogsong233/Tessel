@@ -98,6 +98,7 @@ export async function hydrateDocumentWorkspaceFromSnapshot(input: {
   const rekey = <T extends { documentId: string }>(items: T[] | undefined): T[] =>
     (items ?? []).map((item) => ({ ...item, documentId: input.documentId }));
 
+  hydrateDocumentMetadataFromSnapshot(input.store, snapshot, input.documentId, input.contentHash);
   input.store.conversations = mergeById(input.store.conversations, rekey(snapshot.conversations), (item) => item.id, updatedAtOf);
   input.store.notes = mergeById(input.store.notes, rekey(snapshot.notes), (item) => item.id, updatedAtOf);
   input.store.workspaceBlocks = mergeById(input.store.workspaceBlocks, rekey(snapshot.workspaceBlocks), (item) => item.id, updatedAtOf);
@@ -105,6 +106,21 @@ export async function hydrateDocumentWorkspaceFromSnapshot(input: {
   input.store.marks = mergeById(input.store.marks, rekey(snapshot.marks), (item) => item.id, (item) => item.createdAt);
   input.store.bookmarks = mergeById(input.store.bookmarks, rekey(snapshot.bookmarks), (item) => item.id, (item) => item.createdAt);
   input.store.readingStates = mergeById(input.store.readingStates, rekey(snapshot.readingStates), (item) => item.documentId, updatedAtOf);
+}
+
+export async function hydrateOpenDocumentsFromSyncSnapshots(input: {
+  store: WorkspaceStoreData;
+  workspaceDir: string;
+}): Promise<void> {
+  const documents = [...(input.store.documents ?? [])];
+  for (const document of documents) {
+    await hydrateDocumentWorkspaceFromSnapshot({
+      store: input.store,
+      workspaceDir: input.workspaceDir,
+      documentId: document.id,
+      contentHash: documentContentHash(document)
+    });
+  }
 }
 
 export async function writeWorkspaceSyncSnapshot(input: {
@@ -461,25 +477,69 @@ function mergeDocumentSnapshots(
 ): WorkspaceDocumentSnapshot {
   const remoteDocument = normalizeLibraryDocument(remote.document);
   const localDocument = normalizeLibraryDocument(local.document);
+  const documentId = localDocument.id;
   const document = (remoteDocument.updatedAt ?? '') > (localDocument.updatedAt ?? '')
-    ? { ...remoteDocument, filePath: localDocument.filePath, source: localDocument.source }
+    ? { ...remoteDocument, id: documentId, filePath: localDocument.filePath, source: localDocument.source }
     : localDocument;
+  const rekey = <T extends { documentId: string }>(items: T[] | undefined): T[] =>
+    (items ?? []).map((item) => ({ ...item, documentId }));
 
   return {
     ...local,
     updatedAt: new Date().toISOString(),
     document: {
       ...document,
+      id: documentId,
       filePath: ''
     },
-    conversations: mergeById(remote.conversations ?? [], local.conversations ?? [], (item) => item.id, updatedAtOf),
-    notes: mergeById(remote.notes ?? [], local.notes ?? [], (item) => item.id, updatedAtOf),
-    workspaceBlocks: mergeById(remote.workspaceBlocks ?? [], local.workspaceBlocks ?? [], (item) => item.id, updatedAtOf),
-    generatedOutlines: mergeById(remote.generatedOutlines ?? [], local.generatedOutlines ?? [], (item) => item.documentId, updatedAtOf),
-    marks: mergeById(remote.marks ?? [], local.marks ?? [], (item) => item.id, (item) => item.createdAt),
-    bookmarks: mergeById(remote.bookmarks ?? [], local.bookmarks ?? [], (item) => item.id, (item) => item.createdAt),
-    readingStates: mergeById(remote.readingStates ?? [], local.readingStates ?? [], (item) => item.documentId, updatedAtOf)
+    conversations: mergeById(rekey(remote.conversations), rekey(local.conversations), (item) => item.id, updatedAtOf),
+    notes: mergeById(rekey(remote.notes), rekey(local.notes), (item) => item.id, updatedAtOf),
+    workspaceBlocks: mergeById(rekey(remote.workspaceBlocks), rekey(local.workspaceBlocks), (item) => item.id, updatedAtOf),
+    generatedOutlines: mergeById(rekey(remote.generatedOutlines), rekey(local.generatedOutlines), (item) => item.documentId, updatedAtOf),
+    marks: mergeById(rekey(remote.marks), rekey(local.marks), (item) => item.id, (item) => item.createdAt),
+    bookmarks: mergeById(rekey(remote.bookmarks), rekey(local.bookmarks), (item) => item.id, (item) => item.createdAt),
+    readingStates: mergeById(rekey(remote.readingStates), rekey(local.readingStates), (item) => item.documentId, updatedAtOf)
   };
+}
+
+function hydrateDocumentMetadataFromSnapshot(
+  store: WorkspaceStoreData,
+  snapshot: WorkspaceDocumentSnapshot,
+  documentId: string,
+  contentHash: string
+): void {
+  const snapshotDocument = normalizeLibraryDocument({
+    ...snapshot.document,
+    id: documentId,
+    sha256: contentHash,
+    fingerprint: {
+      ...snapshot.document.fingerprint,
+      algorithm: documentHashAlgorithm(snapshot.document),
+      hash: contentHash
+    }
+  });
+  const existing = store.documents.find((document) => document.id === documentId);
+  const baseDocument = existing && (existing.updatedAt ?? '') >= (snapshotDocument.updatedAt ?? '')
+    ? existing
+    : snapshotDocument;
+  const document = existing
+    ? {
+        ...baseDocument,
+        fileName: existing.fileName || snapshotDocument.fileName,
+        filePath: existing.filePath,
+        source: existing.source,
+        lastOpenedAt: existing.lastOpenedAt
+      }
+    : {
+        ...snapshotDocument,
+        filePath: '',
+        source: snapshotDocument.source ? { ...snapshotDocument.source, filePath: undefined } : undefined
+      };
+
+  store.documents = [
+    document,
+    ...store.documents.filter((candidate) => candidate.id !== documentId)
+  ];
 }
 
 function mergeById<T>(

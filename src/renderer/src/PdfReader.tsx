@@ -525,6 +525,16 @@ export function PdfReader({
   const zoomLockVersionRef = useRef(0);
   const pendingRevealScrollTopRef = useRef<number>();
   const lastPdfReadingIntentRef = useRef(0);
+  const canvasDragRef = useRef<{
+    active: boolean;
+    moved: boolean;
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    startScrollLeft: number;
+    startScrollTop: number;
+  }>();
+  const lastCanvasDragExitAtRef = useRef(0);
 
   const [status, setStatus] = useState<LoadStatus>('idle');
   const [loadProgress, setLoadProgress] = useState(0);
@@ -548,6 +558,7 @@ export function PdfReader({
   const [pendingRevealBlockId, setPendingRevealBlockId] = useState<string>();
   const [optimisticWorkspaceBlocks, setOptimisticWorkspaceBlocks] = useState<WorkspaceBlock[]>([]);
   const [pdfReadingSignal, setPdfReadingSignal] = useState(0);
+  const [canvasDragMode, setCanvasDragMode] = useState(false);
 
   const effectiveWorkspaceBlocks = useMemo(() => {
     const byId = new Map<string, WorkspaceBlock>();
@@ -1961,6 +1972,10 @@ export function PdfReader({
     React.MouseEvent<HTMLDivElement> | React.PointerEvent<HTMLDivElement> | MouseEvent | PointerEvent,
     'clientX' | 'clientY' | 'target'
   >) => {
+    if (canvasDragRef.current?.active) {
+      return;
+    }
+
     const target = event.target as HTMLElement | null;
     if (target?.closest('.selection-toolbar, .mark-popover, .reader-float-dock, .reader-dock-lane')) {
       return;
@@ -1993,6 +2008,95 @@ export function PdfReader({
       setActiveMark(undefined);
     }, 0);
   }, [activateMark]);
+
+  const enterCanvasDragMode = useCallback((event: ReactMouseEvent<HTMLDivElement>): void => {
+    if (shouldIgnoreCanvasDragMode(event.target)) {
+      return;
+    }
+
+    const clientX = event.clientX;
+    const clientY = event.clientY;
+    window.setTimeout(() => {
+      if (Date.now() - lastCanvasDragExitAtRef.current < 300) {
+        return;
+      }
+      if (selectionFromWindow(viewerRef.current)) {
+        return;
+      }
+      if (viewerRef.current && findMarkAtClientPoint(viewerRef.current, marksRef.current, clientX, clientY)) {
+        return;
+      }
+      setSelectionPopover(undefined);
+      setActiveMark(undefined);
+      setCanvasDragMode(true);
+    }, 0);
+  }, []);
+
+  const handleCanvasDragPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
+    notePdfReadingIntent(event.target);
+    if (!shouldIgnoreCanvasFocus(event.target)) {
+      event.currentTarget.focus({ preventScroll: true });
+    }
+
+    if (!canvasDragMode || event.button !== 0 || shouldIgnoreCanvasDragMode(event.target)) {
+      return;
+    }
+
+    const viewport = event.currentTarget;
+    event.preventDefault();
+    event.stopPropagation();
+    viewport.setPointerCapture(event.pointerId);
+    canvasDragRef.current = {
+      active: true,
+      moved: false,
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startScrollLeft: viewport.scrollLeft,
+      startScrollTop: viewport.scrollTop
+    };
+    viewport.classList.add('is-canvas-dragging');
+
+    const handlePointerMove = (moveEvent: PointerEvent): void => {
+      const drag = canvasDragRef.current;
+      if (!drag?.active || drag.pointerId !== moveEvent.pointerId) {
+        return;
+      }
+
+      const deltaX = moveEvent.clientX - drag.startClientX;
+      const deltaY = moveEvent.clientY - drag.startClientY;
+      if (Math.hypot(deltaX, deltaY) > 3) {
+        drag.moved = true;
+      }
+      viewport.scrollLeft = drag.startScrollLeft - deltaX;
+      viewport.scrollTop = drag.startScrollTop - deltaY;
+    };
+
+    const stopDrag = (endEvent: PointerEvent): void => {
+      const drag = canvasDragRef.current;
+      if (!drag || drag.pointerId !== endEvent.pointerId) {
+        return;
+      }
+
+      canvasDragRef.current = undefined;
+      viewport.classList.remove('is-canvas-dragging');
+      if (viewport.hasPointerCapture(endEvent.pointerId)) {
+        viewport.releasePointerCapture(endEvent.pointerId);
+      }
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', stopDrag);
+      window.removeEventListener('pointercancel', stopDrag);
+
+      if (!drag.moved) {
+        lastCanvasDragExitAtRef.current = Date.now();
+        setCanvasDragMode(false);
+      }
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', stopDrag);
+    window.addEventListener('pointercancel', stopDrag);
+  }, [canvasDragMode]);
 
   useEffect(() => {
     const viewport = containerRef.current;
@@ -2093,16 +2197,12 @@ export function PdfReader({
             {meta && source ? (
               <>
                 <div
-                  className="pdf-viewport"
+                  className={canvasDragMode ? 'pdf-viewport is-canvas-drag-mode' : 'pdf-viewport'}
                   ref={containerRef}
+                  onDoubleClick={enterCanvasDragMode}
                   onMouseUp={handleSelectionMouseUp}
                   onWheel={(event) => notePdfReadingIntent(event.target)}
-                  onPointerDown={(event) => {
-                    notePdfReadingIntent(event.target);
-                    if (!shouldIgnoreCanvasFocus(event.target)) {
-                      event.currentTarget.focus({ preventScroll: true });
-                    }
-                  }}
+                  onPointerDown={handleCanvasDragPointerDown}
                   tabIndex={0}
                 >
                   <div className="pdf-canvas">
@@ -4905,6 +5005,31 @@ function shouldIgnoreCanvasFocus(target: EventTarget | null): boolean {
   return Boolean(
     target.closest(
       'input, textarea, select, button, a, [contenteditable="true"], .reader-dock-lane, .workspace-block-layer, .settings-overlay, .floating-settings'
+    )
+  );
+}
+
+function shouldIgnoreCanvasDragMode(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return Boolean(
+    target.closest(
+      [
+        'input',
+        'textarea',
+        'select',
+        'button',
+        'a',
+        '[contenteditable="true"]',
+        '.reader-dock-lane',
+        '.workspace-block-card',
+        '.selection-toolbar',
+        '.mark-popover',
+        '.settings-overlay',
+        '.floating-settings'
+      ].join(', ')
     )
   );
 }

@@ -2,12 +2,16 @@
   "name": "sidelight",
   "version": "0.1.0",
   "private": true,
+  "author": "Sidelight contributors",
   "description": "A local-first PDF reading workspace for anchored AI conversations and notes.",
   "main": "./out/main/index.js",
   "packageManager": "pnpm@10.14.0",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "pnpm typecheck && electron-vite build",
+    "dist": "pnpm build && electron-builder --publish never",
+    "dist:mac": "pnpm build && electron-builder --mac --publish never",
+    "dist:win": "pnpm build && electron-builder --win --publish never",
     "preview": "electron-vite preview",
     "typecheck": "tsc -b --noEmit",
     "test": "pnpm test:e2e",
@@ -52,13 +56,48 @@
     "@types/react": "^18.2.79",
     "@types/react-dom": "^18.2.25",
     "electron": "^38.0.0",
+    "electron-builder": "^26.8.1",
     "typescript": "^5.8.3",
     "vite": "^7.0.0"
+  },
+  "build": {
+    "appId": "app.sidelight.reader",
+    "productName": "Sidelight",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**",
+      "package.json"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "pnpm": {
     "onlyBuiltDependencies": [
       "electron",
       "esbuild"
+    ],
+    "ignoredBuiltDependencies": [
+      "electron-winstaller"
     ]
   }
 }
