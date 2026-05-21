@@ -381,7 +381,12 @@ if (hasSingleInstanceLock) {
       console.warn('Startup GitHub sync failed', error);
     });
 
-    const startupPdfPaths = pdfPathsFromArgv(process.argv);
+    const startupPdfPaths = [
+      ...pdfPathsFromArgv(process.argv),
+      ...(process.env.SIDELIGHT_OPEN_PDF_ON_START === '1' && process.env.SIDELIGHT_TEST_OPEN_PDF
+        ? [process.env.SIDELIGHT_TEST_OPEN_PDF]
+        : [])
+    ];
     const queuedPdfPaths = [...pendingSystemPdfPaths, ...startupPdfPaths];
     pendingSystemPdfPaths.length = 0;
     for (const filePath of queuedPdfPaths) {

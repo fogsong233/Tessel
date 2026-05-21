@@ -525,6 +525,7 @@ export function PdfReader({
   const zoomLockVersionRef = useRef(0);
   const pendingRevealScrollTopRef = useRef<number>();
   const lastPdfReadingIntentRef = useRef(0);
+  const lastDockPointerStartAtRef = useRef(0);
   const canvasDragRef = useRef<{
     active: boolean;
     moved: boolean;
@@ -1845,9 +1846,16 @@ export function PdfReader({
     executeSearch(false);
   };
 
-  const startDockMove = useCallback((event: ReactMouseEvent<HTMLButtonElement>): void => {
+  const startDockMove = useCallback((event: ReactMouseEvent<HTMLButtonElement> | ReactPointerEvent<HTMLButtonElement>): void => {
     event.preventDefault();
     event.stopPropagation();
+    const pointerId = 'pointerId' in event ? event.pointerId : undefined;
+    if (pointerId !== undefined) {
+      lastDockPointerStartAtRef.current = Date.now();
+      event.currentTarget.setPointerCapture(pointerId);
+    } else if (Date.now() - lastDockPointerStartAtRef.current < 80) {
+      return;
+    }
     document.body.classList.add('is-moving-dock');
 
     const container = containerRef.current;
@@ -1856,6 +1864,8 @@ export function PdfReader({
     const dockRect = dock?.getBoundingClientRect();
     const startX = event.clientX;
     const startY = event.clientY;
+    const startScrollLeft = container?.scrollLeft ?? 0;
+    const startScrollTop = container?.scrollTop ?? 0;
     const origin = dockOffset;
 
     const minX = viewportRect && dockRect ? origin.x + viewportRect.left + 12 - dockRect.left : -720;
@@ -1863,25 +1873,58 @@ export function PdfReader({
     const minY = viewportRect && dockRect ? origin.y + viewportRect.top + 12 - dockRect.top : -96;
     const maxY = viewportRect && dockRect ? origin.y + viewportRect.bottom - 96 - dockRect.top : 520;
 
-    const handleMouseMove = (moveEvent: MouseEvent): void => {
+    const moveDock = (clientX: number, clientY: number): void => {
       setDockOffset({
-        x: clamp(origin.x + moveEvent.clientX - startX, minX, maxX),
-        y: clamp(origin.y + moveEvent.clientY - startY, minY, maxY)
+        x: clamp(origin.x + clientX - startX, minX, maxX),
+        y: clamp(origin.y + clientY - startY, minY, maxY)
       });
+      if (container) {
+        container.scrollLeft = startScrollLeft;
+        container.scrollTop = startScrollTop;
+      }
     };
 
-    const stopMove = (): void => {
+    const handlePointerMove = (moveEvent: PointerEvent): void => {
+      if (pointerId === undefined || moveEvent.pointerId !== pointerId) {
+        return;
+      }
+      moveDock(moveEvent.clientX, moveEvent.clientY);
+    };
+
+    const handleMouseMove = (moveEvent: MouseEvent): void => {
+      moveDock(moveEvent.clientX, moveEvent.clientY);
+    };
+
+    const stopMove = (endEvent?: PointerEvent): void => {
+      if (pointerId !== undefined && endEvent && endEvent.pointerId !== pointerId) {
+        return;
+      }
       document.body.classList.remove('is-moving-dock');
-      window.removeEventListener('mousemove', handleMouseMove);
+      if (container) {
+        container.scrollLeft = startScrollLeft;
+        container.scrollTop = startScrollTop;
+      }
+      if (pointerId !== undefined && event.currentTarget.hasPointerCapture(pointerId)) {
+        event.currentTarget.releasePointerCapture(pointerId);
+      }
+      window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', stopMove);
       window.removeEventListener('pointercancel', stopMove);
-      window.removeEventListener('mouseup', stopMove);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
     };
 
+    const handleMouseUp = (): void => {
+      stopMove();
+    };
+
+    if (pointerId !== undefined) {
+      window.addEventListener('pointermove', handlePointerMove);
+      window.addEventListener('pointerup', stopMove);
+      window.addEventListener('pointercancel', stopMove);
+    }
     window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('pointerup', stopMove, { once: true });
-    window.addEventListener('pointercancel', stopMove, { once: true });
-    window.addEventListener('mouseup', stopMove, { once: true });
+    window.addEventListener('mouseup', handleMouseUp);
   }, [dockOffset]);
 
   const startDockResize = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
@@ -2747,7 +2790,7 @@ function ReaderDock({
   onPinConversation(conversation: Conversation): void;
   onPinImage(attachment: ConversationAttachment, conversation?: Conversation): void;
   onPinNote(note: NoteDocument): void;
-  onStartMove(event: ReactMouseEvent<HTMLButtonElement>): void;
+  onStartMove(event: ReactMouseEvent<HTMLButtonElement> | ReactPointerEvent<HTMLButtonElement>): void;
   onTabChange(tab: DockTab): void;
 }): ReactElement {
   const panelOpen = (chatOpen && activeConversation) || transientAid || noteEditorNote;
@@ -2833,17 +2876,16 @@ function ReaderDock({
           >
             <Plus size={17} />
           </Button>
-          <Button
+          <button
             type="button"
-            text
-            rounded
-            className="dock-move-button"
+            className="p-button p-component p-button-icon-only p-button-rounded p-button-text dock-move-button"
             title={t.moveSidePanel}
             aria-label={t.moveSidePanel}
             onMouseDown={onStartMove}
+            onPointerDown={onStartMove}
           >
             <Move size={17} />
-          </Button>
+          </button>
         </span>
       </nav>
 
