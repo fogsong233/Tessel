@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from 'electron';
 import { open, rm, stat } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,6 +32,10 @@ if (process.env.SIDELIGHT_REMOTE_DEBUG_PORT) {
 
 app.commandLine.appendSwitch('disable-http-cache');
 
+if (process.platform === 'win32') {
+  app.disableHardwareAcceleration();
+}
+
 if (process.env.SIDELIGHT_USER_DATA_DIR) {
   app.setPath('userData', process.env.SIDELIGHT_USER_DATA_DIR);
 }
@@ -39,6 +43,13 @@ if (process.env.SIDELIGHT_USER_DATA_DIR) {
 const hideE2eWindows = process.env.SIDELIGHT_E2E_HIDE_WINDOWS === '1';
 const pendingSystemPdfPaths: string[] = [];
 let handleSystemPdfOpen: ((filePath: string) => Promise<void>) | undefined;
+let storeMutationQueue = Promise.resolve();
+
+function runStoreMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const next = storeMutationQueue.then(operation, operation);
+  storeMutationQueue = next.then(() => undefined, () => undefined);
+  return next;
+}
 
 const shouldUseSingleInstanceLock = !hideE2eWindows;
 const hasSingleInstanceLock = !shouldUseSingleInstanceLock || app.requestSingleInstanceLock();
@@ -117,13 +128,11 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
   const activeAiStreams = new Map<string, AbortController>();
   const broadcastLibraryChanged = (): void => {
     for (const window of BrowserWindow.getAllWindows()) {
-      if (!window.webContents.isDestroyed()) {
-        window.webContents.send('library:changed');
-      }
+      sendToRenderer(window.webContents, 'library:changed');
     }
   };
   const openPdfPath = async (filePath: string) => {
-    const result = await openPdfDocumentPath(store, filePath);
+    const result = await runStoreMutation(() => openPdfDocumentPath(store, filePath));
     broadcastLibraryChanged();
     return result;
   };
@@ -140,12 +149,12 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
   ipcMain.handle('library:listDocuments', () => store.listDocuments());
   ipcMain.handle('library:listGroups', () => store.listLibraryGroups());
   ipcMain.handle('library:saveGroup', async (_event, input: { group: LibraryGroup }) => {
-    const saved = await store.saveLibraryGroup(input.group);
+    const saved = await runStoreMutation(() => store.saveLibraryGroup(input.group));
     broadcastLibraryChanged();
     return saved;
   });
   ipcMain.handle('library:deleteGroup', async (_event, groupId: string) => {
-    await store.deleteLibraryGroup(groupId);
+    await runStoreMutation(() => store.deleteLibraryGroup(groupId));
     broadcastLibraryChanged();
   });
 
@@ -175,11 +184,11 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
     }
 
     const now = new Date().toISOString();
-    const updatedDocument = await store.updateDocument({
+    const updatedDocument = await runStoreMutation(() => store.updateDocument({
       ...document,
       updatedAt: now,
       lastOpenedAt: now
-    });
+    }));
 
     return {
       document: updatedDocument,
@@ -187,12 +196,12 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
     };
   });
   ipcMain.handle('pdf:addToLibrary', async (_event, documentId: string) => {
-    const saved = await store.addDocumentToLibrary(documentId);
+    const saved = await runStoreMutation(() => store.addDocumentToLibrary(documentId));
     broadcastLibraryChanged();
     return saved;
   });
   ipcMain.handle('pdf:updateDocument', async (_event, document: PdfDocumentMeta) => {
-    const saved = await store.updateDocument(document);
+    const saved = await runStoreMutation(() => store.updateDocument(document));
     broadcastLibraryChanged();
     return saved;
   });
@@ -210,61 +219,61 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
   });
 
   ipcMain.handle('pdf:listMarks', (_event, documentId: string) => store.listPdfMarks(documentId));
-  ipcMain.handle('pdf:saveMark', (_event, input: { mark: PdfMark }) => store.savePdfMark(input.mark));
-  ipcMain.handle('pdf:deleteMark', (_event, markId: string) => store.deletePdfMark(markId));
+  ipcMain.handle('pdf:saveMark', (_event, input: { mark: PdfMark }) => runStoreMutation(() => store.savePdfMark(input.mark)));
+  ipcMain.handle('pdf:deleteMark', (_event, markId: string) => runStoreMutation(() => store.deletePdfMark(markId)));
   ipcMain.handle('pdf:listBookmarks', (_event, documentId: string) => store.listPdfBookmarks(documentId));
   ipcMain.handle('pdf:saveBookmark', (_event, input: { bookmark: PdfUserBookmark }) =>
-    store.savePdfBookmark(input.bookmark)
+    runStoreMutation(() => store.savePdfBookmark(input.bookmark))
   );
-  ipcMain.handle('pdf:deleteBookmark', (_event, bookmarkId: string) => store.deletePdfBookmark(bookmarkId));
+  ipcMain.handle('pdf:deleteBookmark', (_event, bookmarkId: string) => runStoreMutation(() => store.deletePdfBookmark(bookmarkId)));
   ipcMain.handle('pdf:getGeneratedOutline', (_event, documentId: string) => store.getGeneratedPdfOutline(documentId));
   ipcMain.handle('pdf:saveGeneratedOutline', async (_event, input: { outline: PdfGeneratedOutline }) => {
-    const saved = await store.saveGeneratedPdfOutline(input.outline);
+    const saved = await runStoreMutation(() => store.saveGeneratedPdfOutline(input.outline));
     broadcastLibraryChanged();
     return saved;
   });
   ipcMain.handle('pdf:deleteGeneratedOutline', async (_event, documentId: string) => {
-    await store.deleteGeneratedPdfOutline(documentId);
+    await runStoreMutation(() => store.deleteGeneratedPdfOutline(documentId));
     broadcastLibraryChanged();
   });
   ipcMain.handle('pdf:getReadingState', (_event, documentId: string) => store.getReadingState(documentId));
   ipcMain.handle('pdf:saveReadingState', async (_event, state: PdfReadingState) => {
-    const saved = await store.saveReadingState(state);
+    const saved = await runStoreMutation(() => store.saveReadingState(state));
     broadcastLibraryChanged();
     return saved;
   });
 
   ipcMain.handle('conversation:list', (_event, documentId: string) => store.listConversations(documentId));
   ipcMain.handle('conversation:save', (_event, input: { conversation: Conversation }) =>
-    store.saveConversation(input.conversation)
+    runStoreMutation(() => store.saveConversation(input.conversation))
   );
 
   ipcMain.handle('note:get', (_event, documentId: string) => store.getNote(documentId));
   ipcMain.handle('note:list', (_event, documentId: string) => store.listNotes(documentId));
-  ipcMain.handle('note:save', (_event, input: { note: NoteDocument }) => store.saveNote(input.note));
+  ipcMain.handle('note:save', (_event, input: { note: NoteDocument }) => runStoreMutation(() => store.saveNote(input.note)));
   ipcMain.handle('note:delete', async (_event, noteId: string) => {
-    await store.deleteNote(noteId);
+    await runStoreMutation(() => store.deleteNote(noteId));
     broadcastLibraryChanged();
   });
   ipcMain.handle('workspaceBlock:list', (_event, documentId: string) => store.listWorkspaceBlocks(documentId));
   ipcMain.handle('workspaceBlock:save', async (_event, input: { block: WorkspaceBlock }) => {
-    const saved = await store.saveWorkspaceBlock(input.block);
+    const saved = await runStoreMutation(() => store.saveWorkspaceBlock(input.block));
     broadcastLibraryChanged();
     return saved;
   });
   ipcMain.handle('workspaceBlock:delete', async (_event, blockId: string) => {
-    await store.deleteWorkspaceBlock(blockId);
+    await runStoreMutation(() => store.deleteWorkspaceBlock(blockId));
     broadcastLibraryChanged();
   });
 
   ipcMain.handle('settings:getAiProvider', () => store.getSafeAiProvider());
-  ipcMain.handle('settings:saveAiProvider', (_event, config: AiProviderConfig) => store.saveAiProvider(config));
+  ipcMain.handle('settings:saveAiProvider', (_event, config: AiProviderConfig) => runStoreMutation(() => store.saveAiProvider(config)));
   ipcMain.handle('settings:getGitHubUpload', () => store.getSafeGitHubUpload());
-  ipcMain.handle('settings:saveGitHubUpload', (_event, config: GitHubUploadConfig) => store.saveGitHubUpload(config));
+  ipcMain.handle('settings:saveGitHubUpload', (_event, config: GitHubUploadConfig) => runStoreMutation(() => store.saveGitHubUpload(config)));
   ipcMain.handle('settings:getAppPreferences', () => store.getAppPreferences());
-  ipcMain.handle('settings:saveAppPreferences', (_event, config: AppPreferences) => store.saveAppPreferences(config));
-  ipcMain.handle('sync:workspace', () => store.syncWorkspace());
-  ipcMain.handle('sync:uploadWorkspace', () => store.uploadWorkspace());
+  ipcMain.handle('settings:saveAppPreferences', (_event, config: AppPreferences) => runStoreMutation(() => store.saveAppPreferences(config)));
+  ipcMain.handle('sync:workspace', () => runStoreMutation(() => store.syncWorkspace()));
+  ipcMain.handle('sync:uploadWorkspace', () => runStoreMutation(() => store.uploadWorkspace()));
   ipcMain.handle('ai:listModels', async (_event, config: AiProviderConfig) => {
     const stored = await store.getAiProviderWithSecret();
     return aiService.listModels({
@@ -296,19 +305,14 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
         return false;
       }
 
-      try {
-        sender.send('ai:stream:event', {
-          streamId: input.streamId,
-          ...chunk
-        });
-        return true;
-      } catch (error) {
+      const sent = sendToRenderer(sender, 'ai:stream:event', {
+        streamId: input.streamId,
+        ...chunk
+      });
+      if (!sent) {
         abortStream();
-        if (!(error instanceof Error && error.message.includes('Render frame was disposed'))) {
-          console.warn('AI stream event could not be delivered', error);
-        }
-        return false;
       }
+      return sent;
     };
 
     sender.once('destroyed', abortStream);
@@ -377,7 +381,7 @@ if (hasSingleInstanceLock) {
 
     registerIpc(store, aiService);
     createWindow();
-    void store.syncWorkspace().catch((error: unknown) => {
+    void runStoreMutation(() => store.syncWorkspace()).catch((error: unknown) => {
       console.warn('Startup GitHub sync failed', error);
     });
 
@@ -483,6 +487,23 @@ function focusWindow(window: BrowserWindow): void {
   }
   window.show();
   window.focus();
+}
+
+function sendToRenderer(webContents: WebContents, channel: string, ...args: unknown[]): boolean {
+  if (webContents.isDestroyed()) {
+    return false;
+  }
+
+  try {
+    webContents.send(channel, ...args);
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes('Render frame was disposed')) {
+      console.warn(`Could not send renderer IPC "${channel}"`, error);
+    }
+    return false;
+  }
 }
 
 async function pdfSourceForDocument(document: PdfDocumentMeta): Promise<PdfSourceDescriptor> {

@@ -525,7 +525,7 @@ export function PdfReader({
   const zoomLockVersionRef = useRef(0);
   const pendingRevealScrollTopRef = useRef<number>();
   const lastPdfReadingIntentRef = useRef(0);
-  const lastDockPointerStartAtRef = useRef(0);
+  const selectionMouseUpTimerRef = useRef<number>();
   const canvasDragRef = useRef<{
     active: boolean;
     moved: boolean;
@@ -1846,16 +1846,9 @@ export function PdfReader({
     executeSearch(false);
   };
 
-  const startDockMove = useCallback((event: ReactMouseEvent<HTMLButtonElement> | ReactPointerEvent<HTMLButtonElement>): void => {
+  const startDockMove = useCallback((event: ReactMouseEvent<HTMLButtonElement>): void => {
     event.preventDefault();
     event.stopPropagation();
-    const pointerId = 'pointerId' in event ? event.pointerId : undefined;
-    if (pointerId !== undefined) {
-      lastDockPointerStartAtRef.current = Date.now();
-      event.currentTarget.setPointerCapture(pointerId);
-    } else if (Date.now() - lastDockPointerStartAtRef.current < 80) {
-      return;
-    }
     document.body.classList.add('is-moving-dock');
 
     const container = containerRef.current;
@@ -1884,47 +1877,24 @@ export function PdfReader({
       }
     };
 
-    const handlePointerMove = (moveEvent: PointerEvent): void => {
-      if (pointerId === undefined || moveEvent.pointerId !== pointerId) {
-        return;
-      }
-      moveDock(moveEvent.clientX, moveEvent.clientY);
-    };
-
     const handleMouseMove = (moveEvent: MouseEvent): void => {
       moveDock(moveEvent.clientX, moveEvent.clientY);
     };
 
-    const stopMove = (endEvent?: PointerEvent): void => {
-      if (pointerId !== undefined && endEvent && endEvent.pointerId !== pointerId) {
-        return;
-      }
+    const stopMove = (): void => {
       document.body.classList.remove('is-moving-dock');
       if (container) {
         container.scrollLeft = startScrollLeft;
         container.scrollTop = startScrollTop;
       }
-      if (pointerId !== undefined && event.currentTarget.hasPointerCapture(pointerId)) {
-        event.currentTarget.releasePointerCapture(pointerId);
-      }
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', stopMove);
-      window.removeEventListener('pointercancel', stopMove);
       window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('mouseup', stopMove);
+      window.removeEventListener('blur', stopMove);
     };
 
-    const handleMouseUp = (): void => {
-      stopMove();
-    };
-
-    if (pointerId !== undefined) {
-      window.addEventListener('pointermove', handlePointerMove);
-      window.addEventListener('pointerup', stopMove);
-      window.addEventListener('pointercancel', stopMove);
-    }
     window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('mouseup', stopMove, { once: true });
+    window.addEventListener('blur', stopMove, { once: true });
   }, [dockOffset]);
 
   const startDockResize = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
@@ -2026,7 +1996,11 @@ export function PdfReader({
 
     const clientX = event.clientX;
     const clientY = event.clientY;
-    window.setTimeout(() => {
+    if (selectionMouseUpTimerRef.current !== undefined) {
+      window.clearTimeout(selectionMouseUpTimerRef.current);
+    }
+    selectionMouseUpTimerRef.current = window.setTimeout(() => {
+      selectionMouseUpTimerRef.current = undefined;
       const selection = selectionFromWindow(viewerRef.current);
       const stage = stageRef.current;
       if (!selection || !stage) {
@@ -2147,14 +2121,16 @@ export function PdfReader({
       return undefined;
     }
 
-    const handleNativeMouseUp = (event: MouseEvent | PointerEvent): void => {
+    const handleNativeMouseUp = (event: MouseEvent): void => {
       handleSelectionMouseUp(event);
     };
     viewport.addEventListener('mouseup', handleNativeMouseUp, true);
-    viewport.addEventListener('pointerup', handleNativeMouseUp, true);
     return () => {
       viewport.removeEventListener('mouseup', handleNativeMouseUp, true);
-      viewport.removeEventListener('pointerup', handleNativeMouseUp, true);
+      if (selectionMouseUpTimerRef.current !== undefined) {
+        window.clearTimeout(selectionMouseUpTimerRef.current);
+        selectionMouseUpTimerRef.current = undefined;
+      }
     };
   }, [handleSelectionMouseUp, source]);
 
@@ -2243,7 +2219,6 @@ export function PdfReader({
                   className={canvasDragMode ? 'pdf-viewport is-canvas-drag-mode' : 'pdf-viewport'}
                   ref={containerRef}
                   onDoubleClick={enterCanvasDragMode}
-                  onMouseUp={handleSelectionMouseUp}
                   onWheel={(event) => notePdfReadingIntent(event.target)}
                   onPointerDown={handleCanvasDragPointerDown}
                   tabIndex={0}
@@ -2790,7 +2765,7 @@ function ReaderDock({
   onPinConversation(conversation: Conversation): void;
   onPinImage(attachment: ConversationAttachment, conversation?: Conversation): void;
   onPinNote(note: NoteDocument): void;
-  onStartMove(event: ReactMouseEvent<HTMLButtonElement> | ReactPointerEvent<HTMLButtonElement>): void;
+  onStartMove(event: ReactMouseEvent<HTMLButtonElement>): void;
   onTabChange(tab: DockTab): void;
 }): ReactElement {
   const panelOpen = (chatOpen && activeConversation) || transientAid || noteEditorNote;
@@ -2882,7 +2857,6 @@ function ReaderDock({
             title={t.moveSidePanel}
             aria-label={t.moveSidePanel}
             onMouseDown={onStartMove}
-            onPointerDown={onStartMove}
           >
             <Move size={17} />
           </button>
@@ -4734,7 +4708,7 @@ function selectionFromWindow(viewerElement: HTMLDivElement | null): PdfSelection
     return undefined;
   }
 
-  const pageElements = Array.from(viewerElement.querySelectorAll<HTMLElement>('.page[data-page-number]'));
+  const pageElements = pageElementsForRange(viewerElement, range);
   const areas: PdfMarkArea[] = [];
   for (const rect of Array.from(range.getClientRects())) {
     if (rect.width < 1 || rect.height < 1) {
@@ -4773,6 +4747,34 @@ function selectionFromWindow(viewerElement: HTMLDivElement | null): PdfSelection
     areas: uniqueAreas,
     pageNumber: uniqueAreas[0].pageIndex + 1
   };
+}
+
+function pageElementsForRange(viewerElement: HTMLDivElement, range: Range): HTMLElement[] {
+  const pageForNode = (node: Node): HTMLElement | null => {
+    const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
+    const page = element?.closest<HTMLElement>('.page[data-page-number]');
+    return page && viewerElement.contains(page) ? page : null;
+  };
+
+  const startPage = pageForNode(range.startContainer);
+  const endPage = pageForNode(range.endContainer);
+  if (startPage && endPage) {
+    if (startPage === endPage) {
+      return [startPage];
+    }
+
+    const pages = Array.from(viewerElement.querySelectorAll<HTMLElement>('.page[data-page-number]'));
+    const startIndex = pages.indexOf(startPage);
+    const endIndex = pages.indexOf(endPage);
+    if (startIndex >= 0 && endIndex >= 0) {
+      const from = Math.min(startIndex, endIndex);
+      const to = Math.max(startIndex, endIndex);
+      return pages.slice(from, to + 1);
+    }
+  }
+
+  const commonPage = pageForNode(range.commonAncestorContainer);
+  return commonPage ? [commonPage] : Array.from(viewerElement.querySelectorAll<HTMLElement>('.page[data-page-number]'));
 }
 
 function rectsIntersect(left: DOMRect, right: DOMRect): boolean {

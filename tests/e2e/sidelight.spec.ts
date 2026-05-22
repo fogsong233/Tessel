@@ -2128,6 +2128,7 @@ async function dragDockMoveButton(page: Page, deltaX: number, deltaY: number): P
   const button = page.getByRole('button', { name: 'Move reading dock' });
   await expect(button).toBeVisible();
   await dispatchMouseDrag(page, '.dock-move-button', deltaX, deltaY);
+  await expect.poll(async () => page.evaluate(() => document.body.classList.contains('is-moving-dock'))).toBe(false);
 }
 
 async function expectPanelInsideDock(page: Page, panelSelector: string): Promise<void> {

@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
+import * as pdfjsLib from 'pdfjs-dist/build/pdf.js';
 import type { AiPdfOutlineItem } from '../shared/domain';
 
 interface PdfJsOutlineNode {

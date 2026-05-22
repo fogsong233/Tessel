@@ -40,6 +40,7 @@ import {
 import { normalizeWorkspaceBlock } from '../shared/workspacePins';
 import { normalizeNoteRange } from '../shared/notes';
 import { normalizeSelectionColors } from '../shared/selectionColors';
+import { renameWithTransientRetry } from './fileWrites';
 
 interface PersistedAiProviderConfig extends Omit<AiProviderConfig, 'apiKey'> {
   encryptedApiKey?: string;
@@ -319,6 +320,10 @@ export class JsonWorkspaceStore {
 
   async saveReadingState(state: PdfReadingState): Promise<PdfReadingState> {
     const store = await this.read();
+    const existing = store.readingStates.find((candidate) => candidate.documentId === state.documentId);
+    if (existing && existing.updatedAt > state.updatedAt) {
+      return existing;
+    }
     store.readingStates = [
       state,
       ...store.readingStates.filter((candidate) => candidate.documentId !== state.documentId)
@@ -574,7 +579,7 @@ export class JsonWorkspaceStore {
     await mkdir(dirname(this.storePath), { recursive: true });
     const tmpPath = `${this.storePath}.tmp-${process.pid}-${Date.now()}-${randomUUID()}`;
     await writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, 'utf8');
-    await rename(tmpPath, this.storePath);
+    await renameWithTransientRetry(tmpPath, this.storePath);
     await writeWorkspaceSyncSnapshot({ store, workspaceDir: dirname(this.storePath) });
   }
 

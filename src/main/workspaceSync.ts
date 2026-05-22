@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import {
@@ -23,6 +23,7 @@ import {
   normalizeLibraryDocument,
   sampledContentHashAlgorithm
 } from './documentIdentity';
+import { renameWithTransientRetry } from './fileWrites';
 
 export interface WorkspaceStoreData {
   documents: PdfDocumentMeta[];
@@ -349,7 +350,7 @@ async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}-${randomUUID()}.tmp`;
   await writeFile(tmpPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  await rename(tmpPath, filePath);
+  await renameWithTransientRetry(tmpPath, filePath);
 }
 
 interface GitHubFileTarget {
