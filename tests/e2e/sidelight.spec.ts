@@ -41,9 +41,7 @@ test.describe('Sidelight Electron reading flow', () => {
 
     await expect(library.getByRole('heading', { name: 'Library' })).toBeVisible();
 
-    const readerPromise = waitForNextWindow(app);
-    await library.getByRole('button', { name: /Open PDF/i }).first().click();
-    const reader = await readerPromise;
+    const reader = await openPdfFromLibrary(app, library);
     await attachDiagnostics(reader);
 
     await expect(reader.getByText('fixture')).toBeVisible();
@@ -286,9 +284,7 @@ test.describe('Sidelight Electron reading flow', () => {
     await mkdir(dirname(storePath), { recursive: true });
     await writeFile(storePath, '{"documents": [');
 
-    const readerPromise = waitForNextWindow(app);
-    await library.getByRole('button', { name: /Open PDF/i }).first().click();
-    const reader = await readerPromise;
+    const reader = await openPdfFromLibrary(app, library);
     await attachDiagnostics(reader);
 
     await expect(reader.locator('.pdfViewer .page[data-page-number="1"]')).toBeVisible();
@@ -301,9 +297,7 @@ test.describe('Sidelight Electron reading flow', () => {
 
     const library = await app.firstWindow();
     await attachDiagnostics(library);
-    const readerPromise = waitForNextWindow(app);
-    await library.getByRole('button', { name: /Open PDF/i }).first().click();
-    const reader = await readerPromise;
+    const reader = await openPdfFromLibrary(app, library);
     await attachDiagnostics(reader);
 
     await expect(reader.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Sidelight integration passage Alpha Beta');
@@ -567,9 +561,7 @@ test.describe('Sidelight Electron reading flow', () => {
   test('replaces foreground panels consistently across chat notes and transient AI', async () => {
     const library = await app.firstWindow();
     await attachDiagnostics(library);
-    const readerPromise = waitForNextWindow(app);
-    await library.getByRole('button', { name: /Open PDF/i }).first().click();
-    const reader = await readerPromise;
+    const reader = await openPdfFromLibrary(app, library);
     await attachDiagnostics(reader);
 
     await expect(reader.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Sidelight integration passage Alpha Beta');
@@ -612,9 +604,7 @@ test.describe('Sidelight Electron reading flow', () => {
       await attachDiagnostics(library);
       await configurePlainAiProvider(userDataDir, provider.url);
 
-      const readerPromise = waitForNextWindow(app);
-      await library.getByRole('button', { name: /Open PDF/i }).first().click();
-      const reader = await readerPromise;
+      const reader = await openPdfFromLibrary(app, library);
       await attachDiagnostics(reader);
 
       await expect(reader.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Sidelight integration passage Alpha Beta');
@@ -648,9 +638,7 @@ test.describe('Sidelight Electron reading flow', () => {
       await attachDiagnostics(library);
       await configurePlainAiProvider(userDataDir, provider.url);
 
-      const readerPromise = waitForNextWindow(app);
-      await library.getByRole('button', { name: /Open PDF/i }).first().click();
-      const reader = await readerPromise;
+      const reader = await openPdfFromLibrary(app, library);
       await attachDiagnostics(reader);
 
       await expect(reader.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Sidelight integration passage Alpha Beta');
@@ -682,9 +670,7 @@ test.describe('Sidelight Electron reading flow', () => {
       await attachDiagnostics(library);
       await configurePlainAiProvider(userDataDir, provider.url);
 
-      const readerPromise = waitForNextWindow(app);
-      await library.getByRole('button', { name: /Open PDF/i }).first().click();
-      const reader = await readerPromise;
+      const reader = await openPdfFromLibrary(app, library);
       await attachDiagnostics(reader);
 
       await expect(reader.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Sidelight integration passage Alpha Beta');
@@ -720,9 +706,7 @@ test.describe('Sidelight Electron reading flow', () => {
   test('pins an open off-page chat onto the current PDF page without reloading', async () => {
     const library = await app.firstWindow();
     await attachDiagnostics(library);
-    const readerPromise = waitForNextWindow(app);
-    await library.getByRole('button', { name: /Open PDF/i }).first().click();
-    const reader = await readerPromise;
+    const reader = await openPdfFromLibrary(app, library);
     await attachDiagnostics(reader);
 
     await expect(reader.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Sidelight integration passage Alpha Beta');
@@ -759,9 +743,7 @@ test.describe('Sidelight Electron reading flow', () => {
 
     const library = await app.firstWindow();
     await attachDiagnostics(library);
-    const readerPromise = waitForNextWindow(app);
-    await library.getByRole('button', { name: /Open PDF/i }).first().click();
-    const reader = await readerPromise;
+    const reader = await openPdfFromLibrary(app, library);
     await attachDiagnostics(reader);
 
     await expect(reader.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Sidelight integration passage Alpha Beta');
@@ -784,9 +766,7 @@ test.describe('Sidelight Electron reading flow', () => {
   test('supports scoped CodeMirror notes and AI generated notes', async () => {
     const library = await app.firstWindow();
     await attachDiagnostics(library);
-    const readerPromise = waitForNextWindow(app);
-    await library.getByRole('button', { name: /Open PDF/i }).first().click();
-    const reader = await readerPromise;
+    const reader = await openPdfFromLibrary(app, library);
     await attachDiagnostics(reader);
 
     await expect(reader.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Sidelight integration passage Alpha Beta');
@@ -964,9 +944,7 @@ test.describe('Sidelight Electron reading flow', () => {
     try {
       const library = await app.firstWindow();
       await attachDiagnostics(library);
-      const readerPromise = waitForNextWindow(app);
-      await library.getByRole('button', { name: /Open PDF/i }).first().click();
-      const reader = await readerPromise;
+      const reader = await openPdfFromLibrary(app, library);
       await attachDiagnostics(reader);
 
       await expect(reader.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Sidelight integration passage Alpha Beta');
@@ -1053,18 +1031,26 @@ function shouldOpenPdfFromLaunchArgs(testInfo: { title: string }): boolean {
 }
 
 async function waitForNextWindow(app: ElectronApplication): Promise<Page> {
-  const page = await app.waitForEvent('window');
-  await page.waitForLoadState('domcontentloaded');
-  return page;
+  const existingPages = new Set(app.windows());
+  return waitForReaderWindow(app, existingPages);
 }
 
-async function waitForReaderWindow(app: ElectronApplication): Promise<Page> {
-  const deadline = Date.now() + 10_000;
+async function openPdfFromLibrary(app: ElectronApplication, library: Page): Promise<Page> {
+  await expect(library.getByRole('heading', { name: 'Library' })).toBeVisible();
+  const readerPromise = waitForNextWindow(app);
+  await library.getByRole('button', { name: /Open PDF/i }).first().click();
+  return readerPromise;
+}
+
+async function waitForReaderWindow(app: ElectronApplication, existingPages = new Set<Page>()): Promise<Page> {
+  const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     for (const page of app.windows()) {
+      if (existingPages.has(page)) {
+        continue;
+      }
       await page.waitForLoadState('domcontentloaded').catch(() => undefined);
-      const hasReaderShell = await page.locator('.pdf-viewport').count().catch(() => 0);
-      if (hasReaderShell > 0) {
+      if (await isReadyReaderWindow(page)) {
         return page;
       }
     }
@@ -1073,6 +1059,15 @@ async function waitForReaderWindow(app: ElectronApplication): Promise<Page> {
   }
 
   throw new Error('Reader window did not open for the requested PDF.');
+}
+
+async function isReadyReaderWindow(page: Page): Promise<boolean> {
+  if (!page.url().includes('documentId=')) {
+    return false;
+  }
+
+  const hasReaderShell = await page.locator('.pdf-viewport').count().catch(() => 0);
+  return hasReaderShell > 0;
 }
 
 async function attachDiagnostics(page: Page): Promise<void> {

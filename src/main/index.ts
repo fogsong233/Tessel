@@ -184,15 +184,24 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
     }
 
     const now = new Date().toISOString();
-    const updatedDocument = await runStoreMutation(() => store.updateDocument({
+    const openedDocument: PdfDocumentMeta = {
       ...document,
       updatedAt: now,
       lastOpenedAt: now
-    }));
+    };
+
+    const source = await pdfSourceForDocument(document);
+    void runStoreMutation(() => store.updateDocument(openedDocument))
+      .then(() => {
+        broadcastLibraryChanged();
+      })
+      .catch((error: unknown) => {
+        console.warn(`Could not update last-opened state for PDF ${documentId}`, error);
+      });
 
     return {
-      document: updatedDocument,
-      source: await pdfSourceForDocument(updatedDocument)
+      document: openedDocument,
+      source
     };
   });
   ipcMain.handle('pdf:addToLibrary', async (_event, documentId: string) => {
@@ -381,9 +390,13 @@ if (hasSingleInstanceLock) {
 
     registerIpc(store, aiService);
     createWindow();
-    void runStoreMutation(() => store.syncWorkspace()).catch((error: unknown) => {
-      console.warn('Startup GitHub sync failed', error);
-    });
+    if (!hideE2eWindows) {
+      setTimeout(() => {
+        void runStoreMutation(() => store.syncWorkspace()).catch((error: unknown) => {
+          console.warn('Startup GitHub sync failed', error);
+        });
+      }, 10_000);
+    }
 
     const startupPdfPaths = [
       ...pdfPathsFromArgv(process.argv),

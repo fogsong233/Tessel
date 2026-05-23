@@ -97,8 +97,11 @@ export function App(): ReactElement {
   const [noteBusy, setNoteBusy] = useState(false);
   const [outlineGenerationBusy, setOutlineGenerationBusy] = useState(false);
   const [outlineGenerationError, setOutlineGenerationError] = useState<string>();
+  const [readerLoadPending, setReaderLoadPending] = useState(false);
+  const [readerLoadError, setReaderLoadError] = useState<string>();
   const [activeStream, setActiveStream] = useState<{ streamId: string; conversationId?: string }>();
   const loadedReaderDocumentRef = useRef<string | undefined>(undefined);
+  const readerLoadRequestRef = useRef<string | undefined>(undefined);
   const stoppedStreamIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -118,6 +121,8 @@ export function App(): ReactElement {
     }
 
     loadedReaderDocumentRef.current = readerDocumentId;
+    setActiveDocument(undefined);
+    setPdfSource(undefined);
     void loadDocumentIntoCurrentWindow(readerDocumentId);
   }, [readerDocumentId]);
 
@@ -206,12 +211,30 @@ export function App(): ReactElement {
   }
 
   async function loadDocumentIntoCurrentWindow(documentId: string): Promise<void> {
-    const result = await window.sidelight.loadPdf(documentId);
-    if (!result) {
-      return;
+    readerLoadRequestRef.current = documentId;
+    setReaderLoadPending(true);
+    setReaderLoadError(undefined);
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const result = await window.sidelight.loadPdf(documentId);
+      if (result) {
+        if (readerLoadRequestRef.current !== documentId) {
+          return;
+        }
+        await activateDocument(result.document, result.source);
+        setReaderLoadPending(false);
+        setReaderLoadError(undefined);
+        return;
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
     }
 
-    await activateDocument(result.document, result.source);
+    if (readerLoadRequestRef.current !== documentId) {
+      return;
+    }
+    setReaderLoadPending(false);
+    setReaderLoadError('The requested PDF could not be found in the workspace.');
   }
 
   async function activateDocument(document: PdfDocumentMeta, source: PdfSourceDescriptor): Promise<void> {
@@ -1020,6 +1043,8 @@ export function App(): ReactElement {
         libraryGroups={libraryGroups}
         source={pdfSource}
         meta={activeDocument}
+        documentLoadPending={readerLoadPending}
+        documentLoadError={readerLoadError}
         uiLanguage={appPreferences.uiLanguage}
         selectionColors={appPreferences.selectionColors}
         activePage={currentPage}

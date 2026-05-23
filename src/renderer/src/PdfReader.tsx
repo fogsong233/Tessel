@@ -112,6 +112,8 @@ interface PdfReaderProps {
   libraryGroups: LibraryGroup[];
   source?: PdfSourceDescriptor;
   meta?: PdfDocumentMeta;
+  documentLoadPending?: boolean;
+  documentLoadError?: string;
   uiLanguage?: UiLanguage;
   selectionColors: SelectionColorPreferences;
   activePage: number;
@@ -457,6 +459,8 @@ export function PdfReader({
   libraryGroups,
   source,
   meta,
+  documentLoadPending = false,
+  documentLoadError,
   uiLanguage = 'en',
   selectionColors,
   activePage,
@@ -2359,6 +2363,13 @@ export function PdfReader({
                   />
                 )}
               </>
+            ) : documentLoadPending ? (
+              <PdfState
+                status={documentLoadError ? 'error' : 'loading'}
+                progress={0}
+                error={documentLoadError}
+                text={t}
+              />
             ) : (
               <section className="reader-empty reader-empty--embedded">
                 <div className="reader-empty__mark">
