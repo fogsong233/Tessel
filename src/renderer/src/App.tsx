@@ -19,6 +19,7 @@ import {
   Search,
   Settings,
   SlidersHorizontal,
+  Sparkles,
   Tags,
   UploadCloud,
   X
@@ -1419,6 +1420,8 @@ function ReaderSettingsPanel({
   const [webDavPassword, setWebDavPassword] = useState('');
   const [uiLanguage, setUiLanguage] = useState<UiLanguage>(preferences.uiLanguage);
   const [aiLanguage, setAiLanguage] = useState<AiPreferredLanguage>(preferences.aiLanguage);
+  const [translationBackend, setTranslationBackend] = useState(preferences.translationBackend);
+  const [settingsSection, setSettingsSection] = useState<'provider' | 'codex' | 'sync' | 'language'>('provider');
   const [codexAvailability, setCodexAvailability] = useState<CodexAvailability>();
   const [codexModels, setCodexModels] = useState<CodexModelInfo[]>([]);
   const [codexEnabled, setCodexEnabled] = useState(preferences.experimentalCodexAgent.enabled);
@@ -1499,7 +1502,9 @@ function ReaderSettingsPanel({
       {
         uiLanguage,
         aiLanguage,
-        translationBackend: preferences.translationBackend,
+        translationBackend: translationBackend === 'codex' && codexEnabled && Boolean(codexAvailability?.available)
+          ? 'codex'
+          : 'provider',
         selectionColors: normalizeSelectionColors(preferences.selectionColors),
         experimentalCodexAgent: {
           enabled: codexEnabled && Boolean(codexAvailability?.available),
@@ -1516,16 +1521,21 @@ function ReaderSettingsPanel({
     <div className="settings-overlay reader-settings-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="reader-settings" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <header className="reader-settings__header">
-          <div>
-            <span>Reader preferences</span>
-            <strong id="settings-title">Settings</strong>
-          </div>
+          <div className="reader-settings__title"><Settings size={18} /><strong id="settings-title">Settings</strong></div>
           <button type="button" className="icon-button" title="Close" onClick={onClose}><X size={16} /></button>
         </header>
         <form className="reader-settings__form" onSubmit={submit}>
-          <div className="reader-settings__body">
-            <section className="reader-settings__section">
-              <div className="reader-settings__section-heading"><Bot size={17} /><div><strong>AI provider</strong><span>OpenAI-compatible reader tools</span></div></div>
+          <div className="reader-settings__workspace">
+            <nav className="reader-settings__nav" aria-label="Settings sections">
+              <button className={settingsSection === 'provider' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('provider')}><Bot size={16} />Provider</button>
+              <button className={settingsSection === 'codex' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('codex')}><Sparkles size={16} />Codex</button>
+              <button className={settingsSection === 'sync' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('sync')}><Cloud size={16} />Sync</button>
+              <button className={settingsSection === 'language' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('language')}><LanguagesIcon size={16} />Language</button>
+            </nav>
+            <div className="reader-settings__body">
+            {settingsSection === 'provider' && (
+              <section className="reader-settings__section">
+              <div className="reader-settings__section-heading"><Bot size={17} /><div><strong>AI provider</strong><span>OpenAI-compatible</span></div></div>
               <div className="reader-settings__fields">
                 <label>Display name<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
                 <label>Temperature<input type="number" min="0" max="2" step="0.1" value={temperature} onChange={(event) => setTemperature(Number(event.target.value))} /></label>
@@ -1538,8 +1548,24 @@ function ReaderSettingsPanel({
                 </label>
               </div>
             </section>
+            )}
+            {settingsSection === 'codex' && (
+              <section className="reader-settings__section">
+              <div className="reader-settings__section-heading"><Sparkles size={17} /><div><strong>Codex</strong><span>{codexAvailability?.available ? codexAvailability.version ?? 'Local CLI available' : codexAvailability?.reason ?? 'Checking local Codex CLI...'}</span></div><label className="reader-settings__switch"><input type="checkbox" checked={codexEnabled} disabled={!codexAvailability?.available} onChange={(event) => setCodexEnabled(event.target.checked)} />Enabled</label></div>
+              <div className="reader-settings__subsection"><strong>Chat</strong><div className="reader-settings__fields">
+                <label>Model<select value={codexChatModel} disabled={!codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexChatModel(event.target.value); setCodexChatEffort(''); }}><option value="">Codex default</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</select></label>
+                <label>Reasoning<select value={codexChatEffort} disabled={!codexEnabled || !codexAvailability?.available || chatEfforts.length === 0} onChange={(event) => setCodexChatEffort(event.target.value)}><option value="">Reader default (Low)</option>{chatEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort)}</option>)}</select></label>
+              </div></div>
+              <div className="reader-settings__subsection"><strong>Translation</strong><div className="reader-settings__fields">
+                <label>Backend<select value={translationBackend} onChange={(event) => setTranslationBackend(event.target.value as AppPreferences['translationBackend'])}><option value="provider">AI provider</option><option value="codex" disabled={!codexEnabled || !codexAvailability?.available}>Codex</option></select></label>
+                <label>Model<select value={codexTranslationModel} disabled={translationBackend !== 'codex' || !codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexTranslationModel(event.target.value); setCodexTranslationEffort(''); }}><option value="">Fastest available</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</select></label>
+                <label>Reasoning<select value={codexTranslationEffort} disabled={translationBackend !== 'codex' || !codexEnabled || !codexAvailability?.available || translationEfforts.length === 0} onChange={(event) => setCodexTranslationEffort(event.target.value)}><option value="">Reader default (Low)</option>{translationEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort)}</option>)}</select></label>
+              </div></div>
+            </section>
+            )}
+            {settingsSection === 'sync' && (
             <section className="reader-settings__section">
-              <div className="reader-settings__section-heading"><Cloud size={17} /><div><strong>WebDAV metadata sync</strong><span>Reading progress and chats are keyed by the PDF SHA-256 hash.</span></div><label className="reader-settings__switch"><input type="checkbox" checked={syncEnabled} onChange={(event) => setSyncEnabled(event.target.checked)} />Enabled</label></div>
+              <div className="reader-settings__section-heading"><Cloud size={17} /><div><strong>WebDAV sync</strong><span>Per-PDF metadata</span></div><label className="reader-settings__switch"><input type="checkbox" checked={syncEnabled} onChange={(event) => setSyncEnabled(event.target.checked)} />Enabled</label></div>
               <div className="reader-settings__fields">
                 <label className="reader-settings__wide">Server URL<input value={webDavUrl} placeholder="https://dav.example.com/remote.php/dav/files/name" onChange={(event) => setWebDavUrl(event.target.value)} /></label>
                 <label>Folder<input value={webDavPath} placeholder="sidelight" onChange={(event) => setWebDavPath(event.target.value)} /></label>
@@ -1547,23 +1573,17 @@ function ReaderSettingsPanel({
                 <label className="reader-settings__wide">Password<input type="password" value={webDavPassword} placeholder={webDavSync.hasPassword ? 'Stored. Enter a new password to replace it.' : ''} onChange={(event) => setWebDavPassword(event.target.value)} /></label>
               </div>
             </section>
+            )}
+            {settingsSection === 'language' && (
             <section className="reader-settings__section">
-              <div className="reader-settings__section-heading"><LanguagesIcon size={17} /><div><strong>Language</strong><span>Interface and generated response preference.</span></div></div>
+              <div className="reader-settings__section-heading"><LanguagesIcon size={17} /><div><strong>Language</strong><span>Interface and AI responses</span></div></div>
               <div className="reader-settings__fields">
                 <label>UI language<select value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value as UiLanguage)}><option value="en">English</option><option value="zh-CN">简体中文</option></select></label>
                 <label>AI preferred language<select value={aiLanguage} onChange={(event) => setAiLanguage(event.target.value as AiPreferredLanguage)}><option value="Simplified Chinese">Simplified Chinese</option><option value="Chinese">Chinese</option><option value="English">English</option></select></label>
               </div>
             </section>
-            <section className="reader-settings__section">
-              <div className="reader-settings__section-heading"><Bot size={17} /><div><strong>Experimental Codex reader</strong><span>Local Codex handles PDF chat and translation in a private per-PDF workspace.</span></div><label className="reader-settings__switch"><input type="checkbox" checked={codexEnabled} disabled={!codexAvailability?.available} onChange={(event) => setCodexEnabled(event.target.checked)} />Enabled</label></div>
-              <div className="reader-settings__fields">
-                <label>Chat model<select value={codexChatModel} disabled={!codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexChatModel(event.target.value); setCodexChatEffort(''); }}><option value="">Codex default</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</select></label>
-                <label>Chat reasoning<select value={codexChatEffort} disabled={!codexEnabled || !codexAvailability?.available || chatEfforts.length === 0} onChange={(event) => setCodexChatEffort(event.target.value)}><option value="">Reader default (Low)</option>{chatEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort)}</option>)}</select></label>
-                <label>Translation model<select value={codexTranslationModel} disabled={!codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexTranslationModel(event.target.value); setCodexTranslationEffort(''); }}><option value="">Fastest available</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</select></label>
-                <label>Translation reasoning<select value={codexTranslationEffort} disabled={!codexEnabled || !codexAvailability?.available || translationEfforts.length === 0} onChange={(event) => setCodexTranslationEffort(event.target.value)}><option value="">Reader default (Low)</option>{translationEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort)}</option>)}</select></label>
-                <small className={codexAvailability?.available ? 'reader-settings__status' : 'reader-settings__status is-error'}>{codexAvailability?.available ? `Available locally: ${codexAvailability.version ?? 'Codex CLI'}` : codexAvailability?.reason ?? 'Checking local Codex CLI...'}</small>
-              </div>
-            </section>
+            )}
+            </div>
           </div>
           <footer className="reader-settings__actions"><button className="quiet-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit">Save</button></footer>
         </form>

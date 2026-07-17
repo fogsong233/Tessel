@@ -328,6 +328,23 @@ test.describe('PDF reader flow', () => {
     await expect(page.getByText('Translations').first()).toBeVisible();
   });
 
+  test('saves the translation backend from the compact settings workspace', async () => {
+    await page.getByTitle('Settings').click();
+    const settings = page.locator('.reader-settings');
+    await expect(settings).toBeVisible();
+    await settings.getByRole('button', { name: 'Codex' }).click();
+    await settings.getByLabel('Enabled').check();
+    await settings.getByLabel('Backend').selectOption('codex');
+    await settings.getByRole('button', { name: 'Save' }).click();
+
+    await expect.poll(async () => {
+      const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+        appPreferences?: { translationBackend?: string };
+      };
+      return store.appPreferences?.translationBackend;
+    }).toBe('codex');
+  });
+
   test('gives Codex outline generation sampled PDF page evidence', async () => {
     await enableCodexReader(page);
     await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
