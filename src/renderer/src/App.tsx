@@ -31,6 +31,7 @@ import {
   AiPreferredLanguage,
   AiToolCallEvent,
   AgentActivityEvent,
+  AgentTimelineEntry,
   AppPreferences,
   CodexAvailability,
   CodexModelInfo,
@@ -564,7 +565,11 @@ export function App(): ReactElement {
           ...draftConversation,
           messages: draftConversation.messages.map((message) =>
             message.id === assistantMessage.id
-              ? { ...message, agentActivities: mergeAgentActivityEvents(message.agentActivities, event.activity!) }
+              ? {
+                  ...message,
+                  agentActivities: mergeAgentActivityEvents(message.agentActivities, event.activity!),
+                  agentTimeline: mergeAgentTimelineActivity(message.agentTimeline, event.activity!)
+                }
               : message
           ),
           updatedAt: new Date().toISOString()
@@ -597,10 +602,28 @@ export function App(): ReactElement {
 
       if (event.delta) {
         streamedContent += event.delta;
+        draftConversation = {
+          ...draftConversation,
+          messages: draftConversation.messages.map((message) =>
+            message.id === assistantMessage.id
+              ? { ...message, agentTimeline: appendAgentTimelineOutput(message.agentTimeline, event.delta!) }
+              : message
+          ),
+          updatedAt: new Date().toISOString()
+        };
       }
 
       if (event.error) {
         streamedContent = `AI request failed: ${presentableAiError(event.error)}`;
+        draftConversation = {
+          ...draftConversation,
+          messages: draftConversation.messages.map((message) =>
+            message.id === assistantMessage.id
+              ? { ...message, agentTimeline: appendAgentTimelineOutput(message.agentTimeline, streamedContent) }
+              : message
+          ),
+          updatedAt: new Date().toISOString()
+        };
       }
 
       if (event.cancelled && !streamedContent.trim()) {
@@ -2989,6 +3012,60 @@ function mergeAgentActivityEvents(
     event,
     ...(current ?? []).filter((candidate) => candidate.id !== event.id)
   ].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+}
+
+function appendAgentTimelineOutput(
+  current: AgentTimelineEntry[] | undefined,
+  content: string
+): AgentTimelineEntry[] {
+  if (!content) {
+    return current ?? [];
+  }
+  const entries = [...(current ?? [])];
+  const latest = entries.at(-1);
+  if (latest?.type === 'output') {
+    entries[entries.length - 1] = { ...latest, content: `${latest.content}${content}` };
+    return entries;
+  }
+  const now = new Date().toISOString();
+  return [...entries, { id: createId('timeline-output'), type: 'output', content, createdAt: now }];
+}
+
+function mergeAgentTimelineActivity(
+  current: AgentTimelineEntry[] | undefined,
+  event: AgentActivityEvent
+): AgentTimelineEntry[] {
+  const entries = [...(current ?? [])];
+  const existingIndex = entries.findIndex(
+    (entry) => entry.type === 'activity' && entry.activities.some((activity) => activity.id === event.id)
+  );
+  if (existingIndex >= 0) {
+    const existing = entries[existingIndex];
+    if (existing.type === 'activity') {
+      entries[existingIndex] = {
+        ...existing,
+        activities: mergeAgentActivityEvents(existing.activities, event)
+      };
+    }
+    return entries;
+  }
+  const latest = entries.at(-1);
+  if (latest?.type === 'activity') {
+    entries[entries.length - 1] = {
+      ...latest,
+      activities: mergeAgentActivityEvents(latest.activities, event)
+    };
+    return entries;
+  }
+  return [
+    ...entries,
+    {
+      id: createId('timeline-activity'),
+      type: 'activity',
+      activities: [event],
+      createdAt: event.updatedAt
+    }
+  ];
 }
 
 function mergeConversationAttachments(

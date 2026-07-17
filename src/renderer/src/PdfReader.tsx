@@ -57,6 +57,7 @@ import {
   Quote,
   Sparkles,
   Square,
+  Terminal,
   Trash2,
   Underline,
   X
@@ -68,6 +69,8 @@ import {
   AiDocumentToolContext,
   AiToolCallEvent,
   AgentActivityEvent,
+  AgentTimelineActivityEntry,
+  AgentTimelineEntry,
   LibraryGroup,
   NoteDocument,
   PdfGeneratedOutline,
@@ -3900,10 +3903,12 @@ function DockChatPanel({
               <span>{conversation.anchor ? text.askAboutSelection : text.askAboutPage}</span>
             </div>
           )}
-          {conversation.messages.map((message) => {
+          {conversation.messages.map((message, messageIndex) => {
             const toolCalls = message.role === 'assistant' ? message.toolCalls ?? [] : [];
             const agentActivities = message.role === 'assistant' ? message.agentActivities ?? [] : [];
+            const agentTimeline = message.role === 'assistant' ? message.agentTimeline ?? [] : [];
             const shouldShowThinking = message.role === 'assistant' && !message.content && toolCalls.length === 0 && agentActivities.length === 0;
+            const isStreamingMessage = busy && messageIndex === conversation.messages.length - 1;
             return (
               <article key={message.id} className={`chat-message chat-message--${message.role}`}>
                 {message.role === 'assistant' && <div className="chat-avatar">{conversation.agentKind === 'codex' ? 'C' : 'S'}</div>}
@@ -3930,10 +3935,12 @@ function DockChatPanel({
                   {toolCalls.length ? (
                     <ToolCallList toolCalls={toolCalls} text={text} />
                   ) : null}
-                  {agentActivities.length ? (
+                  {!agentTimeline.length && agentActivities.length ? (
                     <AgentActivityList activities={agentActivities} />
                   ) : null}
-                  {message.content ? (
+                  {agentTimeline.length ? (
+                    <AgentTimeline entries={agentTimeline} active={isStreamingMessage} />
+                  ) : message.content ? (
                     <div className="chat-bubble">
                       <MarkdownView>{message.content}</MarkdownView>
                     </div>
@@ -4113,6 +4120,67 @@ function AgentActivityList({ activities }: { activities: AgentActivityEvent[] })
           <div className={`chat-agent-activity is-${activity.status}`} key={activity.id}>
             <span>{activity.label}</span>
             {activity.detail ? <small>{activity.detail}</small> : null}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function AgentTimeline({ entries, active }: { entries: AgentTimelineEntry[]; active: boolean }): ReactElement {
+  return (
+    <div className="codex-timeline">
+      {entries.map((entry, index) => entry.type === 'output' ? (
+        <div className="chat-bubble codex-timeline__output" key={entry.id}>
+          <MarkdownView>{entry.content}</MarkdownView>
+        </div>
+      ) : (
+        <AgentTimelineActivity
+          key={entry.id}
+          entry={entry}
+          active={active && index === entries.length - 1}
+        />
+      ))}
+    </div>
+  );
+}
+
+function AgentTimelineActivity({
+  entry,
+  active
+}: {
+  entry: AgentTimelineActivityEntry;
+  active: boolean;
+}): ReactElement {
+  const [expanded, setExpanded] = useState(active);
+  useEffect(() => {
+    setExpanded(active);
+  }, [active]);
+  const completed = entry.activities.filter((activity) => activity.status === 'completed').length;
+  const failed = entry.activities.filter((activity) => activity.status === 'error').length;
+  return (
+    <details
+      className="codex-timeline__activity"
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary>
+        <span className={`codex-timeline__summary-dot${active ? ' is-active' : ''}`} />
+        <span>{active ? 'Working' : failed ? 'Activity needs attention' : 'Activity'}</span>
+        <small>{failed ? `${failed} failed` : `${completed}/${entry.activities.length}`}</small>
+        <span className="codex-timeline__chevron">›</span>
+      </summary>
+      <div className="codex-timeline__activity-list">
+        {entry.activities.map((activity, index) => (
+          <div className={`codex-timeline__activity-item is-${activity.status}`} key={activity.id}>
+            <span className="codex-timeline__rail" aria-hidden="true">
+              <span className="codex-timeline__node">{activity.kind === 'command' ? <Terminal size={10} /> : null}</span>
+              {index < entry.activities.length - 1 ? <span className="codex-timeline__line" /> : null}
+            </span>
+            <span className="codex-timeline__activity-copy">
+              <span>{activity.label}</span>
+              {activity.detail ? <small>{activity.detail}</small> : null}
+            </span>
           </div>
         ))}
       </div>

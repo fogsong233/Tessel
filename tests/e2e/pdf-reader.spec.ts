@@ -64,6 +64,54 @@ test.describe('PDF reader flow', () => {
     await expect(composer).toContainText('Reader fixture quote Alpha Beta');
     await expect(page.locator('.chat-message')).toHaveCount(0);
   });
+
+  test('renders Codex output and activity in a collapsible timeline', async () => {
+    await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
+    const documentId = `pdf_${createHash('sha256').update(await readFile(pdfPath)).digest('hex')}`;
+    const now = new Date().toISOString();
+    await page.evaluate(async ({ documentId, now }) => {
+      await window.sidelight.saveConversation({
+        conversation: {
+          id: 'chat_timeline_fixture',
+          documentId,
+          pageNumber: 1,
+          mode: 'ask',
+          agentKind: 'codex',
+          summary: { title: 'Timeline fixture', brief: 'Codex activity timeline fixture.', keywords: [] },
+          messages: [{
+            id: 'msg_timeline_fixture',
+            role: 'assistant',
+            content: 'I will inspect the passage. The passage is about a persistent PDF reader session.',
+            agentTimeline: [
+              { id: 'output_1', type: 'output', content: 'I will inspect the passage.', createdAt: now },
+              {
+                id: 'activity_1',
+                type: 'activity',
+                createdAt: now,
+                activities: [
+                  { id: 'read_1', kind: 'reading', label: 'Reading selected passage', status: 'completed', updatedAt: now },
+                  { id: 'search_1', kind: 'tool', label: 'Checking surrounding context', status: 'completed', updatedAt: now }
+                ]
+              },
+              { id: 'output_2', type: 'output', content: 'The passage is about a persistent PDF reader session.', createdAt: now }
+            ],
+            createdAt: now
+          }],
+          createdAt: now,
+          updatedAt: now
+        }
+      });
+    }, { documentId, now });
+
+    await page.reload();
+    await expect(page.locator('.codex-timeline__output')).toHaveCount(2);
+    const activity = page.locator('.codex-timeline__activity');
+    await expect(activity).not.toHaveAttribute('open', '');
+    await activity.locator('summary').click();
+    await expect(activity).toHaveAttribute('open', '');
+    await expect(activity.locator('.codex-timeline__activity-item')).toHaveCount(2);
+    await expect(activity.locator('.codex-timeline__line')).toHaveCount(1);
+  });
 });
 
 async function createFixturePdf(filePath: string): Promise<void> {

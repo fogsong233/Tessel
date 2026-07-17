@@ -143,6 +143,7 @@ export interface ConversationMessage {
   attachments?: ConversationAttachment[];
   toolCalls?: AiToolCallEvent[];
   agentActivities?: AgentActivityEvent[];
+  agentTimeline?: AgentTimelineEntry[];
   createdAt: ISODate;
 }
 
@@ -157,6 +158,22 @@ export interface AgentActivityEvent {
   status: AgentActivityStatus;
   detail?: string;
   updatedAt: ISODate;
+}
+
+export type AgentTimelineEntry = AgentTimelineOutputEntry | AgentTimelineActivityEntry;
+
+export interface AgentTimelineOutputEntry {
+  id: string;
+  type: 'output';
+  content: string;
+  createdAt: ISODate;
+}
+
+export interface AgentTimelineActivityEntry {
+  id: string;
+  type: 'activity';
+  activities: AgentActivityEvent[];
+  createdAt: ISODate;
 }
 
 export interface ConversationAttachment {
