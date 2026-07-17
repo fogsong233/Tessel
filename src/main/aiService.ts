@@ -64,54 +64,36 @@ export class AiService {
 
     const baseMessages = buildProviderMessages(request);
     const tools = providerToolsForRequest(request);
-    let response = await postChatCompletion(provider, {
-      messages: baseMessages,
-      stream: true,
-      tools
-    }, signal);
+    let messages = baseMessages;
+    for (let round = 0; round < 4 && !signal?.aborted; round += 1) {
+      let response = await postChatCompletion(provider, { messages, stream: true, tools }, signal);
+      if (!response.ok && tools) {
+        // Some OpenAI-compatible providers reject the tools field entirely.
+        response = await postChatCompletion(provider, { messages, stream: true }, signal);
+      }
+      if (!response.ok) {
+        throw new Error(await describeProviderError(response));
+      }
+      if (!response.body) {
+        throw new Error(`AI provider returned ${response.status} without a streaming response body.`);
+      }
 
-    if (!response.ok && tools) {
-      response = await postChatCompletion(provider, {
-        messages: baseMessages,
-        stream: true
-      }, signal);
-    }
-
-    if (!response.ok) {
-      throw new Error(await describeProviderError(response));
-    }
-
-    if (!response.body) {
-      throw new Error(`AI provider returned ${response.status} without a streaming response body.`);
-    }
-
-    const streamResult = await readOpenAiStream(response.body, onEvent, signal);
-    if (streamResult.toolCalls.length > 0 && !signal?.aborted) {
+      const streamResult = await readOpenAiStream(response.body, onEvent, signal);
+      if (streamResult.toolCalls.length === 0) {
+        break;
+      }
       const toolMessages = await executeToolCalls(streamResult.toolCalls, request, this.pdfTools, (toolCall) => {
         onEvent({ toolCall });
       });
-      const secondResponse = await postChatCompletion(provider, {
-        messages: [
-          ...baseMessages,
-          {
-            role: 'assistant',
-            content: streamResult.content || null,
-            tool_calls: streamResult.toolCalls
-          },
-          ...toolMessages
-        ],
-        stream: true
-      }, signal);
-
-      if (!secondResponse.ok) {
-        throw new Error(await describeProviderError(secondResponse));
-      }
-
-      if (!secondResponse.body) {
-        throw new Error(`AI provider returned ${secondResponse.status} without a streaming response body.`);
-      }
-
-      await readOpenAiStream(secondResponse.body, onEvent, signal);
+      messages = [
+        ...messages,
+        {
+          role: 'assistant',
+          content: streamResult.content || null,
+          tool_calls: streamResult.toolCalls
+        },
+        ...toolMessages
+      ];
     }
 
     if (!signal?.aborted) {
@@ -601,10 +583,32 @@ async function runPdfTool(
 }
 
 function parseToolArguments(raw: string): Record<string, unknown> {
+  const normalized = raw
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '');
   try {
-    return JSON.parse(raw || '{}') as Record<string, unknown>;
+    const parsed = JSON.parse(normalized || '{}') as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
   } catch {
-    return {};
+    const object = normalized.match(/\{[\s\S]*\}/)?.[0];
+    if (object) {
+      try {
+        return JSON.parse(object) as Record<string, unknown>;
+      } catch {
+        // Fall through to the limited key/value recovery below.
+      }
+    }
+    const recovered: Record<string, unknown> = {};
+    for (const key of ['page_start', 'page_end', 'max_chars', 'max_items']) {
+      const value = normalized.match(new RegExp(`${key}\\s*(?:=|:)\\s*["']?(\\d+)`, 'i'))?.[1];
+      if (value) {
+        recovered[key] = Number(value);
+      }
+    }
+    return recovered;
   }
 }
 
@@ -618,23 +622,40 @@ function clampInteger(value: unknown, min: number, max: number, fallback: number
 }
 
 function normalizeToolCalls(toolCalls: ProviderToolCall[]): ProviderToolCall[] {
+  const seenIds = new Set<string>();
   return toolCalls
-    .filter((toolCall) => toolCall?.type === 'function' && toolCall.id && toolCall.function?.name)
-    .map((toolCall) => ({
-      id: toolCall.id,
+    .filter((toolCall) => toolCall?.function?.name)
+    .map((toolCall, index) => {
+      const baseId = toolCall.id?.trim() || `tool_${index + 1}`;
+      const id = seenIds.has(baseId) ? `${baseId}_${index + 1}` : baseId;
+      seenIds.add(id);
+      return {
+      id,
       type: 'function',
       function: {
-        name: toolCall.function.name,
+        name: normalizeToolName(toolCall.function.name),
         arguments: toolCall.function.arguments || '{}'
       }
-    }));
+      };
+    });
+}
+
+function normalizeToolName(name: string): string {
+  const normalized = name.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['view_current_pdf', 'read_pdf', 'read_pdf_pages', 'view_pdf', 'get_pdf_content', 'pdf_read'].includes(normalized)) {
+    return 'view_current_pdf';
+  }
+  if (['view_pdf_outline', 'read_pdf_outline', 'get_pdf_outline', 'pdf_outline'].includes(normalized)) {
+    return 'view_pdf_outline';
+  }
+  return normalized;
 }
 
 function systemPrompt(request: AiCompletionRequest): string {
   const mode = request.mode;
   const preferredLanguage = request.preferredLanguage ?? 'Simplified Chinese';
   const toolLine = request.toolContext?.documentId
-    ? 'You may call tools to inspect the current PDF by page range and to inspect the PDF outline. Prefer tools when the answer depends on text that is not already visible in the chat context. Tool results are extracted text, not screenshots.'
+    ? 'You may call only the declared tools to inspect the current PDF by page range or inspect its outline. Use exact tool names and valid JSON arguments; when uncertain, omit optional arguments. Prefer tools when the answer depends on text that is not already visible in the chat context. Tool results are extracted text, not screenshots.'
     : 'Use only the PDF context provided in the conversation.';
   const documentLine = [
     request.documentTitle ? `Current document: ${request.documentTitle}.` : undefined,
@@ -749,7 +770,7 @@ async function readOpenAiStream(
           continue;
         }
 
-        const parsed = JSON.parse(data) as {
+        let parsed: {
           choices?: Array<{
             delta?: {
               content?: string;
@@ -762,6 +783,13 @@ async function readOpenAiStream(
             };
           }>;
         };
+        try {
+          parsed = JSON.parse(data) as typeof parsed;
+        } catch {
+          // Providers sometimes emit keep-alives or malformed terminal chunks.
+          // Ignore those chunks and preserve the successfully streamed content.
+          continue;
+        }
         const delta = parsed.choices?.[0]?.delta?.content;
         if (delta) {
           content += delta;

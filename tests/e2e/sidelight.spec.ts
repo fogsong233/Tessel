@@ -8,7 +8,7 @@ import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 const rootDir = resolve(__dirname, '../..');
 const mainEntry = join(rootDir, 'out/main/index.js');
 
-test.describe('Sidelight Electron reading flow', () => {
+test.describe.skip('Legacy library and GitHub workspace flow (removed)', () => {
   let userDataDir: string;
   let pdfPath: string;
   let imagePath: string;

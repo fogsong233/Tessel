@@ -3,8 +3,11 @@ import { open, stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import { DocumentFingerprint, DocumentFormat, PdfDocumentMeta } from '../shared/domain';
 
+export const fullContentHashAlgorithm = 'sha256-full-v1';
+// Kept for reading legacy workspace snapshots during the migration. New PDFs
+// are always keyed by fullContentHashAlgorithm.
 export const sampledContentHashAlgorithm = 'sha256-size-head-tail-1m-v1';
-const sampleBytesPerEdge = 1024 * 1024;
+const hashChunkBytes = 1024 * 1024;
 
 export interface LocalDocumentIdentity {
   fileName: string;
@@ -14,22 +17,20 @@ export interface LocalDocumentIdentity {
 
 export async function identifyLocalDocument(filePath: string, assumedFormat?: DocumentFormat): Promise<LocalDocumentIdentity> {
   const fileStat = await stat(filePath);
-  const hash = await sampleFileHash(filePath, fileStat.size);
-  const sampleSize = Math.min(sampleBytesPerEdge, fileStat.size);
+  const hash = await fullFileHash(filePath);
   return {
     fileName: basename(filePath),
     format: assumedFormat ?? inferDocumentFormat(filePath),
     fingerprint: {
-      algorithm: sampledContentHashAlgorithm,
+      algorithm: fullContentHashAlgorithm,
       hash,
-      byteSize: fileStat.size,
-      sampledBytes: Math.min(fileStat.size, fileStat.size > sampleSize ? sampleSize * 2 : sampleSize)
+      byteSize: fileStat.size
     }
   };
 }
 
 export function documentIdForFingerprint(fingerprint: DocumentFingerprint): string {
-  return `doc_${fingerprint.hash.slice(0, 16)}`;
+  return `pdf_${fingerprint.hash}`;
 }
 
 export function titleFromFileName(fileName: string): string {
@@ -61,7 +62,7 @@ export function inferDocumentFormat(filePath: string): DocumentFormat {
 
 export function normalizeLibraryDocument(document: PdfDocumentMeta): PdfDocumentMeta {
   const hash = document.fingerprint?.hash ?? document.sha256;
-  const algorithm = document.fingerprint?.algorithm ?? document.hashAlgorithm ?? sampledContentHashAlgorithm;
+  const algorithm = document.fingerprint?.algorithm ?? document.hashAlgorithm ?? fullContentHashAlgorithm;
   return {
     ...document,
     format: document.format ?? inferDocumentFormat(document.fileName),
@@ -88,7 +89,7 @@ export function documentContentHash(document: PdfDocumentMeta): string {
 }
 
 export function documentHashAlgorithm(document: PdfDocumentMeta): string {
-  return document.fingerprint?.algorithm ?? document.hashAlgorithm ?? sampledContentHashAlgorithm;
+  return document.fingerprint?.algorithm ?? document.hashAlgorithm ?? fullContentHashAlgorithm;
 }
 
 export function cloudAssetPathForDocument(document: PdfDocumentMeta): string {
@@ -125,22 +126,19 @@ function cloudExtensionForFormat(format: DocumentFormat, fileName: string): stri
   }
 }
 
-async function sampleFileHash(filePath: string, fileSize: number): Promise<string> {
+async function fullFileHash(filePath: string): Promise<string> {
   const hash = createHash('sha256');
-  hash.update('sidelight-pdf-fingerprint-v1');
-  hash.update(String(fileSize));
-
-  const sampleSize = Math.min(sampleBytesPerEdge, fileSize);
   const file = await open(filePath, 'r');
   try {
-    const head = Buffer.allocUnsafe(sampleSize);
-    const headRead = await file.read(head, 0, sampleSize, 0);
-    hash.update(head.subarray(0, headRead.bytesRead));
-
-    if (fileSize > sampleSize) {
-      const tail = Buffer.allocUnsafe(sampleSize);
-      const tailRead = await file.read(tail, 0, sampleSize, Math.max(0, fileSize - sampleSize));
-      hash.update(tail.subarray(0, tailRead.bytesRead));
+    const chunk = Buffer.allocUnsafe(hashChunkBytes);
+    let position = 0;
+    while (true) {
+      const { bytesRead } = await file.read(chunk, 0, chunk.length, position);
+      if (bytesRead === 0) {
+        break;
+      }
+      hash.update(chunk.subarray(0, bytesRead));
+      position += bytesRead;
     }
   } finally {
     await file.close();

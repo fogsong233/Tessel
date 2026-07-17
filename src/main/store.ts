@@ -9,6 +9,7 @@ import {
   defaultAppPreferences,
   defaultAiProvider,
   defaultGitHubUpload,
+  defaultWebDavSync,
   GitHubUploadConfig,
   LibraryGroup,
   NoteDocument,
@@ -19,7 +20,9 @@ import {
   PdfUserBookmark,
   SafeAiProviderConfig,
   SafeGitHubUploadConfig,
-  WorkspaceSyncMode,
+  SafeWebDavSyncConfig,
+  MetadataSyncResult,
+  WebDavSyncConfig,
   WorkspaceSyncResult,
   WorkspaceBlock
 } from '../shared/domain';
@@ -30,17 +33,11 @@ import {
   normalizeLibraryDocument,
   titleFromFileName
 } from './documentIdentity';
-import {
-  hydrateOpenDocumentsFromSyncSnapshots,
-  hydrateDocumentWorkspaceFromSnapshot,
-  uploadWorkspaceSyncToGitHub,
-  WorkspaceStoreData,
-  writeWorkspaceSyncSnapshot
-} from './workspaceSync';
 import { normalizeWorkspaceBlock } from '../shared/workspacePins';
 import { normalizeNoteRange } from '../shared/notes';
 import { normalizeSelectionColors } from '../shared/selectionColors';
 import { renameWithTransientRetry } from './fileWrites';
+import { PdfSessionSnapshot, syncPdfSessionToWebDav } from './webdavSync';
 
 interface PersistedAiProviderConfig extends Omit<AiProviderConfig, 'apiKey'> {
   encryptedApiKey?: string;
@@ -52,7 +49,12 @@ interface PersistedGitHubUploadConfig extends Omit<GitHubUploadConfig, 'token'> 
   encryption?: 'safeStorage' | 'plain';
 }
 
-interface StoreFile extends WorkspaceStoreData {
+interface PersistedWebDavSyncConfig extends Omit<WebDavSyncConfig, 'password'> {
+  encryptedPassword?: string;
+  encryption?: 'safeStorage' | 'plain';
+}
+
+interface StoreFile {
   documents: PdfDocumentMeta[];
   libraryGroups: LibraryGroup[];
   conversations: Conversation[];
@@ -64,6 +66,7 @@ interface StoreFile extends WorkspaceStoreData {
   readingStates: PdfReadingState[];
   aiProvider: PersistedAiProviderConfig;
   githubUpload: PersistedGitHubUploadConfig;
+  webDavSync: PersistedWebDavSyncConfig;
   appPreferences: AppPreferences;
 }
 
@@ -90,11 +93,18 @@ const emptyStore = (): StoreFile => ({
     branch: defaultGitHubUpload.branch,
     basePath: defaultGitHubUpload.basePath
   },
+  webDavSync: {
+    enabled: defaultWebDavSync.enabled,
+    baseUrl: defaultWebDavSync.baseUrl,
+    basePath: defaultWebDavSync.basePath,
+    username: defaultWebDavSync.username
+  },
   appPreferences: defaultAppPreferences
 });
 
 export class JsonWorkspaceStore {
   private readonly storePath: string;
+  private readonly metadataSyncQueues = new Map<string, Promise<void>>();
 
   constructor() {
     this.storePath = join(app.getPath('userData'), 'workspace', 'library.json');
@@ -147,17 +157,18 @@ export class JsonWorkspaceStore {
     const identity = await identifyLocalDocument(filePath, 'pdf');
     const sha256 = identity.fingerprint.hash;
     const id = documentIdForFingerprint(identity.fingerprint);
-    await hydrateDocumentWorkspaceFromSnapshot({
-      store,
-      workspaceDir: dirname(this.storePath),
-      documentId: id,
-      contentHash: sha256
-    });
     const existing = store.documents.find((document) => document.id === id);
+    // A one-time migration keeps existing chats when an older build used a
+    // sampled fingerprint for the same local file.
+    const legacy = existing ? undefined : store.documents.find((document) => document.filePath === filePath);
+    if (legacy) {
+      rekeyDocumentSession(store, legacy.id, id);
+    }
+    const persisted = existing ?? legacy;
 
     const nextDocument: PdfDocumentMeta = {
       id,
-      title: existing?.title ?? titleFromFileName(identity.fileName),
+      title: persisted?.title ?? titleFromFileName(identity.fileName),
       fileName: identity.fileName,
       filePath,
       format: identity.format,
@@ -169,21 +180,25 @@ export class JsonWorkspaceStore {
       fingerprint: identity.fingerprint,
       sha256,
       hashAlgorithm: identity.fingerprint.algorithm,
-      inLibrary: options.addToLibrary ? true : existing?.inLibrary ?? false,
-      groupIds: existing?.groupIds ?? [],
-      pageCount: existing?.pageCount,
-      tags: existing?.tags ?? [],
-      createdAt: existing?.createdAt ?? now,
+      inLibrary: options.addToLibrary ? true : persisted?.inLibrary ?? true,
+      groupIds: [],
+      pageCount: persisted?.pageCount,
+      tags: [],
+      createdAt: persisted?.createdAt ?? now,
       updatedAt: now,
       lastOpenedAt: now
     };
 
     store.documents = [
       nextDocument,
-      ...store.documents.filter((document) => document.id !== id)
+      ...store.documents.filter((document) => document.id !== id && document.id !== legacy?.id)
     ];
     await this.write(store);
-    return withReadingState(nextDocument, store.readingStates);
+    await this.syncDocumentMetadata(id).catch((error: unknown) => {
+      console.warn('WebDAV metadata sync failed while opening PDF', error);
+    });
+    const refreshed = await this.getDocument(id);
+    return refreshed ?? withReadingState(nextDocument, store.readingStates);
   }
 
   async addDocumentToLibrary(documentId: string): Promise<PdfDocumentMeta> {
@@ -329,6 +344,7 @@ export class JsonWorkspaceStore {
       ...store.readingStates.filter((candidate) => candidate.documentId !== state.documentId)
     ];
     await this.write(store);
+    this.queueDocumentMetadataSync(state.documentId);
     return state;
   }
 
@@ -339,6 +355,7 @@ export class JsonWorkspaceStore {
       ...store.conversations.filter((candidate) => candidate.id !== conversation.id)
     ];
     await this.write(store);
+    this.queueDocumentMetadataSync(conversation.documentId);
     return conversation;
   }
 
@@ -498,6 +515,77 @@ export class JsonWorkspaceStore {
     return this.getSafeGitHubUpload();
   }
 
+  async getSafeWebDavSync(): Promise<SafeWebDavSyncConfig> {
+    const store = await this.read();
+    return {
+      enabled: store.webDavSync.enabled,
+      baseUrl: store.webDavSync.baseUrl,
+      basePath: store.webDavSync.basePath,
+      username: store.webDavSync.username,
+      hasPassword: Boolean(store.webDavSync.encryptedPassword)
+    };
+  }
+
+  async saveWebDavSync(config: WebDavSyncConfig): Promise<SafeWebDavSyncConfig> {
+    const store = await this.read();
+    const encrypted = config.password?.trim()
+      ? this.encryptSecret(config.password)
+      : {
+          value: store.webDavSync.encryptedPassword,
+          encryption: store.webDavSync.encryption
+        };
+    store.webDavSync = {
+      enabled: Boolean(config.enabled),
+      baseUrl: config.baseUrl.trim().replace(/\/+$/, ''),
+      basePath: normalizeWebDavPath(config.basePath),
+      username: config.username.trim(),
+      encryptedPassword: encrypted.value,
+      encryption: encrypted.encryption
+    };
+    await this.write(store);
+    return this.getSafeWebDavSync();
+  }
+
+  async syncDocumentMetadata(documentId: string): Promise<MetadataSyncResult> {
+    const store = await this.read();
+    const document = store.documents.find((candidate) => candidate.id === documentId);
+    if (!document) {
+      throw new Error('PDF not found');
+    }
+
+    const config = store.webDavSync;
+    const password = this.decryptSecret(config.encryptedPassword, config.encryption);
+    if (!config.enabled || !config.baseUrl || !password) {
+      return {
+        status: 'skipped',
+        documentId,
+        message: 'WebDAV metadata sync is disabled or incomplete.'
+      };
+    }
+
+    const documentHash = document.fingerprint?.hash ?? document.sha256;
+    const local = this.snapshotForDocument(store, documentId, documentHash);
+    const merged = await syncPdfSessionToWebDav({
+      config: {
+        enabled: config.enabled,
+        baseUrl: config.baseUrl,
+        basePath: config.basePath,
+        username: config.username,
+        password
+      },
+      documentHash,
+      local
+    });
+    this.applySessionSnapshot(store, documentId, merged);
+    await this.write(store);
+    return {
+      status: 'synced',
+      documentId,
+      syncedAt: merged.updatedAt,
+      message: 'PDF reading progress and chats synced through WebDAV.'
+    };
+  }
+
   async getAppPreferences(): Promise<AppPreferences> {
     const store = await this.read();
     return store.appPreferences;
@@ -511,28 +599,21 @@ export class JsonWorkspaceStore {
   }
 
   async syncWorkspace(): Promise<WorkspaceSyncResult> {
-    return this.syncWorkspaceToGitHub('sync');
+    return {
+      mode: 'sync',
+      status: 'skipped',
+      documentCount: 0,
+      message: 'GitHub workspace sync has been removed. Configure WebDAV metadata sync instead.'
+    };
   }
 
   async uploadWorkspace(): Promise<WorkspaceSyncResult> {
-    return this.syncWorkspaceToGitHub('upload');
-  }
-
-  private async syncWorkspaceToGitHub(mode: WorkspaceSyncMode): Promise<WorkspaceSyncResult> {
-    const store = await this.read();
-    const workspaceDir = dirname(this.storePath);
-    const manifest = await writeWorkspaceSyncSnapshot({ store, workspaceDir });
-    const result = await uploadWorkspaceSyncToGitHub({
-      store,
-      workspaceDir,
-      manifest,
-      mergeRemote: mode === 'sync',
-      mode,
-      token: this.decryptSecret(store.githubUpload.encryptedToken, store.githubUpload.encryption)
-    });
-    await hydrateOpenDocumentsFromSyncSnapshots({ store, workspaceDir });
-    await this.write(store);
-    return result;
+    return {
+      mode: 'upload',
+      status: 'skipped',
+      documentCount: 0,
+      message: 'PDF files are not uploaded by the reader.'
+    };
   }
 
   private async read(): Promise<StoreFile> {
@@ -548,6 +629,7 @@ export class JsonWorkspaceStore {
         libraryGroups: parsed.libraryGroups ?? fallback.libraryGroups,
         aiProvider: { ...fallback.aiProvider, ...parsed.aiProvider },
         githubUpload: { ...fallback.githubUpload, ...parsed.githubUpload },
+        webDavSync: { ...fallback.webDavSync, ...parsed.webDavSync },
         appPreferences: normalizeAppPreferences({ ...fallback.appPreferences, ...parsed.appPreferences }),
         workspaceBlocks: parsed.workspaceBlocks ?? fallback.workspaceBlocks,
         generatedOutlines: parsed.generatedOutlines ?? fallback.generatedOutlines
@@ -580,7 +662,54 @@ export class JsonWorkspaceStore {
     const tmpPath = `${this.storePath}.tmp-${process.pid}-${Date.now()}-${randomUUID()}`;
     await writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, 'utf8');
     await renameWithTransientRetry(tmpPath, this.storePath);
-    await writeWorkspaceSyncSnapshot({ store, workspaceDir: dirname(this.storePath) });
+  }
+
+  private queueDocumentMetadataSync(documentId: string): void {
+    const previous = this.metadataSyncQueues.get(documentId) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(() => this.syncDocumentMetadata(documentId))
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        console.warn(`WebDAV metadata sync failed for ${documentId}`, error);
+      });
+    this.metadataSyncQueues.set(documentId, next);
+    void next.finally(() => {
+      if (this.metadataSyncQueues.get(documentId) === next) {
+        this.metadataSyncQueues.delete(documentId);
+      }
+    });
+  }
+
+  private snapshotForDocument(store: StoreFile, documentId: string, documentHash: string): PdfSessionSnapshot {
+    const readingState = store.readingStates.find((state) => state.documentId === documentId);
+    const conversations = store.conversations.filter((conversation) => conversation.documentId === documentId);
+    const latestConversationUpdate = conversations.map((conversation) => conversation.updatedAt).sort().at(-1);
+    return {
+      version: 1,
+      documentHash,
+      updatedAt: [readingState?.updatedAt, latestConversationUpdate, new Date().toISOString()]
+        .filter((value): value is string => Boolean(value))
+        .sort()
+        .at(-1)!,
+      readingState,
+      conversations
+    };
+  }
+
+  private applySessionSnapshot(store: StoreFile, documentId: string, snapshot: PdfSessionSnapshot): void {
+    if (snapshot.readingState) {
+      store.readingStates = [
+        { ...snapshot.readingState, documentId },
+        ...store.readingStates.filter((state) => state.documentId !== documentId)
+      ];
+    }
+
+    const remoteConversationIds = new Set(snapshot.conversations.map((conversation) => conversation.id));
+    store.conversations = [
+      ...snapshot.conversations.map((conversation) => ({ ...conversation, documentId })),
+      ...store.conversations.filter((conversation) => conversation.documentId !== documentId || !remoteConversationIds.has(conversation.id))
+    ];
   }
 
   private encryptSecret(secret: string | undefined): { value?: string; encryption?: 'safeStorage' | 'plain' } {
@@ -620,6 +749,24 @@ function normalizeUploadPath(path: string): string {
   return trimmed || defaultGitHubUpload.basePath;
 }
 
+function normalizeWebDavPath(path: string): string {
+  const normalized = path.trim().replace(/^\/+|\/+$/g, '');
+  return normalized || defaultWebDavSync.basePath;
+}
+
+function rekeyDocumentSession(store: StoreFile, previousId: string, nextId: string): void {
+  const rekey = <T extends { documentId: string }>(items: T[]): T[] =>
+    items.map((item) => item.documentId === previousId ? { ...item, documentId: nextId } : item);
+
+  store.conversations = rekey(store.conversations);
+  store.notes = rekey(store.notes);
+  store.workspaceBlocks = rekey(store.workspaceBlocks);
+  store.generatedOutlines = rekey(store.generatedOutlines);
+  store.marks = rekey(store.marks);
+  store.bookmarks = rekey(store.bookmarks);
+  store.readingStates = rekey(store.readingStates);
+}
+
 function normalizeAiLanguage(language: string): AppPreferences['aiLanguage'] {
   if (language === 'English') {
     return 'English';
@@ -636,7 +783,24 @@ function normalizeAppPreferences(config: AppPreferences): AppPreferences {
   return {
     uiLanguage: config.uiLanguage === 'zh-CN' ? 'zh-CN' : 'en',
     aiLanguage: normalizeAiLanguage(config.aiLanguage),
-    selectionColors: normalizeSelectionColors(config.selectionColors)
+    selectionColors: normalizeSelectionColors(config.selectionColors),
+    experimentalCodexAgent: {
+      enabled: Boolean(config.experimentalCodexAgent?.enabled),
+      ...(config.experimentalCodexAgent?.chatModel?.trim()
+        ? { chatModel: config.experimentalCodexAgent.chatModel.trim() }
+        : config.experimentalCodexAgent?.model?.trim()
+          ? { chatModel: config.experimentalCodexAgent.model.trim() }
+          : {}),
+      ...(config.experimentalCodexAgent?.translationModel?.trim()
+        ? { translationModel: config.experimentalCodexAgent.translationModel.trim() }
+        : {}),
+      ...(config.experimentalCodexAgent?.chatReasoningEffort?.trim()
+        ? { chatReasoningEffort: config.experimentalCodexAgent.chatReasoningEffort.trim() }
+        : {}),
+      ...(config.experimentalCodexAgent?.translationReasoningEffort?.trim()
+        ? { translationReasoningEffort: config.experimentalCodexAgent.translationReasoningEffort.trim() }
+        : {})
+    }
   };
 }
 

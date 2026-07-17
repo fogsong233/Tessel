@@ -32,9 +32,10 @@ import {
   PDFViewer,
   ScrollMode
 } from 'pdfjs-dist/web/pdf_viewer';
-import workerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
+import { workerUrl } from './assets/pdfjs';
 import {
   BookOpen,
+  ArrowLeft,
   BookmarkPlus,
   ChevronsLeft,
   ChevronsRight,
@@ -66,6 +67,7 @@ import {
   ConversationAttachment,
   AiDocumentToolContext,
   AiToolCallEvent,
+  AgentActivityEvent,
   LibraryGroup,
   NoteDocument,
   PdfGeneratedOutline,
@@ -126,6 +128,7 @@ interface PdfReaderProps {
   activeConversationId?: string;
   notes: NoteDocument[];
   transientAid?: ReaderTransientAid;
+  composerPrefill?: { conversationId: string; text: string; nonce: string };
   chatOpen: boolean;
   busy: boolean;
   canStopGeneration: boolean;
@@ -164,7 +167,7 @@ interface PdfReaderProps {
 
 type DockTab = 'chat' | 'notes' | 'search' | 'bookmarks' | 'marks';
 type DockForegroundPanel = 'chat' | 'note' | 'transient';
-type LeftTab = 'library' | 'outline';
+type LeftTab = 'outline';
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error';
 
 const dockHandleGutter = 24;
@@ -226,6 +229,13 @@ interface ZoomPageLock {
   pageNumber: number;
   releaseTimer?: number;
   version: number;
+}
+
+interface PdfNavigationHistoryEntry {
+  pageNumber: number;
+  scale: number;
+  scrollLeft: number;
+  scrollTop: number;
 }
 
 interface WorkspaceBlockLayout {
@@ -473,6 +483,7 @@ export function PdfReader({
   activeConversationId,
   notes,
   transientAid,
+  composerPrefill,
   chatOpen,
   busy,
   canStopGeneration,
@@ -552,7 +563,7 @@ export function PdfReader({
   const [outlineBusy, setOutlineBusy] = useState(false);
   const [selectionPopover, setSelectionPopover] = useState<SelectionPopover>();
   const [activeMark, setActiveMark] = useState<ActiveMarkPopover>();
-  const [leftTab, setLeftTab] = useState<LeftTab>('outline');
+  const [leftTab] = useState<LeftTab>('outline');
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [dockTab, setDockTab] = useState<DockTab>('chat');
   const [dockWidth, setDockWidth] = useState<number>();
@@ -564,6 +575,7 @@ export function PdfReader({
   const [optimisticWorkspaceBlocks, setOptimisticWorkspaceBlocks] = useState<WorkspaceBlock[]>([]);
   const [pdfReadingSignal, setPdfReadingSignal] = useState(0);
   const [canvasDragMode, setCanvasDragMode] = useState(false);
+  const [linkHistory, setLinkHistory] = useState<PdfNavigationHistoryEntry[]>([]);
 
   const effectiveWorkspaceBlocks = useMemo(() => {
     const byId = new Map<string, WorkspaceBlock>();
@@ -1627,6 +1639,81 @@ export function PdfReader({
     runtime.pdfViewer.currentPageNumber = activePage;
   }, [activePage, status]);
 
+  const rememberLinkOrigin = useCallback((): PdfNavigationHistoryEntry | undefined => {
+    const runtime = runtimeRef.current;
+    const container = containerRef.current;
+    if (!runtime || !container) {
+      return undefined;
+    }
+
+    const entry: PdfNavigationHistoryEntry = {
+      pageNumber: runtime.pdfViewer.currentPageNumber || activePageRef.current,
+      scale: runtime.pdfViewer.currentScale,
+      scrollLeft: container.scrollLeft,
+      scrollTop: container.scrollTop
+    };
+    setLinkHistory((current) => [...current, entry].slice(-40));
+    return entry;
+  }, []);
+
+  const restoreLinkViewport = useCallback((entry: PdfNavigationHistoryEntry): void => {
+    const runtime = runtimeRef.current;
+    const container = containerRef.current;
+    if (!runtime || !container) {
+      return;
+    }
+
+    // PDF.js may apply destination zoom and horizontal offsets. Internal links
+    // should only move the reading column vertically.
+    const restore = (): void => {
+      if (Math.abs(runtime.pdfViewer.currentScale - entry.scale) > 0.001) {
+        runtime.pdfViewer.currentScale = entry.scale;
+      }
+      container.scrollLeft = entry.scrollLeft;
+    };
+    window.requestAnimationFrame(() => {
+      restore();
+      window.requestAnimationFrame(restore);
+    });
+  }, []);
+
+  const navigateToDestination = useCallback((dest: string | unknown[]): void => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return;
+    }
+    void runtime.linkService.goToDestination(dest);
+  }, []);
+
+  const goBackFromPdfLink = useCallback((): void => {
+    setLinkHistory((current) => {
+      const entry = current.at(-1);
+      if (!entry) {
+        return current;
+      }
+      const runtime = runtimeRef.current;
+      const container = containerRef.current;
+      if (runtime && container) {
+        if (Math.abs(runtime.pdfViewer.currentScale - entry.scale) > 0.001) {
+          runtime.pdfViewer.currentScale = entry.scale;
+        }
+        runtime.pdfViewer.currentPageNumber = entry.pageNumber;
+        runtime.pdfViewer.scrollPageIntoView({ pageNumber: entry.pageNumber });
+        activePageRef.current = entry.pageNumber;
+        onPageChangeRef.current(entry.pageNumber);
+        window.requestAnimationFrame(() => {
+          container.scrollLeft = entry.scrollLeft;
+          container.scrollTop = entry.scrollTop;
+          window.requestAnimationFrame(() => {
+            container.scrollLeft = entry.scrollLeft;
+            container.scrollTop = entry.scrollTop;
+          });
+        });
+      }
+      return current.slice(0, -1);
+    });
+  }, []);
+
   useEffect(() => {
     if (!source || !containerRef.current || !viewerRef.current) {
       runtimeRef.current = undefined;
@@ -1646,6 +1733,15 @@ export function PdfReader({
       externalLinkTarget: LinkTarget.BLANK,
       ignoreDestinationZoom: true
     });
+    const nativeGoToDestination = linkService.goToDestination.bind(linkService);
+    linkService.goToDestination = (dest) => {
+      const origin = rememberLinkOrigin();
+      return Promise.resolve(nativeGoToDestination(dest)).finally(() => {
+        if (origin) {
+          restoreLinkViewport(origin);
+        }
+      });
+    };
     const findController = new PDFFindController({ eventBus, linkService });
     const pdfViewer = new PDFViewer({
       container: containerRef.current,
@@ -1654,7 +1750,9 @@ export function PdfReader({
       linkService,
       findController,
       removePageBorders: true,
-      maxCanvasPixels: 4096 * 4096
+      // Do not cap page rasterization at 16 MP: that cap made vector source
+      // PDFs look blurry after zooming. PDF.js will re-render at the real zoom.
+      maxCanvasPixels: 0
     });
 
     linkService.setViewer(pdfViewer);
@@ -1794,7 +1892,7 @@ export function PdfReader({
       loadingTask?.destroy().catch(() => undefined);
       pdfViewer.cleanup();
     };
-  }, [renderMarks, source]);
+  }, [rememberLinkOrigin, renderMarks, restoreLinkViewport, source]);
 
   const jumpToPage = useCallback((pageNumber: number): void => {
     const runtime = runtimeRef.current;
@@ -2176,10 +2274,10 @@ export function PdfReader({
                 runtimeRef.current.pdfViewer.currentScaleValue = 'page-width';
               }
             }}
-            onJumpToDestination={(dest) => {
-              void runtimeRef.current?.linkService.goToDestination(dest as string | unknown[]);
-            }}
+            onJumpToDestination={navigateToDestination}
             onJumpToPage={jumpToPage}
+            canGoBack={linkHistory.length > 0}
+            onHistoryBack={goBackFromPdfLink}
             onGenerateOutline={() => onGenerateOutline(buildDocumentToolContext())}
             onCollapse={() => setLeftPanelOpen(false)}
             onLoadDocument={onLoadDocument}
@@ -2191,7 +2289,7 @@ export function PdfReader({
             onSearchQueryChange={setSearchQuery}
             onSubmitPageJump={submitPageJump}
             onSubmitSearch={submitSearch}
-            onTabChange={setLeftTab}
+            onTabChange={() => undefined}
             onZoomIn={() => zoomViewport('in')}
             onZoomOut={() => zoomViewport('out')}
           />
@@ -2248,6 +2346,7 @@ export function PdfReader({
                         busy={busy}
                         canStopGeneration={canStopGeneration}
                         chatOpen={chatOpen}
+                        composerPrefill={composerPrefill}
                         conversations={visibleConversations}
                         allConversations={conversations}
                         marks={pageMarks}
@@ -2418,6 +2517,8 @@ function ReaderLeftPanel({
   onFitWidth,
   onJumpToDestination,
   onJumpToPage,
+  canGoBack,
+  onHistoryBack,
   onGenerateOutline,
   onCollapse,
   onLoadDocument,
@@ -2459,6 +2560,8 @@ function ReaderLeftPanel({
   onFitWidth(): void;
   onJumpToDestination(dest: string | unknown[]): void;
   onJumpToPage(pageNumber: number): void;
+  canGoBack: boolean;
+  onHistoryBack(): void;
   onGenerateOutline(): void;
   onCollapse(): void;
   onLoadDocument(documentId: string): void;
@@ -2504,36 +2607,10 @@ function ReaderLeftPanel({
         </div>
       </header>
 
-      <nav className="panel-breadcrumb" aria-label="Left panel view">
-        <button
-          type="button"
-          className={leftTab === 'library' ? 'is-active' : ''}
-          onClick={() => onTabChange('library')}
-        >
-          <FolderOpen size={14} />
-          {t.library}
-        </button>
-        <span>/</span>
-        <button
-          type="button"
-          className={leftTab === 'outline' ? 'is-active' : ''}
-          disabled={!hasDocument}
-          onClick={() => onTabChange('outline')}
-        >
-          <ListTree size={14} />
-          {t.outline}
-        </button>
-      </nav>
-
-      {activeDocument && activeDocument.inLibrary === false && (
-        <div className="reader-library-status">
-          <span>{t.transientPdf}</span>
-          <button type="button" className="quiet-button" onClick={onAddToLibrary}>
-            <BookOpen size={14} />
-            {t.addToLibrary}
-          </button>
-        </div>
-      )}
+      <div className="panel-breadcrumb" aria-label="Reader tools">
+        <ListTree size={14} />
+        <span>{t.outline}</span>
+      </div>
 
       <form className="panel-search" onSubmit={onSubmitSearch}>
         <Search size={15} />
@@ -2580,38 +2657,12 @@ function ReaderLeftPanel({
         <button className="icon-button" type="button" title={t.bookmarkPage} disabled={!hasDocument} onClick={onAddBookmark}>
           <BookmarkPlus size={15} />
         </button>
+        <button className="icon-button" type="button" title="Back to link origin" disabled={!canGoBack} onClick={onHistoryBack}>
+          <ArrowLeft size={15} />
+        </button>
       </div>
 
       <div className="left-panel__body">
-        {leftTab === 'library' && (
-          <div className="library-panel">
-            <button type="button" className="open-document-button" onClick={onOpenPdf}>
-              <FilePlus2 size={16} />
-              {t.openPdf}
-            </button>
-            <div className="document-list">
-              {documents.length === 0 && <span className="empty-line">{t.noPdfs}</span>}
-              {documents.map((document) => (
-                <button
-                  key={document.id}
-                  type="button"
-                  title={document.title}
-                  className={activeDocumentId === document.id ? 'document-row is-active' : 'document-row'}
-                  onClick={() => onLoadDocument(document.id)}
-                >
-                  <FileText size={15} />
-                  <span>
-                    {document.title}
-                    {document.groupIds?.length ? (
-                      <small>{document.groupIds.map((groupId) => groups.find((group) => group.id === groupId)?.name).filter(Boolean).join(', ')}</small>
-                    ) : null}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
         {leftTab === 'outline' && (
           <div className="outline-list">
             {outline.length === 0 && (
@@ -2702,6 +2753,7 @@ function ReaderDock({
   busy,
   canStopGeneration,
   chatOpen,
+  composerPrefill,
   conversations,
   allConversations,
   marks,
@@ -2744,6 +2796,7 @@ function ReaderDock({
   busy: boolean;
   canStopGeneration: boolean;
   chatOpen: boolean;
+  composerPrefill?: { conversationId: string; text: string; nonce: string };
   conversations: Conversation[];
   allConversations: Conversation[];
   marks: PdfMark[];
@@ -2806,50 +2859,6 @@ function ReaderDock({
           >
             <MessageCircle size={17} />
           </Button>
-          <Button
-            type="button"
-            text
-            rounded
-            className={activeTab === 'notes' ? 'is-active' : ''}
-            title={t.notes}
-            aria-label={t.notes}
-            onClick={() => onTabChange('notes')}
-          >
-            <FileText size={17} />
-          </Button>
-          <Button
-            type="button"
-            text
-            rounded
-            className={activeTab === 'search' ? 'is-active' : ''}
-            title={t.search}
-            aria-label={t.search}
-            onClick={() => onTabChange('search')}
-          >
-            <Search size={17} />
-          </Button>
-          <Button
-            type="button"
-            text
-            rounded
-            className={activeTab === 'bookmarks' ? 'is-active' : ''}
-            title={t.bookmarks}
-            aria-label={t.bookmarks}
-            onClick={() => onTabChange('bookmarks')}
-          >
-            <BookmarkPlus size={17} />
-          </Button>
-          <Button
-            type="button"
-            text
-            rounded
-            className={activeTab === 'marks' ? 'is-active' : ''}
-            title={t.highlights}
-            aria-label={t.highlights}
-            onClick={() => onTabChange('marks')}
-          >
-            <Highlighter size={17} />
-          </Button>
         </span>
         <span className="dock-iconbar__actions">
           <Button
@@ -2879,10 +2888,11 @@ function ReaderDock({
           busy={busy}
           canStopGeneration={canStopGeneration}
           conversation={activeConversation}
+          composerPrefill={composerPrefill?.conversationId === activeConversation.id ? composerPrefill : undefined}
           pdfReadingSignal={pdfReadingSignal}
           text={t}
           onClose={onCloseConversation}
-          onPin={() => onPinConversation(activeConversation)}
+          onPin={() => undefined}
           onPinImage={(attachment) => onPinImage(attachment, activeConversation)}
           onSend={(prompt, attachments) => onSendMessage(activeConversation.id, prompt, attachments)}
           onStop={onStopGeneration}
@@ -3257,17 +3267,6 @@ function DockNoteEditorPanel({
           onClick={onDelete}
         >
           <Trash2 size={15} />
-        </Button>
-        <Button
-          type="button"
-          text
-          rounded
-          className="panel-pin-button"
-          title={text.pinToCanvas}
-          aria-label={text.pinToCanvas}
-          onClick={onPin}
-        >
-          <Pin size={15} />
         </Button>
         <Button
           type="button"
@@ -3759,6 +3758,7 @@ function DockChatPanel({
   busy,
   canStopGeneration,
   conversation,
+  composerPrefill,
   pdfReadingSignal,
   text,
   onClose,
@@ -3770,6 +3770,7 @@ function DockChatPanel({
   busy: boolean;
   canStopGeneration: boolean;
   conversation: Conversation;
+  composerPrefill?: { text: string; nonce: string };
   pdfReadingSignal: number;
   text: ReaderText;
   onClose(): void;
@@ -3797,6 +3798,14 @@ function DockChatPanel({
     textarea.style.height = '0px';
     textarea.style.height = `${Math.min(textarea.scrollHeight, 144)}px`;
   }, [draft]);
+
+  useEffect(() => {
+    if (!composerPrefill) {
+      return;
+    }
+    setDraft((current) => current.trim() ? `${current.trimEnd()}\n\n${composerPrefill.text}` : composerPrefill.text);
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [composerPrefill?.nonce]);
 
   useEffect(() => {
     const node = messagesRef.current;
@@ -3866,17 +3875,6 @@ function DockChatPanel({
           type="button"
           text
           rounded
-          className="panel-pin-button"
-          title={text.pinToCanvas}
-          aria-label={text.pinToCanvas}
-          onClick={onPin}
-        >
-          <Pin size={15} />
-        </Button>
-        <Button
-          type="button"
-          text
-          rounded
           className="panel-close-button"
           title={text.collapseChat}
           aria-label={text.collapseChat}
@@ -3904,12 +3902,13 @@ function DockChatPanel({
           )}
           {conversation.messages.map((message) => {
             const toolCalls = message.role === 'assistant' ? message.toolCalls ?? [] : [];
-            const shouldShowThinking = message.role === 'assistant' && !message.content && toolCalls.length === 0;
+            const agentActivities = message.role === 'assistant' ? message.agentActivities ?? [] : [];
+            const shouldShowThinking = message.role === 'assistant' && !message.content && toolCalls.length === 0 && agentActivities.length === 0;
             return (
               <article key={message.id} className={`chat-message chat-message--${message.role}`}>
-                {message.role === 'assistant' && <div className="chat-avatar">S</div>}
+                {message.role === 'assistant' && <div className="chat-avatar">{conversation.agentKind === 'codex' ? 'C' : 'S'}</div>}
                 <div className="chat-message__content">
-                  <div className="chat-message__role">{message.role === 'assistant' ? 'Sidelight' : 'You'}</div>
+                  <div className="chat-message__role">{message.role === 'assistant' ? conversation.agentKind === 'codex' ? 'Codex' : 'Sidelight' : 'You'}</div>
                   {message.attachments?.length ? (
                     <div className="chat-attachments">
                       {message.attachments.map((attachment) => (
@@ -3930,6 +3929,9 @@ function DockChatPanel({
                   ) : null}
                   {toolCalls.length ? (
                     <ToolCallList toolCalls={toolCalls} text={text} />
+                  ) : null}
+                  {agentActivities.length ? (
+                    <AgentActivityList activities={agentActivities} />
                   ) : null}
                   {message.content ? (
                     <div className="chat-bubble">
@@ -4101,6 +4103,23 @@ function ToolCallList({
   );
 }
 
+function AgentActivityList({ activities }: { activities: AgentActivityEvent[] }): ReactElement {
+  const completed = activities.filter((activity) => activity.status === 'completed').length;
+  return (
+    <details className="chat-agent-activities" open={activities.some((activity) => activity.status === 'started')}>
+      <summary><Sparkles size={13} />Codex activity <small>{completed}/{activities.length}</small></summary>
+      <div className="chat-agent-activities__list">
+        {activities.map((activity) => (
+          <div className={`chat-agent-activity is-${activity.status}`} key={activity.id}>
+            <span>{activity.label}</span>
+            {activity.detail ? <small>{activity.detail}</small> : null}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 function toolCallTitle(toolCall: AiToolCallEvent, text: ReaderText): string {
   if (toolCall.name === 'view_current_pdf') {
     return text.toolReadPdf;
@@ -4205,15 +4224,6 @@ function SelectionToolbar({
           {text.quote}
         </button>
       )}
-      <button
-        type="button"
-        className="selection-toolbar__action selection-toolbar__action--note"
-        title={text.openNote}
-        onClick={() => onCreateNote(selection)}
-      >
-        <FileText size={15} />
-        {text.notes}
-      </button>
       <button
         type="button"
         className="selection-toolbar__action selection-toolbar__action--summary"

@@ -8,6 +8,7 @@ export type LibraryGroupId = string;
 
 export type AiMode = 'ask' | 'explain' | 'translate' | 'summarize' | 'lesson';
 export type ConversationRole = 'user' | 'assistant' | 'system';
+export type ConversationAgentKind = 'default' | 'codex';
 export type PdfMarkKind = 'highlight' | 'underline';
 export type SelectionColorRole = 'highlight' | 'underline' | 'chat' | 'note' | 'summary' | 'translate';
 export type ConversationAttachmentKind = 'image';
@@ -141,7 +142,21 @@ export interface ConversationMessage {
   content: string;
   attachments?: ConversationAttachment[];
   toolCalls?: AiToolCallEvent[];
+  agentActivities?: AgentActivityEvent[];
   createdAt: ISODate;
+}
+
+export type AgentActivityKind = 'reading' | 'tool' | 'command' | 'artifact';
+export type AgentActivityStatus = 'started' | 'completed' | 'error';
+
+/** A user-visible activity record. It intentionally never contains model reasoning. */
+export interface AgentActivityEvent {
+  id: string;
+  kind: AgentActivityKind;
+  label: string;
+  status: AgentActivityStatus;
+  detail?: string;
+  updatedAt: ISODate;
 }
 
 export interface ConversationAttachment {
@@ -180,6 +195,8 @@ export interface Conversation {
   pageNumber?: number;
   anchor?: TextAnchor;
   mode: AiMode;
+  agentKind?: ConversationAgentKind;
+  codexThreadId?: string;
   summary: ConversationSummary;
   messages: ConversationMessage[];
   createdAt: ISODate;
@@ -244,6 +261,31 @@ export interface SafeGitHubUploadConfig extends Omit<GitHubUploadConfig, 'token'
   hasToken: boolean;
 }
 
+/**
+ * WebDAV stores reader metadata only. PDF files always remain in the user's
+ * local filesystem and are identified by their full SHA-256 digest.
+ */
+export interface WebDavSyncConfig {
+  enabled: boolean;
+  baseUrl: string;
+  basePath: string;
+  username: string;
+  password?: string;
+}
+
+export interface SafeWebDavSyncConfig extends Omit<WebDavSyncConfig, 'password'> {
+  hasPassword: boolean;
+}
+
+export type MetadataSyncStatus = 'skipped' | 'synced';
+
+export interface MetadataSyncResult {
+  status: MetadataSyncStatus;
+  documentId: DocumentId;
+  syncedAt?: ISODate;
+  message: string;
+}
+
 export type WorkspaceSyncMode = 'sync' | 'upload';
 export type WorkspaceSyncStatus = 'skipped' | 'uploaded';
 
@@ -259,6 +301,17 @@ export interface AppPreferences {
   uiLanguage: UiLanguage;
   aiLanguage: AiPreferredLanguage;
   selectionColors: SelectionColorPreferences;
+  experimentalCodexAgent: ExperimentalCodexAgentPreferences;
+}
+
+export interface ExperimentalCodexAgentPreferences {
+  enabled: boolean;
+  /** @deprecated Migrated to chatModel on the next settings save. */
+  model?: string;
+  chatModel?: string;
+  translationModel?: string;
+  chatReasoningEffort?: string;
+  translationReasoningEffort?: string;
 }
 
 export interface SelectionColorPreferences {
@@ -311,6 +364,7 @@ export interface AiDocumentToolContext {
   pageStart?: number;
   pageEnd?: number;
   selectedText?: string;
+  selectionRects?: AnchorRect[];
   pdfText?: string;
   outline?: AiPdfOutlineItem[];
   highlights?: AiPdfHighlightContext[];
@@ -348,10 +402,53 @@ export interface AiStreamEvent {
   streamId: string;
   delta?: string;
   toolCall?: AiToolCallEvent;
+  activity?: AgentActivityEvent;
+  artifacts?: ConversationAttachment[];
+  agentThreadId?: string;
   done?: boolean;
   cancelled?: boolean;
   error?: string;
   usedProvider?: string;
+}
+
+export interface CodexStreamRequest {
+  streamId: string;
+  conversationId: ConversationId;
+  transient?: boolean;
+  codexThreadId?: string;
+  documentId: DocumentId;
+  prompt: string;
+  attachments?: ConversationAttachment[];
+  history?: ConversationMessage[];
+  context: AiDocumentToolContext;
+  model?: string;
+  preferredLanguage?: AiPreferredLanguage;
+  effort?: string;
+}
+
+export interface CodexAvailability {
+  available: boolean;
+  version?: string;
+  reason?: string;
+}
+
+export interface CodexModelInfo {
+  id: string;
+  displayName: string;
+  description?: string;
+  supportedReasoningEfforts: string[];
+  defaultReasoningEffort?: string;
+}
+
+export interface ReaderAiStreamRequest {
+  streamId: string;
+  documentId?: DocumentId;
+  conversationId?: ConversationId;
+  codexThreadId?: string;
+  transient?: boolean;
+  history?: ConversationMessage[];
+  request: AiCompletionRequest;
+  codexContext?: AiDocumentToolContext;
 }
 
 export interface SaveConversationInput {
@@ -419,11 +516,18 @@ export interface SidelightApi {
   saveAiProvider(config: AiProviderConfig): Promise<SafeAiProviderConfig>;
   getGitHubUpload(): Promise<SafeGitHubUploadConfig>;
   saveGitHubUpload(config: GitHubUploadConfig): Promise<SafeGitHubUploadConfig>;
+  getWebDavSync(): Promise<SafeWebDavSyncConfig>;
+  saveWebDavSync(config: WebDavSyncConfig): Promise<SafeWebDavSyncConfig>;
+  syncDocumentMetadata(documentId: DocumentId): Promise<MetadataSyncResult>;
   getAppPreferences(): Promise<AppPreferences>;
   saveAppPreferences(config: AppPreferences): Promise<AppPreferences>;
   listAiModels(config: AiProviderConfig): Promise<AiModelInfo[]>;
   completeAi(request: AiCompletionRequest): Promise<AiCompletionResponse>;
   completeAiStream(input: AiStreamRequest): Promise<void>;
+  completeReaderAiStream(input: ReaderAiStreamRequest): Promise<void>;
+  completeCodexStream(input: CodexStreamRequest): Promise<void>;
+  getCodexAvailability(): Promise<CodexAvailability>;
+  listCodexModels(): Promise<CodexModelInfo[]>;
   cancelAiStream(streamId: string): Promise<void>;
   onAiStreamEvent(listener: (event: AiStreamEvent) => void): () => void;
   onLibraryChanged(listener: () => void): () => void;
@@ -446,6 +550,14 @@ export const defaultGitHubUpload: SafeGitHubUploadConfig = {
   hasToken: false
 };
 
+export const defaultWebDavSync: SafeWebDavSyncConfig = {
+  enabled: false,
+  baseUrl: '',
+  basePath: 'sidelight',
+  username: '',
+  hasPassword: false
+};
+
 export const defaultAppPreferences: AppPreferences = {
   uiLanguage: 'en',
   aiLanguage: 'Simplified Chinese',
@@ -456,5 +568,8 @@ export const defaultAppPreferences: AppPreferences = {
     note: '#f5e3a6',
     summary: '#ded7f0',
     translate: '#d7eadf'
+  },
+  experimentalCodexAgent: {
+    enabled: false
   }
 };

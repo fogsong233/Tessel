@@ -30,7 +30,10 @@ import {
   AiDocumentToolContext,
   AiPreferredLanguage,
   AiToolCallEvent,
+  AgentActivityEvent,
   AppPreferences,
+  CodexAvailability,
+  CodexModelInfo,
   Conversation,
   ConversationAttachment,
   ConversationMessage,
@@ -50,7 +53,10 @@ import {
   LibraryGroup,
   SafeAiProviderConfig,
   SafeGitHubUploadConfig,
+  SafeWebDavSyncConfig,
+  WebDavSyncConfig,
   TextAnchor,
+  ReaderAiStreamRequest,
   UiLanguage,
   WorkspaceBlock,
   WorkspaceSyncResult
@@ -89,6 +95,7 @@ export function App(): ReactElement {
   const [generatedOutline, setGeneratedOutline] = useState<PdfGeneratedOutline | null>(null);
   const [aiProvider, setAiProvider] = useState<SafeAiProviderConfig>();
   const [githubUpload, setGitHubUpload] = useState<SafeGitHubUploadConfig>();
+  const [webDavSync, setWebDavSync] = useState<SafeWebDavSyncConfig>();
   const [appPreferences, setAppPreferences] = useState<AppPreferences>(defaultAppPreferences);
   const [transientAid, setTransientAid] = useState<TransientAidState>();
   const [panelOpen, setPanelOpen] = useState(false);
@@ -100,19 +107,13 @@ export function App(): ReactElement {
   const [readerLoadPending, setReaderLoadPending] = useState(false);
   const [readerLoadError, setReaderLoadError] = useState<string>();
   const [activeStream, setActiveStream] = useState<{ streamId: string; conversationId?: string }>();
+  const [quotedDraft, setQuotedDraft] = useState<{ conversationId: string; text: string; nonce: string }>();
   const loadedReaderDocumentRef = useRef<string | undefined>(undefined);
   const readerLoadRequestRef = useRef<string | undefined>(undefined);
   const stoppedStreamIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    void refreshLibrary();
     void refreshSettings();
-  }, []);
-
-  useEffect(() => {
-    return window.sidelight.onLibraryChanged(() => {
-      void refreshLibrary();
-    });
   }, []);
 
   useEffect(() => {
@@ -131,18 +132,6 @@ export function App(): ReactElement {
     [activeConversationId, conversations]
   );
 
-  useEffect(() => {
-    if (readerDocumentId) {
-      return;
-    }
-
-    const refreshOnFocus = (): void => {
-      void refreshLibrary();
-    };
-    window.addEventListener('focus', refreshOnFocus);
-    return () => window.removeEventListener('focus', refreshOnFocus);
-  }, [readerDocumentId]);
-
   async function refreshLibrary(): Promise<void> {
     const [loadedDocuments, loadedGroups] = await Promise.all([
       window.sidelight.listDocuments(),
@@ -153,13 +142,13 @@ export function App(): ReactElement {
   }
 
   async function refreshSettings(): Promise<void> {
-    const [provider, upload, preferences] = await Promise.all([
+    const [provider, sync, preferences] = await Promise.all([
       window.sidelight.getAiProvider(),
-      window.sidelight.getGitHubUpload(),
+      window.sidelight.getWebDavSync(),
       window.sidelight.getAppPreferences()
     ]);
     setAiProvider(provider);
-    setGitHubUpload(upload);
+    setWebDavSync(sync);
     setAppPreferences(preferences);
   }
 
@@ -168,8 +157,9 @@ export function App(): ReactElement {
     if (!result) {
       return;
     }
-
-    await refreshLibrary();
+    if (!readerDocumentId) {
+      window.close();
+    }
   }
 
   async function openDocumentWindow(documentId: string): Promise<void> {
@@ -278,6 +268,7 @@ export function App(): ReactElement {
       pageNumber: anchor.pageNumber,
       anchor,
       mode: 'ask',
+      agentKind: appPreferences.experimentalCodexAgent.enabled ? 'codex' : 'default',
       summary: {
         title: compactTitle(anchor.quote, 'ask'),
         brief: compactSentence(anchor.quote, 128),
@@ -304,6 +295,7 @@ export function App(): ReactElement {
       documentId: activeDocument.id,
       pageNumber,
       mode: 'ask',
+      agentKind: appPreferences.experimentalCodexAgent.enabled ? 'codex' : 'default',
       summary: {
         title: `Question: Page ${pageNumber}`,
         brief: `Free chat attached to page ${pageNumber}.`,
@@ -341,17 +333,11 @@ export function App(): ReactElement {
 
     await ensureSelectionMark('highlight', selection, 'chat');
     focusConversation(activeConversation.id);
-    await sendMessage(
-      activeConversation.id,
-      promptForQuotedSelection(selection, appPreferences.aiLanguage),
-      [],
-      {
-        currentPage: selection.pageNumber,
-        pageStart: selection.pageNumber,
-        pageEnd: selection.pageNumber,
-        selectedText: selection.quote
-      }
-    );
+    setQuotedDraft({
+      conversationId: activeConversation.id,
+      text: `> ${selection.quote}\n\n`,
+      nonce: createId('quote')
+    });
   }
 
   async function runTransientAid(mode: TransientAidMode, selection: PdfSelectionPayload): Promise<void> {
@@ -422,26 +408,33 @@ export function App(): ReactElement {
     });
 
     try {
-      await window.sidelight.completeAiStream({
+      const selectionContext = buildAiDocumentToolContext({
+        document: activeDocument,
+        context: {
+          currentPage: currentPage,
+          selectedText: selection.quote,
+          selectionRects: selectionAreasToAnchorRects(selection)
+        },
+        marks,
+        conversations,
+        pageStart: selection.pageNumber,
+        pageEnd: selection.pageNumber,
+        selectedText: selection.quote,
+        selectionRects: selectionAreasToAnchorRects(selection)
+      });
+      await window.sidelight.completeReaderAiStream({
         streamId,
+        conversationId: aidId,
+        transient: true,
+        documentId: activeDocument.id,
+        codexContext: selectionContext,
         request: {
           mode,
           prompt: promptForMode(mode, appPreferences.aiLanguage),
           documentTitle: activeDocument.title,
           contextText: selection.quote,
           conversationContext: buildSelectionConversationContext(selection.pageNumber, selection.quote),
-          toolContext: buildAiDocumentToolContext({
-            document: activeDocument,
-            context: {
-              currentPage: currentPage,
-              selectedText: selection.quote
-            },
-            marks,
-            conversations,
-            pageStart: selection.pageNumber,
-            pageEnd: selection.pageNumber,
-            selectedText: selection.quote
-          }),
+          toolContext: selectionContext,
           preferredLanguage: appPreferences.aiLanguage
         }
       });
@@ -509,7 +502,8 @@ export function App(): ReactElement {
       pageStart: toolContext?.pageStart ?? anchorPage,
       pageEnd: toolContext?.pageEnd ?? toolContext?.pageStart ?? anchorPage,
       pdfText: toolContext?.pdfText,
-      selectedText: toolContext?.selectedText ?? conversation.anchor?.quote
+      selectedText: toolContext?.selectedText ?? conversation.anchor?.quote,
+      selectionRects: toolContext?.selectionRects ?? conversation.anchor?.rects
     });
 
     setBusy(true);
@@ -565,6 +559,42 @@ export function App(): ReactElement {
         putConversationInState(draftConversation);
       }
 
+      if (event.activity) {
+        draftConversation = {
+          ...draftConversation,
+          messages: draftConversation.messages.map((message) =>
+            message.id === assistantMessage.id
+              ? { ...message, agentActivities: mergeAgentActivityEvents(message.agentActivities, event.activity!) }
+              : message
+          ),
+          updatedAt: new Date().toISOString()
+        };
+        putConversationInState(draftConversation);
+      }
+
+      if (event.artifacts?.length) {
+        draftConversation = {
+          ...draftConversation,
+          messages: draftConversation.messages.map((message) =>
+            message.id === assistantMessage.id
+              ? { ...message, attachments: mergeConversationAttachments(message.attachments, event.artifacts!) }
+              : message
+          ),
+          updatedAt: new Date().toISOString()
+        };
+        putConversationInState(draftConversation);
+      }
+
+      if (event.agentThreadId) {
+        draftConversation = {
+          ...draftConversation,
+          agentKind: 'codex',
+          codexThreadId: event.agentThreadId,
+          updatedAt: new Date().toISOString()
+        };
+        putConversationInState(draftConversation);
+      }
+
       if (event.delta) {
         streamedContent += event.delta;
       }
@@ -594,8 +624,13 @@ export function App(): ReactElement {
     });
 
     try {
-      await window.sidelight.completeAiStream({
+      await window.sidelight.completeReaderAiStream({
         streamId,
+        conversationId: conversation.id,
+        codexThreadId: conversation.codexThreadId,
+        documentId: activeDocument.id,
+        history,
+        codexContext: enrichedToolContext,
         request: {
           mode: conversation.mode,
           prompt,
@@ -666,7 +701,7 @@ export function App(): ReactElement {
   }
 
   async function refreshConversationSummary(conversation: Conversation): Promise<void> {
-    if (!activeDocument || conversation.messages.length === 0) {
+    if (!activeDocument || conversation.messages.length === 0 || conversation.agentKind === 'codex') {
       return;
     }
 
@@ -795,6 +830,26 @@ export function App(): ReactElement {
     return result;
   }
 
+  async function saveReaderSettings(
+    aiConfig: AiProviderConfig,
+    syncConfig: WebDavSyncConfig,
+    preferencesConfig: AppPreferences
+  ): Promise<void> {
+    const [provider, sync, preferences] = await Promise.all([
+      window.sidelight.saveAiProvider(aiConfig),
+      window.sidelight.saveWebDavSync(syncConfig),
+      window.sidelight.saveAppPreferences(preferencesConfig)
+    ]);
+    setAiProvider(provider);
+    setWebDavSync(sync);
+    setAppPreferences(preferences);
+    setSettingsOpen(false);
+    if (activeDocument && sync.enabled) {
+      await window.sidelight.syncDocumentMetadata(activeDocument.id).catch(() => undefined);
+      await loadDocumentIntoCurrentWindow(activeDocument.id);
+    }
+  }
+
   async function saveNote(noteToSave: NoteDocument): Promise<void> {
     if (!activeDocument) {
       return;
@@ -833,6 +888,44 @@ export function App(): ReactElement {
   async function deleteWorkspaceBlock(blockId: string): Promise<void> {
     await window.sidelight.deleteWorkspaceBlock(blockId);
     setWorkspaceBlocks((current) => current.filter((block) => block.id !== blockId));
+  }
+
+  async function completeReaderAi(input: Omit<ReaderAiStreamRequest, 'streamId'>): Promise<string> {
+    const streamId = createId('stream');
+    return new Promise((resolve, reject) => {
+      let content = '';
+      let finished = false;
+      const finish = (error?: Error): void => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        unsubscribe();
+        if (error) {
+          reject(error);
+        } else {
+          resolve(content);
+        }
+      };
+      const unsubscribe = window.sidelight.onAiStreamEvent((event) => {
+        if (event.streamId !== streamId) {
+          return;
+        }
+        if (event.delta) {
+          content += event.delta;
+        }
+        if (event.error) {
+          finish(new Error(event.error));
+          return;
+        }
+        if (event.done) {
+          finish();
+        }
+      });
+      void window.sidelight.completeReaderAiStream({ streamId, ...input }).catch((error) => {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
   }
 
   async function generateAiNote(
@@ -879,19 +972,25 @@ export function App(): ReactElement {
     setNotes((current) => mergeNotes([draft, ...current]));
 
     try {
-      const response = await window.sidelight.completeAi({
-        mode: 'summarize',
-        documentTitle: activeDocument.title,
-        prompt: notePromptForLanguage(rangeStart, rangeEnd, appPreferences.aiLanguage),
-        contextText: buildNoteContext(rangeStart, rangeEnd, pageText, rangeMarks, rangeConversations),
-        conversationContext: buildNoteConversationContext(rangeStart, rangeEnd, rangeConversations),
-        toolContext: enrichedToolContext,
-        preferredLanguage: appPreferences.aiLanguage
+      const content = await completeReaderAi({
+        documentId: activeDocument.id,
+        conversationId: noteToSave.id,
+        transient: true,
+        codexContext: enrichedToolContext,
+        request: {
+          mode: 'summarize',
+          documentTitle: activeDocument.title,
+          prompt: notePromptForLanguage(rangeStart, rangeEnd, appPreferences.aiLanguage),
+          contextText: buildNoteContext(rangeStart, rangeEnd, pageText, rangeMarks, rangeConversations),
+          conversationContext: buildNoteConversationContext(rangeStart, rangeEnd, rangeConversations),
+          toolContext: enrichedToolContext,
+          preferredLanguage: appPreferences.aiLanguage
+        }
       });
       const saved = await window.sidelight.saveNote({
         note: {
           ...draft,
-          markdown: normalizeGeneratedNote(response.content, rangeStart, rangeEnd),
+          markdown: normalizeGeneratedNote(content, rangeStart, rangeEnd),
           updatedAt: new Date().toISOString()
         }
       });
@@ -929,20 +1028,26 @@ export function App(): ReactElement {
     setOutlineGenerationError(undefined);
 
     try {
-      const response = await window.sidelight.completeAi({
-        mode: 'summarize',
-        documentTitle: activeDocument.title,
-        prompt: outlinePromptForLanguage(Math.max(1, totalPages), appPreferences.aiLanguage),
-        conversationContext: [
-          'Task: create an external table of contents for a PDF that has no embedded outline.',
-          `Document: ${activeDocument.title}.`,
-          `Total pages: ${Math.max(1, totalPages)}.`,
-          'The resulting outline will be saved with the document workspace metadata and reused by PDF hash.'
-        ].join('\n'),
-        toolContext: enrichedToolContext,
-        preferredLanguage: appPreferences.aiLanguage
+      const content = await completeReaderAi({
+        documentId: activeDocument.id,
+        conversationId: `outline_${activeDocument.id}`,
+        transient: true,
+        codexContext: enrichedToolContext,
+        request: {
+          mode: 'summarize',
+          documentTitle: activeDocument.title,
+          prompt: outlinePromptForLanguage(Math.max(1, totalPages), appPreferences.aiLanguage),
+          conversationContext: [
+            'Task: create an external table of contents for a PDF that has no embedded outline.',
+            `Document: ${activeDocument.title}.`,
+            `Total pages: ${Math.max(1, totalPages)}.`,
+            'The resulting outline will be saved with the document workspace metadata and reused by PDF hash.'
+          ].join('\n'),
+          toolContext: enrichedToolContext,
+          preferredLanguage: appPreferences.aiLanguage
+        }
       });
-      const items = parseGeneratedOutlineItems(response.content, Math.max(1, totalPages));
+      const items = parseGeneratedOutlineItems(content, Math.max(1, totalPages));
       if (items.length === 0) {
         throw new Error('The AI response did not contain a usable outline JSON array.');
       }
@@ -1009,27 +1114,28 @@ export function App(): ReactElement {
   if (!readerDocumentId) {
     return (
       <main className="app-shell">
-        <LibraryHome
-          documents={documents}
-          groups={libraryGroups}
-          provider={aiProvider}
-          uiLanguage={appPreferences.uiLanguage}
-          onOpenPdf={() => void openPdf()}
-          onOpenDocument={(documentId) => void openDocumentWindow(documentId)}
-          onSaveGroup={(group) => void saveLibraryGroup(group)}
-          onSaveDocument={(document) => void saveDocumentMeta(document)}
-          onOpenSettings={() => setSettingsOpen(true)}
-        />
-
-        {settingsOpen && aiProvider && githubUpload && (
-          <FloatingSettingsPanel
+        <section className="reader-home" aria-label="PDF reader start">
+          <div className="reader-home__brand"><FileText size={22} /><span>Sidelight</span></div>
+          <div className="reader-home__content">
+            <FileText className="reader-home__mark" size={34} strokeWidth={1.45} />
+            <div>
+              <h1>PDF Reader</h1>
+              <p>Open a local PDF to continue reading, chat, and translation.</p>
+            </div>
+            <div className="reader-home__actions">
+              <button className="primary-button reader-home__open" type="button" onClick={() => void openPdf()}><FolderOpen size={17} />Open PDF</button>
+              <button className="quiet-button reader-home__settings" type="button" onClick={() => setSettingsOpen(true)}><Settings size={17} />Settings</button>
+            </div>
+          </div>
+        </section>
+        {settingsOpen && aiProvider && webDavSync && (
+          <ReaderSettingsPanel
             provider={aiProvider}
-            githubUpload={githubUpload}
+            webDavSync={webDavSync}
             preferences={appPreferences}
             onClose={() => setSettingsOpen(false)}
-            onSave={(aiConfig, uploadConfig, preferencesConfig) =>
-              void saveSettings(aiConfig, uploadConfig, preferencesConfig)}
-            onGitHubAction={runGitHubWorkspaceAction}
+            onSave={(aiConfig, syncConfig, preferencesConfig) =>
+              void saveReaderSettings(aiConfig, syncConfig, preferencesConfig)}
           />
         )}
       </main>
@@ -1039,8 +1145,8 @@ export function App(): ReactElement {
   return (
     <main className="app-shell">
       <PdfReader
-        documents={documents}
-        libraryGroups={libraryGroups}
+        documents={[]}
+        libraryGroups={[]}
         source={pdfSource}
         meta={activeDocument}
         documentLoadPending={readerLoadPending}
@@ -1051,19 +1157,20 @@ export function App(): ReactElement {
         marks={marks}
         bookmarks={bookmarks}
         conversations={conversations}
-        workspaceBlocks={workspaceBlocks}
+        workspaceBlocks={[]}
         generatedOutline={generatedOutline}
         activeConversationId={activeConversationId}
         activeConversation={activeConversation}
-        notes={notes}
+        notes={[]}
         chatOpen={panelOpen}
         busy={busy}
         canStopGeneration={busy && activeStream?.conversationId === activeConversation?.id}
         transientAid={transientAid}
+        composerPrefill={quotedDraft}
         onOpenPdf={openPdf}
         onOpenSettings={() => setSettingsOpen(true)}
-        onLoadDocument={(documentId) => void openDocumentWindow(documentId)}
-        onAddToLibrary={() => void addActiveDocumentToLibrary()}
+        onLoadDocument={() => undefined}
+        onAddToLibrary={() => undefined}
         onPageChange={updateCurrentPage}
         onCreateMark={(kind, selection, colorRole) => void saveMark(kind, selection, colorRole)}
         onSelectionAction={(mode, selection) => void startAnchoredAction(mode, selection)}
@@ -1090,18 +1197,197 @@ export function App(): ReactElement {
         onGenerateOutline={(toolContext) => void generatePdfOutline(toolContext)}
       />
 
-      {settingsOpen && aiProvider && githubUpload && (
-        <FloatingSettingsPanel
+      {settingsOpen && aiProvider && webDavSync && (
+        <ReaderSettingsPanel
           provider={aiProvider}
-          githubUpload={githubUpload}
+          webDavSync={webDavSync}
           preferences={appPreferences}
           onClose={() => setSettingsOpen(false)}
-          onSave={(aiConfig, uploadConfig, preferencesConfig) =>
-            void saveSettings(aiConfig, uploadConfig, preferencesConfig)}
-          onGitHubAction={runGitHubWorkspaceAction}
+          onSave={(aiConfig, syncConfig, preferencesConfig) =>
+            void saveReaderSettings(aiConfig, syncConfig, preferencesConfig)}
         />
       )}
     </main>
+  );
+}
+
+function ReaderSettingsPanel({
+  provider,
+  webDavSync,
+  preferences,
+  onClose,
+  onSave
+}: {
+  provider: SafeAiProviderConfig;
+  webDavSync: SafeWebDavSyncConfig;
+  preferences: AppPreferences;
+  onClose(): void;
+  onSave(aiConfig: AiProviderConfig, syncConfig: WebDavSyncConfig, preferencesConfig: AppPreferences): void;
+}): ReactElement {
+  const [displayName, setDisplayName] = useState(provider.displayName);
+  const [baseUrl, setBaseUrl] = useState(provider.baseUrl);
+  const [model, setModel] = useState(provider.model);
+  const [apiKey, setApiKey] = useState('');
+  const [temperature, setTemperature] = useState(provider.temperature);
+  const [models, setModels] = useState<AiModelInfo[]>([]);
+  const [modelError, setModelError] = useState<string>();
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [syncEnabled, setSyncEnabled] = useState(webDavSync.enabled);
+  const [webDavUrl, setWebDavUrl] = useState(webDavSync.baseUrl);
+  const [webDavPath, setWebDavPath] = useState(webDavSync.basePath);
+  const [webDavUsername, setWebDavUsername] = useState(webDavSync.username);
+  const [webDavPassword, setWebDavPassword] = useState('');
+  const [uiLanguage, setUiLanguage] = useState<UiLanguage>(preferences.uiLanguage);
+  const [aiLanguage, setAiLanguage] = useState<AiPreferredLanguage>(preferences.aiLanguage);
+  const [codexAvailability, setCodexAvailability] = useState<CodexAvailability>();
+  const [codexModels, setCodexModels] = useState<CodexModelInfo[]>([]);
+  const [codexEnabled, setCodexEnabled] = useState(preferences.experimentalCodexAgent.enabled);
+  const [codexChatModel, setCodexChatModel] = useState(preferences.experimentalCodexAgent.chatModel ?? '');
+  const [codexTranslationModel, setCodexTranslationModel] = useState(preferences.experimentalCodexAgent.translationModel ?? '');
+  const [codexChatEffort, setCodexChatEffort] = useState(preferences.experimentalCodexAgent.chatReasoningEffort ?? '');
+  const [codexTranslationEffort, setCodexTranslationEffort] = useState(preferences.experimentalCodexAgent.translationReasoningEffort ?? '');
+
+  useEffect(() => {
+    let disposed = false;
+    void (async () => {
+      try {
+        const availability = await window.sidelight.getCodexAvailability();
+        if (disposed) {
+          return;
+        }
+        setCodexAvailability(availability);
+        if (!availability.available) {
+          setCodexEnabled(false);
+          return;
+        }
+        const models = await window.sidelight.listCodexModels();
+        if (!disposed) {
+          setCodexModels(models);
+        }
+      } catch {
+        if (!disposed) {
+          setCodexAvailability({ available: false, reason: 'Codex CLI is unavailable.' });
+          setCodexEnabled(false);
+        }
+      }
+    })();
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  const reasoningEffortsFor = (modelId: string): string[] => {
+    const selected = codexModels.find((modelInfo) => modelInfo.id === modelId);
+    if (selected?.supportedReasoningEfforts.length) {
+      return selected.supportedReasoningEfforts;
+    }
+    return Array.from(new Set(codexModels.flatMap((modelInfo) => modelInfo.supportedReasoningEfforts)));
+  };
+  const chatEfforts = reasoningEffortsFor(codexChatModel);
+  const translationEfforts = reasoningEffortsFor(codexTranslationModel);
+
+  const fetchModels = async (): Promise<void> => {
+    setLoadingModels(true);
+    setModelError(undefined);
+    try {
+      const loaded = await window.sidelight.listAiModels({
+        displayName,
+        baseUrl,
+        model,
+        temperature,
+        apiKey: apiKey.trim() || undefined
+      });
+      setModels(loaded);
+    } catch (error) {
+      setModelError(presentableAiError(error));
+    } finally {
+      setLoadingModels(false);
+    }
+  };
+
+  const submit = (event: FormEvent): void => {
+    event.preventDefault();
+    onSave(
+      { displayName, baseUrl, model, temperature, apiKey: apiKey.trim() || undefined },
+      {
+        enabled: syncEnabled,
+        baseUrl: webDavUrl,
+        basePath: webDavPath,
+        username: webDavUsername,
+        password: webDavPassword.trim() || undefined
+      },
+      {
+        uiLanguage,
+        aiLanguage,
+        selectionColors: normalizeSelectionColors(preferences.selectionColors),
+        experimentalCodexAgent: {
+          enabled: codexEnabled && Boolean(codexAvailability?.available),
+          ...(codexChatModel.trim() ? { chatModel: codexChatModel.trim() } : {}),
+          ...(codexTranslationModel.trim() ? { translationModel: codexTranslationModel.trim() } : {}),
+          ...(codexChatEffort.trim() ? { chatReasoningEffort: codexChatEffort.trim() } : {}),
+          ...(codexTranslationEffort.trim() ? { translationReasoningEffort: codexTranslationEffort.trim() } : {})
+        }
+      }
+    );
+  };
+
+  return (
+    <div className="settings-overlay reader-settings-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="reader-settings" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <header className="reader-settings__header">
+          <div>
+            <span>Reader preferences</span>
+            <strong id="settings-title">Settings</strong>
+          </div>
+          <button type="button" className="icon-button" title="Close" onClick={onClose}><X size={16} /></button>
+        </header>
+        <form className="reader-settings__form" onSubmit={submit}>
+          <div className="reader-settings__body">
+            <section className="reader-settings__section">
+              <div className="reader-settings__section-heading"><Bot size={17} /><div><strong>AI provider</strong><span>OpenAI-compatible reader tools</span></div></div>
+              <div className="reader-settings__fields">
+                <label>Display name<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
+                <label>Temperature<input type="number" min="0" max="2" step="0.1" value={temperature} onChange={(event) => setTemperature(Number(event.target.value))} /></label>
+                <label className="reader-settings__wide">Base URL<input required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} /></label>
+                <label className="reader-settings__wide">API key<input type="password" value={apiKey} placeholder={provider.hasApiKey ? 'Stored. Enter a new key to replace it.' : ''} onChange={(event) => setApiKey(event.target.value)} /></label>
+                <label className="reader-settings__wide">Model
+                  <span className="reader-settings__model"><input required list="reader-model-options" value={model} onChange={(event) => setModel(event.target.value)} /><button className="quiet-button" type="button" onClick={() => void fetchModels()} disabled={loadingModels}>{loadingModels ? 'Loading...' : 'Fetch models'}</button></span>
+                  <datalist id="reader-model-options">{models.map((item) => <option key={item.id} value={item.id}>{item.ownedBy}</option>)}</datalist>
+                  {modelError && <small className="reader-settings__status is-error">{modelError}</small>}
+                </label>
+              </div>
+            </section>
+            <section className="reader-settings__section">
+              <div className="reader-settings__section-heading"><Cloud size={17} /><div><strong>WebDAV metadata sync</strong><span>Reading progress and chats are keyed by the PDF SHA-256 hash.</span></div><label className="reader-settings__switch"><input type="checkbox" checked={syncEnabled} onChange={(event) => setSyncEnabled(event.target.checked)} />Enabled</label></div>
+              <div className="reader-settings__fields">
+                <label className="reader-settings__wide">Server URL<input value={webDavUrl} placeholder="https://dav.example.com/remote.php/dav/files/name" onChange={(event) => setWebDavUrl(event.target.value)} /></label>
+                <label>Folder<input value={webDavPath} placeholder="sidelight" onChange={(event) => setWebDavPath(event.target.value)} /></label>
+                <label>Username<input value={webDavUsername} onChange={(event) => setWebDavUsername(event.target.value)} /></label>
+                <label className="reader-settings__wide">Password<input type="password" value={webDavPassword} placeholder={webDavSync.hasPassword ? 'Stored. Enter a new password to replace it.' : ''} onChange={(event) => setWebDavPassword(event.target.value)} /></label>
+              </div>
+            </section>
+            <section className="reader-settings__section">
+              <div className="reader-settings__section-heading"><LanguagesIcon size={17} /><div><strong>Language</strong><span>Interface and generated response preference.</span></div></div>
+              <div className="reader-settings__fields">
+                <label>UI language<select value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value as UiLanguage)}><option value="en">English</option><option value="zh-CN">简体中文</option></select></label>
+                <label>AI preferred language<select value={aiLanguage} onChange={(event) => setAiLanguage(event.target.value as AiPreferredLanguage)}><option value="Simplified Chinese">Simplified Chinese</option><option value="Chinese">Chinese</option><option value="English">English</option></select></label>
+              </div>
+            </section>
+            <section className="reader-settings__section">
+              <div className="reader-settings__section-heading"><Bot size={17} /><div><strong>Experimental Codex reader</strong><span>Local Codex handles PDF chat and translation in a private per-PDF workspace.</span></div><label className="reader-settings__switch"><input type="checkbox" checked={codexEnabled} disabled={!codexAvailability?.available} onChange={(event) => setCodexEnabled(event.target.checked)} />Enabled</label></div>
+              <div className="reader-settings__fields">
+                <label>Chat model<select value={codexChatModel} disabled={!codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexChatModel(event.target.value); setCodexChatEffort(''); }}><option value="">Codex default</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</select></label>
+                <label>Chat reasoning<select value={codexChatEffort} disabled={!codexEnabled || !codexAvailability?.available || chatEfforts.length === 0} onChange={(event) => setCodexChatEffort(event.target.value)}><option value="">Model default</option>{chatEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort)}</option>)}</select></label>
+                <label>Translation model<select value={codexTranslationModel} disabled={!codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexTranslationModel(event.target.value); setCodexTranslationEffort(''); }}><option value="">Codex default</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</select></label>
+                <label>Translation reasoning<select value={codexTranslationEffort} disabled={!codexEnabled || !codexAvailability?.available || translationEfforts.length === 0} onChange={(event) => setCodexTranslationEffort(event.target.value)}><option value="">Model default</option>{translationEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort)}</option>)}</select></label>
+                <small className={codexAvailability?.available ? 'reader-settings__status' : 'reader-settings__status is-error'}>{codexAvailability?.available ? `Available locally: ${codexAvailability.version ?? 'Codex CLI'}` : codexAvailability?.reason ?? 'Checking local Codex CLI...'}</small>
+              </div>
+            </section>
+          </div>
+          <footer className="reader-settings__actions"><button className="quiet-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit">Save</button></footer>
+        </form>
+      </section>
+    </div>
   );
 }
 
@@ -1862,7 +2148,8 @@ function FloatingSettingsPanel({
   const currentPreferences = (): AppPreferences => ({
     uiLanguage,
     aiLanguage,
-    selectionColors: normalizeSelectionColors(selectionColors)
+    selectionColors: normalizeSelectionColors(selectionColors),
+    experimentalCodexAgent: preferences.experimentalCodexAgent
   });
 
   const fetchModels = async (): Promise<void> => {
@@ -2559,7 +2846,8 @@ function buildAiDocumentToolContext({
   pageStart,
   pageEnd,
   pdfText,
-  selectedText
+  selectedText,
+  selectionRects
 }: {
   document: PdfDocumentMeta;
   context?: AiDocumentToolContext;
@@ -2569,6 +2857,7 @@ function buildAiDocumentToolContext({
   pageEnd?: number;
   pdfText?: string;
   selectedText?: string;
+  selectionRects?: TextAnchor['rects'];
 }): AiDocumentToolContext {
   const fallbackPage = context?.currentPage ?? document.readingState?.lastPage ?? 1;
   const start = clampPageNumber(pageStart ?? context?.pageStart ?? fallbackPage);
@@ -2589,6 +2878,7 @@ function buildAiDocumentToolContext({
     pageStart: start,
     pageEnd: end,
     selectedText: selectedText ?? context?.selectedText,
+    selectionRects: selectionRects ?? context?.selectionRects,
     pdfText: pdfText ?? context?.pdfText,
     highlights: mergeAiHighlights(context?.highlights, pageMarks),
     conversations: mergeAiConversations(context?.conversations, pageConversations)
@@ -2691,9 +2981,43 @@ function mergeToolCallEvents(
   ].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
 }
 
+function mergeAgentActivityEvents(
+  current: AgentActivityEvent[] | undefined,
+  event: AgentActivityEvent
+): AgentActivityEvent[] {
+  return [
+    event,
+    ...(current ?? []).filter((candidate) => candidate.id !== event.id)
+  ].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+}
+
+function mergeConversationAttachments(
+  current: ConversationAttachment[] | undefined,
+  additions: ConversationAttachment[]
+): ConversationAttachment[] {
+  return [
+    ...(current ?? []),
+    ...additions.filter((attachment) => !(current ?? []).some((candidate) => candidate.id === attachment.id))
+  ];
+}
+
 function clampPageNumber(value: number, min = 1): number {
   const page = Number.isFinite(value) ? Math.floor(value) : min;
   return Math.max(min, page);
+}
+
+function reasoningEffortLabel(effort: string): string {
+  switch (effort) {
+    case 'low': return 'Low';
+    case 'medium': return 'Medium';
+    case 'high': return 'High';
+    case 'xhigh': return 'Extra high';
+    case 'max': return 'Max';
+    case 'ultra': return 'Ultra';
+    case 'minimal': return 'Minimal';
+    case 'none': return 'None';
+    default: return effort;
+  }
 }
 
 function normalizeGeneratedNote(content: string, pageStart: number, pageEnd: number): string {
@@ -2802,6 +3126,16 @@ function anchorFromSelection(documentId: string, selection: PdfSelectionPayload)
     })),
     createdAt: new Date().toISOString()
   };
+}
+
+function selectionAreasToAnchorRects(selection: PdfSelectionPayload): TextAnchor['rects'] {
+  return selection.areas.map((area) => ({
+    pageNumber: area.pageIndex + 1,
+    left: area.left,
+    top: area.top,
+    width: area.width,
+    height: area.height
+  }));
 }
 
 function sameSelection(mark: PdfMark, selection: PdfSelectionPayload): boolean {

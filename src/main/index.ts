@@ -6,10 +6,11 @@ import {
   AiCompletionRequest,
   AiStreamEvent,
   AiStreamRequest,
+  CodexStreamRequest,
+  ReaderAiStreamRequest,
   AiProviderConfig,
   AppPreferences,
   Conversation,
-  GitHubUploadConfig,
   LibraryGroup,
   NoteDocument,
   PdfGeneratedOutline,
@@ -25,6 +26,7 @@ import {
 import { AiService } from './aiService';
 import { extractPdfPageTextRange, readPdfOutline } from './pdfTools';
 import { JsonWorkspaceStore } from './store';
+import { CodexAgent } from './codexAgent';
 
 if (process.env.SIDELIGHT_REMOTE_DEBUG_PORT) {
   app.commandLine.appendSwitch('remote-debugging-port', process.env.SIDELIGHT_REMOTE_DEBUG_PORT);
@@ -82,7 +84,7 @@ function createWindow(options: { documentId?: string } = {}): BrowserWindow {
     height: 920,
     minWidth: 1080,
     minHeight: 720,
-    title: options.documentId ? 'Sidelight Reader' : 'Sidelight Library',
+    title: 'Sidelight Reader',
     backgroundColor: '#f3f3f3',
     paintWhenInitiallyHidden: true,
     show: !hideE2eWindows,
@@ -124,16 +126,10 @@ function createWindow(options: { documentId?: string } = {}): BrowserWindow {
   return mainWindow;
 }
 
-function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
+function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent: CodexAgent): void {
   const activeAiStreams = new Map<string, AbortController>();
-  const broadcastLibraryChanged = (): void => {
-    for (const window of BrowserWindow.getAllWindows()) {
-      sendToRenderer(window.webContents, 'library:changed');
-    }
-  };
   const openPdfPath = async (filePath: string) => {
     const result = await runStoreMutation(() => openPdfDocumentPath(store, filePath));
-    broadcastLibraryChanged();
     return result;
   };
 
@@ -146,18 +142,6 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
     }
   };
 
-  ipcMain.handle('library:listDocuments', () => store.listDocuments());
-  ipcMain.handle('library:listGroups', () => store.listLibraryGroups());
-  ipcMain.handle('library:saveGroup', async (_event, input: { group: LibraryGroup }) => {
-    const saved = await runStoreMutation(() => store.saveLibraryGroup(input.group));
-    broadcastLibraryChanged();
-    return saved;
-  });
-  ipcMain.handle('library:deleteGroup', async (_event, groupId: string) => {
-    await runStoreMutation(() => store.deleteLibraryGroup(groupId));
-    broadcastLibraryChanged();
-  });
-
   ipcMain.handle('pdf:open', async () => {
     const filePath = process.env.SIDELIGHT_TEST_OPEN_PDF ?? (await pickPdfFile());
     if (!filePath) {
@@ -165,16 +149,6 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
     }
 
     return openPdfPath(filePath);
-  });
-
-  ipcMain.handle('window:openDocument', async (_event, documentId: string) => {
-    const document = await store.getDocument(documentId);
-    if (!document) {
-      return null;
-    }
-
-    createWindow({ documentId });
-    return document;
   });
 
   ipcMain.handle('pdf:load', async (_event, documentId: string) => {
@@ -192,9 +166,6 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
 
     const source = await pdfSourceForDocument(document);
     void runStoreMutation(() => store.updateDocument(openedDocument))
-      .then(() => {
-        broadcastLibraryChanged();
-      })
       .catch((error: unknown) => {
         console.warn(`Could not update last-opened state for PDF ${documentId}`, error);
       });
@@ -204,17 +175,6 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
       source
     };
   });
-  ipcMain.handle('pdf:addToLibrary', async (_event, documentId: string) => {
-    const saved = await runStoreMutation(() => store.addDocumentToLibrary(documentId));
-    broadcastLibraryChanged();
-    return saved;
-  });
-  ipcMain.handle('pdf:updateDocument', async (_event, document: PdfDocumentMeta) => {
-    const saved = await runStoreMutation(() => store.updateDocument(document));
-    broadcastLibraryChanged();
-    return saved;
-  });
-
   ipcMain.handle('pdf:readRange', async (_event, request: PdfRangeRequest) => {
     const document = await store.getDocument(request.documentId);
     if (!document) {
@@ -237,19 +197,14 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
   ipcMain.handle('pdf:deleteBookmark', (_event, bookmarkId: string) => runStoreMutation(() => store.deletePdfBookmark(bookmarkId)));
   ipcMain.handle('pdf:getGeneratedOutline', (_event, documentId: string) => store.getGeneratedPdfOutline(documentId));
   ipcMain.handle('pdf:saveGeneratedOutline', async (_event, input: { outline: PdfGeneratedOutline }) => {
-    const saved = await runStoreMutation(() => store.saveGeneratedPdfOutline(input.outline));
-    broadcastLibraryChanged();
-    return saved;
+    return runStoreMutation(() => store.saveGeneratedPdfOutline(input.outline));
   });
   ipcMain.handle('pdf:deleteGeneratedOutline', async (_event, documentId: string) => {
     await runStoreMutation(() => store.deleteGeneratedPdfOutline(documentId));
-    broadcastLibraryChanged();
   });
   ipcMain.handle('pdf:getReadingState', (_event, documentId: string) => store.getReadingState(documentId));
   ipcMain.handle('pdf:saveReadingState', async (_event, state: PdfReadingState) => {
-    const saved = await runStoreMutation(() => store.saveReadingState(state));
-    broadcastLibraryChanged();
-    return saved;
+    return runStoreMutation(() => store.saveReadingState(state));
   });
 
   ipcMain.handle('conversation:list', (_event, documentId: string) => store.listConversations(documentId));
@@ -262,27 +217,24 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
   ipcMain.handle('note:save', (_event, input: { note: NoteDocument }) => runStoreMutation(() => store.saveNote(input.note)));
   ipcMain.handle('note:delete', async (_event, noteId: string) => {
     await runStoreMutation(() => store.deleteNote(noteId));
-    broadcastLibraryChanged();
   });
   ipcMain.handle('workspaceBlock:list', (_event, documentId: string) => store.listWorkspaceBlocks(documentId));
   ipcMain.handle('workspaceBlock:save', async (_event, input: { block: WorkspaceBlock }) => {
-    const saved = await runStoreMutation(() => store.saveWorkspaceBlock(input.block));
-    broadcastLibraryChanged();
-    return saved;
+    return runStoreMutation(() => store.saveWorkspaceBlock(input.block));
   });
   ipcMain.handle('workspaceBlock:delete', async (_event, blockId: string) => {
     await runStoreMutation(() => store.deleteWorkspaceBlock(blockId));
-    broadcastLibraryChanged();
   });
 
   ipcMain.handle('settings:getAiProvider', () => store.getSafeAiProvider());
   ipcMain.handle('settings:saveAiProvider', (_event, config: AiProviderConfig) => runStoreMutation(() => store.saveAiProvider(config)));
-  ipcMain.handle('settings:getGitHubUpload', () => store.getSafeGitHubUpload());
-  ipcMain.handle('settings:saveGitHubUpload', (_event, config: GitHubUploadConfig) => runStoreMutation(() => store.saveGitHubUpload(config)));
+  ipcMain.handle('settings:getWebDavSync', () => store.getSafeWebDavSync());
+  ipcMain.handle('settings:saveWebDavSync', (_event, config) => runStoreMutation(() => store.saveWebDavSync(config)));
   ipcMain.handle('settings:getAppPreferences', () => store.getAppPreferences());
   ipcMain.handle('settings:saveAppPreferences', (_event, config: AppPreferences) => runStoreMutation(() => store.saveAppPreferences(config)));
-  ipcMain.handle('sync:workspace', () => runStoreMutation(() => store.syncWorkspace()));
-  ipcMain.handle('sync:uploadWorkspace', () => runStoreMutation(() => store.uploadWorkspace()));
+  ipcMain.handle('sync:documentMetadata', (_event, documentId: string) => runStoreMutation(() => store.syncDocumentMetadata(documentId)));
+  ipcMain.handle('codex:availability', () => CodexAgent.availability());
+  ipcMain.handle('codex:listModels', () => codexAgent.listModels());
   ipcMain.handle('ai:listModels', async (_event, config: AiProviderConfig) => {
     const stored = await store.getAiProviderWithSecret();
     return aiService.listModels({
@@ -296,6 +248,7 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
   ipcMain.handle('ai:complete', (_event, request: AiCompletionRequest) => aiService.complete(request));
   ipcMain.handle('ai:cancelStream', (_event, streamId: string) => {
     activeAiStreams.get(streamId)?.abort();
+    void codexAgent.cancel(streamId);
   });
   ipcMain.handle('ai:completeStream', async (event, input: AiStreamRequest) => {
     const sender = event.sender;
@@ -347,6 +300,107 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService): void {
       sender.removeListener('render-process-gone', abortStream);
     }
   });
+
+  ipcMain.handle('ai:completeReaderStream', async (event, input: ReaderAiStreamRequest) => {
+    const sender = event.sender;
+    const abortController = new AbortController();
+    let rendererAvailable = true;
+    activeAiStreams.set(input.streamId, abortController);
+
+    const abortStream = (): void => {
+      rendererAvailable = false;
+      abortController.abort();
+      void codexAgent.cancel(input.streamId);
+    };
+    const sendStreamEvent = (chunk: Omit<AiStreamEvent, 'streamId'>): boolean => {
+      if (!rendererAvailable || sender.isDestroyed()) {
+        abortStream();
+        return false;
+      }
+      const sent = sendToRenderer(sender, 'ai:stream:event', { streamId: input.streamId, ...chunk });
+      if (!sent) {
+        abortStream();
+      }
+      return sent;
+    };
+
+    sender.once('destroyed', abortStream);
+    sender.once('render-process-gone', abortStream);
+    try {
+      const preferences = await store.getAppPreferences();
+      const useCodex = preferences.experimentalCodexAgent.enabled && Boolean(input.documentId && input.codexContext);
+      if (useCodex) {
+        const useTranslationConfig = input.request.mode === 'translate';
+        await codexAgent.stream({
+          streamId: input.streamId,
+          conversationId: input.conversationId ?? input.streamId,
+          codexThreadId: input.codexThreadId,
+          transient: input.transient,
+          documentId: input.documentId!,
+          prompt: input.request.prompt,
+          attachments: input.request.attachments,
+          history: input.history,
+          context: input.codexContext!,
+          model: useTranslationConfig
+            ? preferences.experimentalCodexAgent.translationModel
+            : preferences.experimentalCodexAgent.chatModel,
+          effort: useTranslationConfig
+            ? preferences.experimentalCodexAgent.translationReasoningEffort
+            : preferences.experimentalCodexAgent.chatReasoningEffort,
+          preferredLanguage: input.request.preferredLanguage
+        }, sendStreamEvent);
+      } else {
+        await aiService.stream(input.request, (chunk) => {
+          sendStreamEvent(chunk);
+        }, abortController.signal);
+      }
+    } catch (error) {
+      if (!abortController.signal.aborted && rendererAvailable && !sender.isDestroyed()) {
+        sendStreamEvent({ error: error instanceof Error ? error.message : String(error), done: true });
+      }
+    } finally {
+      if (abortController.signal.aborted && rendererAvailable && !sender.isDestroyed()) {
+        sendStreamEvent({ done: true, cancelled: true });
+      }
+      activeAiStreams.delete(input.streamId);
+      sender.removeListener('destroyed', abortStream);
+      sender.removeListener('render-process-gone', abortStream);
+    }
+  });
+
+  ipcMain.handle('codex:completeStream', async (event, input: CodexStreamRequest) => {
+    const sender = event.sender;
+    let rendererAvailable = true;
+
+    const abortStream = (): void => {
+      rendererAvailable = false;
+      void codexAgent.cancel(input.streamId);
+    };
+    const sendStreamEvent = (chunk: Omit<AiStreamEvent, 'streamId'>): boolean => {
+      if (!rendererAvailable || sender.isDestroyed()) {
+        abortStream();
+        return false;
+      }
+      const sent = sendToRenderer(sender, 'ai:stream:event', { streamId: input.streamId, ...chunk });
+      if (!sent) {
+        abortStream();
+      }
+      return sent;
+    };
+
+    sender.once('destroyed', abortStream);
+    sender.once('render-process-gone', abortStream);
+    try {
+      await codexAgent.stream(input, sendStreamEvent);
+    } catch (error) {
+      if (rendererAvailable && !sender.isDestroyed()) {
+        sendStreamEvent({ error: error instanceof Error ? error.message : String(error), done: true });
+      }
+    } finally {
+      sender.removeListener('destroyed', abortStream);
+      sender.removeListener('render-process-gone', abortStream);
+    }
+  });
 }
 
 async function pickPdfFile(): Promise<string | undefined> {
@@ -388,26 +442,38 @@ if (hasSingleInstanceLock) {
       }
     );
 
-    registerIpc(store, aiService);
-    createWindow();
-    if (!hideE2eWindows) {
-      setTimeout(() => {
-        void runStoreMutation(() => store.syncWorkspace()).catch((error: unknown) => {
-          console.warn('Startup GitHub sync failed', error);
-        });
-      }, 10_000);
-    }
+    const codexAgent = new CodexAgent(
+      async (documentId) => {
+        const document = await store.getDocument(documentId);
+        if (!document) {
+          throw new Error('PDF not found');
+        }
+        return {
+          document,
+          readOutline: (maxItems) => readPdfOutline(document.filePath, maxItems),
+          readPages: (pageStart, pageEnd, maxChars) => extractPdfPageTextRange(document.filePath, pageStart, pageEnd, 8, maxChars)
+        };
+      },
+      join(app.getPath('userData'), 'codex-inputs'),
+      join(app.getPath('userData'), 'codex-workspaces')
+    );
 
-    const startupPdfPaths = [
-      ...pdfPathsFromArgv(process.argv),
-      ...(process.env.SIDELIGHT_OPEN_PDF_ON_START === '1' && process.env.SIDELIGHT_TEST_OPEN_PDF
-        ? [process.env.SIDELIGHT_TEST_OPEN_PDF]
-        : [])
-    ];
+    registerIpc(store, aiService, codexAgent);
+    app.once('before-quit', () => {
+      void codexAgent.shutdown();
+    });
+    const startupPdfPaths = pdfPathsFromArgv(process.argv);
     const queuedPdfPaths = [...pendingSystemPdfPaths, ...startupPdfPaths];
     pendingSystemPdfPaths.length = 0;
-    for (const filePath of queuedPdfPaths) {
+    const initialPdfPaths = queuedPdfPaths.length > 0
+      ? queuedPdfPaths
+      : [process.env.SIDELIGHT_TEST_OPEN_PDF].filter((filePath): filePath is string => Boolean(filePath));
+    for (const filePath of initialPdfPaths) {
       await handleSystemPdfOpen?.(filePath);
+    }
+
+    if (initialPdfPaths.length === 0) {
+      createWindow();
     }
 
     app.on('activate', () => {
