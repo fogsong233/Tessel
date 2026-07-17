@@ -111,6 +111,25 @@ test.describe('PDF reader flow', () => {
     await expect(activity).toHaveAttribute('open', '');
     await expect(activity.locator('.codex-timeline__activity-item')).toHaveCount(2);
     await expect(activity.locator('.codex-timeline__line')).toHaveCount(1);
+
+    await expect(page.getByLabel('Current chat model')).toBeVisible();
+    await expect(page.getByLabel('Reasoning effort')).toBeVisible();
+    await expect(page.getByLabel('Permissions')).toHaveValue('workspace-write');
+    const composer = page.locator('.dock-chat-panel textarea');
+    await composer.fill('/status');
+    await composer.press('Enter');
+    await expect(page.locator('.chat-command-notice')).toContainText('PDF workspace');
+    await composer.fill('/permissions full-access');
+    await composer.press('Enter');
+    await expect(page.getByLabel('Permissions')).toHaveValue('full-access');
+    await expect(page.locator('.chat-permission-warning')).toBeVisible();
+    await expect(page.locator('.chat-message')).toHaveCount(1);
+    await expect.poll(async () => {
+      const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+        conversations: Array<{ id: string; codexSettings?: { permissionMode?: string } }>;
+      };
+      return store.conversations.find((conversation) => conversation.id === 'chat_timeline_fixture')?.codexSettings?.permissionMode;
+    }).toBe('full-access');
   });
 });
 

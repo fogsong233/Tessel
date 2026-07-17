@@ -343,10 +343,11 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
           context: input.codexContext!,
           model: useTranslationConfig
             ? preferences.experimentalCodexAgent.translationModel
-            : preferences.experimentalCodexAgent.chatModel,
+            : input.codexOptions?.model ?? preferences.experimentalCodexAgent.chatModel,
           effort: useTranslationConfig
             ? preferences.experimentalCodexAgent.translationReasoningEffort ?? 'low'
-            : preferences.experimentalCodexAgent.chatReasoningEffort ?? 'low',
+            : input.codexOptions?.effort ?? preferences.experimentalCodexAgent.chatReasoningEffort ?? 'low',
+          permissionMode: input.codexOptions?.permissionMode ?? 'workspace-write',
           preferredLanguage: input.request.preferredLanguage
         }, sendStreamEvent);
       } else {

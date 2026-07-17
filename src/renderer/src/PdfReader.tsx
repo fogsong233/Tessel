@@ -40,6 +40,9 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Check,
+  Command,
+  Cpu,
+  Gauge,
   ArrowUp,
   FilePlus2,
   FileText,
@@ -53,6 +56,7 @@ import {
   Plus,
   Search,
   Settings,
+  ShieldCheck,
   Pin,
   Quote,
   Sparkles,
@@ -71,6 +75,9 @@ import {
   AgentActivityEvent,
   AgentTimelineActivityEntry,
   AgentTimelineEntry,
+  CodexConversationSettings,
+  CodexModelInfo,
+  CodexPermissionMode,
   LibraryGroup,
   NoteDocument,
   PdfGeneratedOutline,
@@ -159,6 +166,7 @@ interface PdfReaderProps {
     attachments: ConversationAttachment[],
     toolContext?: AiDocumentToolContext
   ): void;
+  onUpdateConversationCodexSettings(conversationId: string, settings: CodexConversationSettings): void;
   onStopGeneration(): void;
   onSaveWorkspaceBlock(block: WorkspaceBlock): void | Promise<void>;
   onDeleteWorkspaceBlock(blockId: string): void;
@@ -267,6 +275,16 @@ function readerText(language: UiLanguage) {
       close: '关闭',
       collapseChat: '收起对话',
       conversation: '对话',
+      codexModel: '当前对话模型',
+      codexReasoning: '推理强度',
+      codexPermissions: '权限',
+      codexDefaultModel: 'Codex 默认模型',
+      codexDefaultEffort: '阅读器默认（Low）',
+      permissionReadOnly: '只读',
+      permissionWorkspace: 'PDF 工作区',
+      permissionFullAccess: '完整访问',
+      fullAccessWarning: '当前对话可以访问并修改本机任意文件。',
+      slashCommands: '对话命令',
       delete: '删除',
       deleteMark: '删除标注',
       deleteNote: '删除笔记',
@@ -374,6 +392,16 @@ function readerText(language: UiLanguage) {
     close: 'Close',
     collapseChat: 'Collapse chat',
     conversation: 'Conversation',
+    codexModel: 'Current chat model',
+    codexReasoning: 'Reasoning effort',
+    codexPermissions: 'Permissions',
+    codexDefaultModel: 'Codex default model',
+    codexDefaultEffort: 'Reader default (Low)',
+    permissionReadOnly: 'Read only',
+    permissionWorkspace: 'PDF workspace',
+    permissionFullAccess: 'Full access',
+    fullAccessWarning: 'This conversation can access and modify any local file.',
+    slashCommands: 'Chat commands',
     delete: 'Delete',
     deleteMark: 'Delete mark',
     deleteNote: 'Delete note',
@@ -509,6 +537,7 @@ export function PdfReader({
   onCloseConversation,
   onCloseTransientAid,
   onSendMessage,
+  onUpdateConversationCodexSettings,
   onStopGeneration,
   onSaveWorkspaceBlock,
   onDeleteWorkspaceBlock,
@@ -2386,6 +2415,7 @@ export function PdfReader({
                             buildDocumentToolContext({ conversation })
                           );
                         }}
+                        onUpdateConversationCodexSettings={onUpdateConversationCodexSettings}
                         onStopGeneration={onStopGeneration}
                         onPinConversation={pinConversationToCanvas}
                         onPinImage={pinImageToCanvas}
@@ -2785,6 +2815,7 @@ function ReaderDock({
   onNoteDraftChange,
   onGenerateNote,
   onSendMessage,
+  onUpdateConversationCodexSettings,
   onStopGeneration,
   onPinConversation,
   onPinImage,
@@ -2828,6 +2859,7 @@ function ReaderDock({
   onNoteDraftChange(note: NoteDocument): void;
   onGenerateNote(pageStart: number, pageEnd: number): void;
   onSendMessage(conversationId: string, prompt: string, attachments: ConversationAttachment[]): void;
+  onUpdateConversationCodexSettings(conversationId: string, settings: CodexConversationSettings): void;
   onStopGeneration(): void;
   onPinConversation(conversation: Conversation): void;
   onPinImage(attachment: ConversationAttachment, conversation?: Conversation): void;
@@ -2898,6 +2930,7 @@ function ReaderDock({
           onPin={() => undefined}
           onPinImage={(attachment) => onPinImage(attachment, activeConversation)}
           onSend={(prompt, attachments) => onSendMessage(activeConversation.id, prompt, attachments)}
+          onUpdateCodexSettings={(settings) => onUpdateConversationCodexSettings(activeConversation.id, settings)}
           onStop={onStopGeneration}
         />
       ) : noteEditorNote ? (
@@ -3768,6 +3801,7 @@ function DockChatPanel({
   onPin,
   onPinImage,
   onSend,
+  onUpdateCodexSettings,
   onStop
 }: {
   busy: boolean;
@@ -3780,17 +3814,57 @@ function DockChatPanel({
   onPin(): void;
   onPinImage(attachment: ConversationAttachment): void;
   onSend(prompt: string, attachments: ConversationAttachment[]): void;
+  onUpdateCodexSettings(settings: CodexConversationSettings): void;
   onStop(): void;
 }): ReactElement {
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<ConversationAttachment[]>([]);
   const [dragActive, setDragActive] = useState(false);
+  const [codexModels, setCodexModels] = useState<CodexModelInfo[]>([]);
+  const [commandNotice, setCommandNotice] = useState<string>();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const modelSelectRef = useRef<HTMLSelectElement>(null);
+  const permissionSelectRef = useRef<HTMLSelectElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
   const shouldFollowMessagesRef = useRef(true);
   const previousConversationIdRef = useRef(conversation.id);
+  const isCodex = conversation.agentKind === 'codex';
+  const codexSettings = conversation.codexSettings ?? {};
+  const permissionMode = codexSettings.permissionMode ?? 'workspace-write';
+  const selectedModel = codexModels.find((model) => model.id === codexSettings.model);
+  const reasoningEfforts = selectedModel?.supportedReasoningEfforts.length
+    ? selectedModel.supportedReasoningEfforts
+    : Array.from(new Set(codexModels.flatMap((model) => model.supportedReasoningEfforts)));
+  const slashQuery = draft.trimStart();
+  const slashCommands = chatSlashCommands(text);
+  const matchingSlashCommands = slashQuery.startsWith('/') && !slashQuery.includes(' ')
+    ? slashCommands.filter((command) => command.command.startsWith(slashQuery.toLowerCase()))
+    : [];
+
+  useEffect(() => {
+    setCommandNotice(undefined);
+    if (!isCodex) {
+      setCodexModels([]);
+      return;
+    }
+    let disposed = false;
+    void window.sidelight.listCodexModels()
+      .then((models) => {
+        if (!disposed) {
+          setCodexModels(models);
+        }
+      })
+      .catch(() => {
+        if (!disposed) {
+          setCodexModels([]);
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [conversation.id, isCodex]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -3843,15 +3917,101 @@ function DockChatPanel({
     }
   }, [pdfReadingSignal]);
 
+  const updateCodexSettings = (patch: Partial<CodexConversationSettings>): void => {
+    if (busy) {
+      setCommandNotice('Wait for the active turn to finish before changing its configuration.');
+      return;
+    }
+    onUpdateCodexSettings({ ...codexSettings, ...patch });
+  };
+
+  const runSlashCommand = (rawCommand: string): boolean => {
+    if (!isCodex || !rawCommand.startsWith('/')) {
+      return false;
+    }
+    const [command, ...args] = rawCommand.trim().split(/\s+/);
+    const argument = args.join(' ').trim();
+    if (command === '/stop') {
+      if (canStopGeneration) {
+        onStop();
+        setCommandNotice('Stopping the active Codex turn...');
+      } else {
+        setCommandNotice('No active Codex turn to stop.');
+      }
+      return true;
+    }
+    if (command === '/ps') {
+      const activeActivities = conversation.messages
+        .flatMap((message) => message.agentActivities ?? [])
+        .filter((activity) => activity.status === 'started');
+      setCommandNotice(activeActivities.length
+        ? activeActivities.map((activity) => activity.label).join(' · ')
+        : 'No active Codex tasks in this conversation.');
+      return true;
+    }
+    if (command === '/status') {
+      setCommandNotice([
+        selectedModel?.displayName ?? codexSettings.model ?? text.codexDefaultModel,
+        codexSettings.effort ? reasoningEffortLabel(codexSettings.effort) : text.codexDefaultEffort,
+        permissionLabel(permissionMode, text)
+      ].join(' · '));
+      return true;
+    }
+    if (command === '/model') {
+      if (!argument) {
+        modelSelectRef.current?.focus();
+        setCommandNotice('Choose a model for this conversation.');
+        return true;
+      }
+      const model = codexModels.find((candidate) =>
+        candidate.id.toLowerCase() === argument.toLowerCase()
+        || candidate.displayName.toLowerCase() === argument.toLowerCase()
+      );
+      if (!model) {
+        setCommandNotice(`Unknown model: ${argument}`);
+        return true;
+      }
+      updateCodexSettings({ model: model.id, effort: undefined });
+      setCommandNotice(`Model changed to ${model.displayName}.`);
+      return true;
+    }
+    if (command === '/permissions') {
+      if (!argument) {
+        permissionSelectRef.current?.focus();
+        setCommandNotice('Choose permissions for this conversation.');
+        return true;
+      }
+      const permission = parsePermissionMode(argument);
+      if (!permission) {
+        setCommandNotice('Use read-only, workspace-write, or full-access.');
+        return true;
+      }
+      updateCodexSettings({ permissionMode: permission });
+      setCommandNotice(`Permissions changed to ${permissionLabel(permission, text)}.`);
+      return true;
+    }
+    if (command === '/help') {
+      setCommandNotice(slashCommands.map((item) => item.command).join('  '));
+      return true;
+    }
+    setCommandNotice(`Unknown command: ${command}. Type /help to list available commands.`);
+    return true;
+  };
+
   const submit = (event: FormEvent): void => {
     event.preventDefault();
     const prompt = draft.trim();
+    if (attachments.length === 0 && runSlashCommand(prompt)) {
+      setDraft('');
+      return;
+    }
     if ((!prompt && attachments.length === 0) || busy) {
       return;
     }
 
     setDraft('');
     setAttachments([]);
+    setCommandNotice(undefined);
     onSend(prompt || 'Please analyze the attached image in the context of this PDF.', attachments);
   };
 
@@ -3983,6 +4143,30 @@ function DockChatPanel({
           attachFiles(event.dataTransfer.files);
         }}
       >
+        {matchingSlashCommands.length > 0 && (
+          <div className="chat-slash-menu" role="listbox" aria-label={text.slashCommands}>
+            {matchingSlashCommands.map((item) => (
+              <button
+                type="button"
+                key={item.command}
+                onClick={() => {
+                  runSlashCommand(item.command);
+                  setDraft('');
+                }}
+              >
+                <Command size={14} />
+                <span><strong>{item.command}</strong><small>{item.description}</small></span>
+              </button>
+            ))}
+          </div>
+        )}
+        {commandNotice && (
+          <div className="chat-command-notice" role="status">
+            <Command size={13} />
+            <span>{commandNotice}</span>
+            <button type="button" title="Dismiss" aria-label="Dismiss" onClick={() => setCommandNotice(undefined)}><X size={12} /></button>
+          </div>
+        )}
         {attachments.length > 0 && (
           <div className="composer-attachments">
             {attachments.map((attachment) => (
@@ -4044,7 +4228,7 @@ function DockChatPanel({
               composingRef.current = false;
             }}
             onPaste={(event) => attachFiles(event.clipboardData.files)}
-            placeholder={text.messageSidelight}
+            placeholder={isCodex ? 'Message Codex or type / for commands' : text.messageSidelight}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !isComposingKeyboardEvent(event, composingRef.current)) {
                 event.preventDefault();
@@ -4076,9 +4260,104 @@ function DockChatPanel({
             </Button>
           )}
         </div>
+        {isCodex && (
+          <>
+            <div className="chat-composer__controls">
+              <label title={text.codexModel}>
+                <Cpu size={13} />
+                <select
+                  ref={modelSelectRef}
+                  aria-label={text.codexModel}
+                  value={codexSettings.model ?? ''}
+                  disabled={busy}
+                  onChange={(event) => updateCodexSettings({ model: event.target.value || undefined, effort: undefined })}
+                >
+                  <option value="">{text.codexDefaultModel}</option>
+                  {codexModels.map((model) => <option value={model.id} key={model.id}>{model.displayName}</option>)}
+                </select>
+              </label>
+              <label title={text.codexReasoning}>
+                <Gauge size={13} />
+                <select
+                  aria-label={text.codexReasoning}
+                  value={codexSettings.effort ?? ''}
+                  disabled={busy}
+                  onChange={(event) => updateCodexSettings({ effort: event.target.value || undefined })}
+                >
+                  <option value="">{text.codexDefaultEffort}</option>
+                  {reasoningEfforts.map((effort) => <option value={effort} key={effort}>{reasoningEffortLabel(effort)}</option>)}
+                </select>
+              </label>
+              <label className={`chat-permission-select is-${permissionMode}`} title={text.codexPermissions}>
+                <ShieldCheck size={13} />
+                <select
+                  ref={permissionSelectRef}
+                  aria-label={text.codexPermissions}
+                  value={permissionMode}
+                  disabled={busy}
+                  onChange={(event) => updateCodexSettings({ permissionMode: event.target.value as CodexPermissionMode })}
+                >
+                  <option value="read-only">{text.permissionReadOnly}</option>
+                  <option value="workspace-write">{text.permissionWorkspace}</option>
+                  <option value="full-access">{text.permissionFullAccess}</option>
+                </select>
+              </label>
+            </div>
+            {permissionMode === 'full-access' && <div className="chat-permission-warning">{text.fullAccessWarning}</div>}
+          </>
+        )}
       </form>
     </section>
   );
+}
+
+function chatSlashCommands(text: ReaderText): Array<{ command: string; description: string }> {
+  return [
+    { command: '/model', description: text.codexModel },
+    { command: '/permissions', description: text.codexPermissions },
+    { command: '/status', description: 'Show model, reasoning, and permissions' },
+    { command: '/ps', description: 'Show active tasks in this conversation' },
+    { command: '/stop', description: 'Stop the active Codex turn' },
+    { command: '/help', description: text.slashCommands }
+  ];
+}
+
+function parsePermissionMode(value: string): CodexPermissionMode | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'read-only' || normalized === 'readonly' || normalized === 'read') {
+    return 'read-only';
+  }
+  if (normalized === 'workspace-write' || normalized === 'workspace' || normalized === 'auto') {
+    return 'workspace-write';
+  }
+  if (normalized === 'full-access' || normalized === 'full' || normalized === 'danger-full-access') {
+    return 'full-access';
+  }
+  return undefined;
+}
+
+function permissionLabel(permission: CodexPermissionMode, text: ReaderText): string {
+  if (permission === 'read-only') {
+    return text.permissionReadOnly;
+  }
+  if (permission === 'full-access') {
+    return text.permissionFullAccess;
+  }
+  return text.permissionWorkspace;
+}
+
+function reasoningEffortLabel(effort: string): string {
+  switch (effort) {
+    case 'none': return 'None';
+    case 'minimal': return 'Minimal';
+    case 'low': return 'Low';
+    case 'medium': return 'Medium';
+    case 'high': return 'High';
+    case 'xhigh': return 'Extra high';
+    case 'max': return 'Max';
+    case 'ultra': return 'Ultra';
+    default: return effort;
+  }
 }
 
 function chatMessagesNearBottom(node: HTMLElement): boolean {

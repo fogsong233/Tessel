@@ -34,6 +34,7 @@ import {
   AgentTimelineEntry,
   AppPreferences,
   CodexAvailability,
+  CodexConversationSettings,
   CodexModelInfo,
   Conversation,
   ConversationAttachment,
@@ -270,6 +271,11 @@ export function App(): ReactElement {
       anchor,
       mode: 'ask',
       agentKind: appPreferences.experimentalCodexAgent.enabled ? 'codex' : 'default',
+      codexSettings: appPreferences.experimentalCodexAgent.enabled ? {
+        model: appPreferences.experimentalCodexAgent.chatModel,
+        effort: appPreferences.experimentalCodexAgent.chatReasoningEffort ?? 'low',
+        permissionMode: 'workspace-write'
+      } : undefined,
       summary: {
         title: compactTitle(anchor.quote, 'ask'),
         brief: compactSentence(anchor.quote, 128),
@@ -297,6 +303,11 @@ export function App(): ReactElement {
       pageNumber,
       mode: 'ask',
       agentKind: appPreferences.experimentalCodexAgent.enabled ? 'codex' : 'default',
+      codexSettings: appPreferences.experimentalCodexAgent.enabled ? {
+        model: appPreferences.experimentalCodexAgent.chatModel,
+        effort: appPreferences.experimentalCodexAgent.chatReasoningEffort ?? 'low',
+        permissionMode: 'workspace-write'
+      } : undefined,
       summary: {
         title: `Question: Page ${pageNumber}`,
         brief: `Free chat attached to page ${pageNumber}.`,
@@ -479,6 +490,21 @@ export function App(): ReactElement {
     await completeConversation(nextConversation, prompt, attachments, toolContext);
   }
 
+  async function updateConversationCodexSettings(
+    conversationId: string,
+    codexSettings: CodexConversationSettings
+  ): Promise<void> {
+    const conversation = conversations.find((candidate) => candidate.id === conversationId);
+    if (!conversation || conversation.agentKind !== 'codex' || busy) {
+      return;
+    }
+    await saveConversationLocally({
+      ...conversation,
+      codexSettings,
+      updatedAt: new Date().toISOString()
+    });
+  }
+
   async function completeConversation(
     conversation: Conversation,
     prompt: string,
@@ -651,6 +677,7 @@ export function App(): ReactElement {
         streamId,
         conversationId: conversation.id,
         codexThreadId: conversation.codexThreadId,
+        codexOptions: conversation.codexSettings,
         documentId: activeDocument.id,
         history,
         codexContext: enrichedToolContext,
@@ -1207,6 +1234,8 @@ export function App(): ReactElement {
         onCloseTransientAid={() => setTransientAid(undefined)}
         onSendMessage={(conversationId, prompt, attachments, toolContext) =>
           void sendMessage(conversationId, prompt, attachments, toolContext)}
+        onUpdateConversationCodexSettings={(conversationId, settings) =>
+          void updateConversationCodexSettings(conversationId, settings)}
         onStopGeneration={stopActiveGeneration}
         noteBusy={noteBusy}
         outlineGenerationBusy={outlineGenerationBusy}

@@ -7,6 +7,7 @@ import {
   AgentActivityEvent,
   AiDocumentToolContext,
   AiStreamEvent,
+  CodexPermissionMode,
   CodexModelInfo,
   CodexStreamRequest,
   ConversationAttachment,
@@ -247,7 +248,7 @@ export class CodexAgent {
       ...(input.model?.trim() ? { model: input.model.trim() } : {}),
       cwd: documentWorkspace,
       runtimeWorkspaceRoots: [documentWorkspace],
-      sandbox: 'workspace-write',
+      sandbox: codexSandboxMode(input.permissionMode),
       approvalPolicy: 'never',
       ...(input.transient ? { ephemeral: true } : {}),
       developerInstructions: [
@@ -337,8 +338,9 @@ export class CodexAgent {
       input: turnInput,
       cwd: active.workspaceDirectory,
       runtimeWorkspaceRoots: [active.workspaceDirectory],
-      sandboxPolicy: workspaceWriteSandbox(active.workspaceDirectory),
+      sandboxPolicy: codexSandboxPolicy(input.permissionMode, active.workspaceDirectory),
       approvalPolicy: 'never',
+      ...(input.model?.trim() ? { model: input.model.trim() } : {}),
       ...(input.effort?.trim() ? { effort: input.effort.trim() } : {})
     });
     const turn = result as { turn?: { id?: string } };
@@ -931,6 +933,13 @@ function activityFromExecItem(
 function execArgs(input: CodexStreamRequest, workspaceDirectory: string, prompt: string, imagePaths: string[]): string[] {
   const modelArgs = input.model?.trim() ? ['--model', input.model.trim()] : [];
   const effortArgs = input.effort?.trim() ? ['--config', `model_reasoning_effort="${input.effort.trim()}"`] : [];
+  const sandboxMode = codexSandboxMode(input.permissionMode);
+  const resumedPermissionArgs = [
+    '--config',
+    `sandbox_mode="${sandboxMode}"`,
+    '--config',
+    'approval_policy="never"'
+  ];
   const imageArgs = imagePaths.flatMap((imagePath) => ['--image', imagePath]);
   if (input.codexThreadId && !input.transient) {
     return [
@@ -938,6 +947,7 @@ function execArgs(input: CodexStreamRequest, workspaceDirectory: string, prompt:
       'resume',
       '--json',
       '--skip-git-repo-check',
+      ...resumedPermissionArgs,
       ...modelArgs,
       ...effortArgs,
       ...imageArgs,
@@ -950,7 +960,9 @@ function execArgs(input: CodexStreamRequest, workspaceDirectory: string, prompt:
     '--json',
     '--skip-git-repo-check',
     '--sandbox',
-    'workspace-write',
+    sandboxMode,
+    '--config',
+    'approval_policy="never"',
     '--cd',
     workspaceDirectory,
     ...(input.transient ? ['--ephemeral'] : []),
@@ -1074,6 +1086,29 @@ function workspaceWriteSandbox(workspaceDirectory: string): Record<string, unkno
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false
   };
+}
+
+function codexSandboxMode(permissionMode: CodexPermissionMode | undefined): string {
+  if (permissionMode === 'read-only') {
+    return 'read-only';
+  }
+  if (permissionMode === 'full-access') {
+    return 'danger-full-access';
+  }
+  return 'workspace-write';
+}
+
+function codexSandboxPolicy(
+  permissionMode: CodexPermissionMode | undefined,
+  workspaceDirectory: string
+): Record<string, unknown> {
+  if (permissionMode === 'read-only') {
+    return { type: 'readOnly', networkAccess: true };
+  }
+  if (permissionMode === 'full-access') {
+    return { type: 'dangerFullAccess' };
+  }
+  return workspaceWriteSandbox(workspaceDirectory);
 }
 
 async function listWorkspaceImages(directory: string): Promise<string[]> {

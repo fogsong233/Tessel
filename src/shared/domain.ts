@@ -214,10 +214,19 @@ export interface Conversation {
   mode: AiMode;
   agentKind?: ConversationAgentKind;
   codexThreadId?: string;
+  codexSettings?: CodexConversationSettings;
   summary: ConversationSummary;
   messages: ConversationMessage[];
   createdAt: ISODate;
   updatedAt: ISODate;
+}
+
+export type CodexPermissionMode = 'read-only' | 'workspace-write' | 'full-access';
+
+export interface CodexConversationSettings {
+  model?: string;
+  effort?: string;
+  permissionMode?: CodexPermissionMode;
 }
 
 export interface NoteDocument {
@@ -441,6 +450,7 @@ export interface CodexStreamRequest {
   model?: string;
   preferredLanguage?: AiPreferredLanguage;
   effort?: string;
+  permissionMode?: CodexPermissionMode;
 }
 
 export interface CodexAvailability {
@@ -462,6 +472,7 @@ export interface ReaderAiStreamRequest {
   documentId?: DocumentId;
   conversationId?: ConversationId;
   codexThreadId?: string;
+  codexOptions?: CodexConversationSettings;
   transient?: boolean;
   history?: ConversationMessage[];
   request: AiCompletionRequest;
