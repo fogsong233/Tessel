@@ -293,11 +293,13 @@ export class CodexAgent {
         anchorQuote: conversation.anchorQuote?.slice(0, 700)
       }))
     };
-    const history = input.history?.slice(-8).map((message) => ({
+    // A resumed Codex thread already contains its transcript. Synced app
+    // history is only needed when creating or reconstructing a local thread.
+    const history = !input.codexThreadId ? input.history?.slice(-8).map((message) => ({
       role: message.role,
       content: message.content.slice(0, 2000),
       attachments: message.attachments?.map((attachment) => attachment.name)
-    }));
+    })) : undefined;
     const text = [
       'PDF session context:',
       JSON.stringify(contextEnvelope, null, 2),

@@ -345,8 +345,8 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
             ? preferences.experimentalCodexAgent.translationModel
             : preferences.experimentalCodexAgent.chatModel,
           effort: useTranslationConfig
-            ? preferences.experimentalCodexAgent.translationReasoningEffort
-            : preferences.experimentalCodexAgent.chatReasoningEffort,
+            ? preferences.experimentalCodexAgent.translationReasoningEffort ?? 'low'
+            : preferences.experimentalCodexAgent.chatReasoningEffort ?? 'low',
           preferredLanguage: input.request.preferredLanguage
         }, sendStreamEvent);
       } else {
