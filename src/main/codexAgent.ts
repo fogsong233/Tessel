@@ -623,7 +623,7 @@ export class CodexAgent {
       });
       child.once('exit', (code, signal) => {
         clearTimeout(startupTimeout);
-        if (!active.settled) {
+        if (!active.settled && !active.checkpointing) {
           const detail = active.stderr.trim() || `Codex exec exited (${code ?? signal ?? 'unknown'}).`;
           void this.finishExecTurn(input.streamId, active, new Error(detail));
         }
