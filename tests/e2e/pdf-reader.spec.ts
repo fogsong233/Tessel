@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
@@ -19,7 +19,7 @@ test.describe('PDF reader flow', () => {
     userDataDir = join(runDir, 'user-data');
     pdfPath = join(runDir, 'reader-fixture.pdf');
     await mkdir(userDataDir, { recursive: true });
-    await createFixturePdf(pdfPath);
+    await createFixturePdf(pdfPath, { largeAttachment: testInfo.title.includes('range-backed') });
     const fakeCodexBin = join(runDir, 'bin');
     const fakeCodexHome = join(runDir, 'codex-home');
     const fakeCodexLog = join(runDir, 'codex-requests.jsonl');
@@ -61,6 +61,11 @@ test.describe('PDF reader flow', () => {
       };
       return store.documents[0];
     }).toMatchObject({ id: `pdf_${expectedHash}`, fingerprint: { hash: expectedHash } });
+  });
+
+  test('loads a range-backed PDF larger than the initial reader buffer', async () => {
+    await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
+    await expect(page.locator('.pdf-state')).toHaveCount(0);
   });
 
   test('quotes a selected passage into the active chat without sending it', async () => {
@@ -461,12 +466,15 @@ test.describe('PDF reader flow', () => {
   });
 });
 
-async function createFixturePdf(filePath: string): Promise<void> {
+async function createFixturePdf(filePath: string, options: { largeAttachment?: boolean } = {}): Promise<void> {
   const document = await PDFDocument.create();
   const page = document.addPage([612, 792]);
   const font = await document.embedFont(StandardFonts.Helvetica);
   page.drawText('Reader fixture quote Alpha Beta', { x: 72, y: 720, size: 18, font });
   page.drawText('Second line for a persistent PDF reader session.', { x: 72, y: 680, size: 14, font });
+  if (options.largeAttachment) {
+    await document.attach(randomBytes(1024 * 1024), 'range-fixture.bin', { mimeType: 'application/octet-stream' });
+  }
   await mkdir(dirname(filePath), { recursive: true });
   await document.save().then((bytes) => import('node:fs/promises').then(({ writeFile }) => writeFile(filePath, bytes)));
 }
