@@ -1,66 +1,96 @@
-# Tessel
+<p align="center">
+  <img src="src/assets/icons/tessel-logo.png" width="112" alt="Tessel logo" />
+</p>
 
-Tessel is a focused PDF reader with anchored AI conversations and persistent reading progress.
+<h1 align="center">Tessel</h1>
 
-The first version focuses on one reading loop:
+<p align="center">
+  A focused, local-first PDF reader with contextual AI conversations.<br />
+  专注、本地优先的 PDF 阅读器，让 AI 对话始终贴合你的阅读位置。
+</p>
 
-1. Open a PDF.
-2. Select text in the PDF.
-3. Ask Tessel to explain, translate, or summarize the selection.
-4. Keep the conversation attached to the page and selection.
-5. Edit Markdown notes beside the PDF.
+<p align="center">
+  <a href="#english">English</a> · <a href="#中文">中文</a>
+</p>
 
-## Stack
+---
 
-- Node.js + pnpm
-- Electron
-- TypeScript
-- React + Vite
-- PDF.js
-- pdf-lib for explicit PDF metadata/export operations
-- KaTeX-enabled Markdown rendering
+<a id="english"></a>
 
-## Scripts
+## Read with context
+
+Tessel opens directly into a PDF. Select a passage, ask a question, translate it, or turn it into a note. Conversations, citations, pins, notes, and reading progress stay connected to the document by its content hash, not its filename.
+
+### Highlights
+
+- **Direct PDF workflow**: open a file and start reading, with vector PDF.js rendering and persistent page state.
+- **Contextual conversations**: quote a selected passage into chat without sending it, then ask in your own words.
+- **Codex sidebar**: an experimental local Codex CLI integration for chat, translation, document search, local tools, images, and LaTeX output.
+- **Flexible AI routing**: choose Codex or an OpenAI-compatible API for chat, translation, and generated outlines.
+- **Working memory**: pin conversations, translations, notes, and images alongside the PDF; reopen recent translations at any time.
+- **Your data stays yours**: document metadata is keyed by the SHA-256 hash of the PDF. Optional WebDAV sync preserves progress and conversations across devices.
+- **Desktop native**: Electron builds for macOS and Windows, GitHub Release updates, and platform-specific application icons.
+
+### Run from source
 
 ```bash
+corepack enable
 pnpm install
 pnpm dev
-pnpm typecheck
+```
+
+Build and verify the desktop application:
+
+```bash
 pnpm build
 pnpm test:e2e
 ```
 
-If your shell has `ELECTRON_RUN_AS_NODE=1`, unset it before running the app:
+If the shell has `ELECTRON_RUN_AS_NODE=1`, remove it before starting Electron.
 
-```powershell
-Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+### Data and privacy
+
+Tessel stores its workspace in Electron's `userData` directory. It contains PDF metadata, reading state, conversations, notes, pins, and preferences. API keys use Electron `safeStorage` where the platform provides it. PDF files themselves remain in their original locations.
+
+The experimental Codex integration requires a locally installed and authenticated `codex` CLI. When it is unavailable, the rest of the reader remains fully usable.
+
+---
+
+<a id="中文"></a>
+
+## 带着上下文阅读
+
+Tessel 打开后直接进入 PDF。选中一段文字后，可以提问、翻译或生成笔记；对话、引用、Pin、笔记和阅读进度都会按 PDF 内容哈希关联，而不是依赖文件名。
+
+### 主要功能
+
+- **直接阅读**：打开 PDF 后立即开始阅读，使用 PDF.js 矢量渲染并保存页码与视图状态。
+- **上下文对话**：选中的段落会先作为引用放入输入框，由你决定如何提问和发送。
+- **Codex 侧边栏**：实验性本地 Codex CLI 集成，支持对话、翻译、文档搜索、本地工具、图文与 LaTeX 输出。
+- **统一 AI 路由**：对话、翻译和 AI 目录可在 Codex 与 OpenAI 兼容 API 之间选择。
+- **阅读工作台**：将对话、翻译、笔记和图片 Pin 在 PDF 旁；最近翻译可随时重新打开。
+- **数据归你所有**：每份 PDF 使用 SHA-256 内容哈希保存元数据；可选 WebDAV 同步阅读进度与对话。
+- **原生桌面应用**：提供 macOS 和 Windows 构建、GitHub Release 自动更新及平台图标。
+
+### 从源码运行
+
+```bash
+corepack enable
+pnpm install
 pnpm dev
 ```
 
-## Tests
-
-The Electron integration suite launches the built app with an isolated test
-workspace, clicks through the library, opens a generated PDF in a reader window,
-checks that PDF text and canvas rendering are visible, and verifies that
-temporary summary/translation panels are not persisted while chat is persisted.
+构建并运行回归测试：
 
 ```bash
+pnpm build
 pnpm test:e2e
 ```
 
-## Storage
+若终端设置了 `ELECTRON_RUN_AS_NODE=1`，请先移除该环境变量再启动 Electron。
 
-The current workspace is a JSON repository stored in Electron's `userData` directory. It keeps:
+### 数据与隐私
 
-- PDF metadata and recent documents
-- Anchored conversations
-- Markdown notes
-- AI provider settings, with the API key encrypted through Electron `safeStorage` when available
+Tessel 将工作区保存在 Electron 的 `userData` 目录中，包含 PDF 元数据、阅读进度、对话、笔记、Pin 和偏好设置。系统支持时，API 密钥通过 Electron `safeStorage` 加密；PDF 文件始终留在原始位置。
 
-The repository boundary lives in `src/main/store.ts`, so it can later be replaced by SQLite + FTS and GitHub sync without rewriting the renderer.
-
-## PDF Engine
-
-Rendering uses PDF.js in the renderer, while the Electron main process exposes range reads over IPC. Large PDFs are not copied through IPC as one giant `ArrayBuffer`; PDF.js asks for byte ranges and Node reads only those slices from disk.
-
-Explicit PDF mutations live in `src/main/pdfOperations.ts` and use `pdf-lib`. Keep that path out of the document-open flow so large files stay responsive.
+实验性 Codex 功能要求本机已安装并登录 `codex` CLI。即使不可用，阅读器的其他功能也不受影响。
