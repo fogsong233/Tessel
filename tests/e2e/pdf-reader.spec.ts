@@ -609,8 +609,8 @@ if (args[0] === 'exec') {
     setTimeout(() => sendExec({ type: 'turn.completed' }), 45);
   } else {
     setTimeout(() => sendExec({ type: 'item.completed', item: { id: 'exec_answer_1', type: 'agent_message', text: 'First exec segment.' } }), 30);
-    setTimeout(() => sendExec({ type: 'item.started', item: { id: 'exec_command_1', type: 'command_execution' } }), 2000);
-    setTimeout(() => sendExec({ type: 'item.completed', item: { id: 'exec_command_1', type: 'command_execution' } }), 2200);
+    setTimeout(() => sendExec({ type: 'item.started', item: { id: 'exec_command_1', type: 'command_execution' } }), 6000);
+    setTimeout(() => sendExec({ type: 'item.completed', item: { id: 'exec_command_1', type: 'command_execution' } }), 6200);
   }
   process.stdin.resume();
   return;
