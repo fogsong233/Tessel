@@ -4,6 +4,7 @@ import {
   AiModelInfo,
   AiStreamEvent,
   AiStreamRequest,
+  AiStreamSteerRequest,
   CodexStreamRequest,
   ReaderAiStreamRequest,
   AiProviderConfig,
@@ -68,6 +69,7 @@ const api: SidelightApi = {
   completeCodexStream: (input: CodexStreamRequest) => ipcRenderer.invoke('codex:completeStream', input),
   getCodexAvailability: () => ipcRenderer.invoke('codex:availability'),
   listCodexModels: () => ipcRenderer.invoke('codex:listModels'),
+  steerAiStream: (request: AiStreamSteerRequest) => ipcRenderer.invoke('ai:steerStream', request),
   cancelAiStream: (streamId: string) => ipcRenderer.invoke('ai:cancelStream', streamId),
   onAiStreamEvent: (listener: (event: AiStreamEvent) => void) => {
     const channelListener = (_event: Electron.IpcRendererEvent, payload: AiStreamEvent): void => listener(payload);

@@ -4006,7 +4006,15 @@ function DockChatPanel({
       setDraft('');
       return;
     }
-    if ((!prompt && attachments.length === 0) || busy) {
+    if (busy) {
+      if (isCodex && canStopGeneration && prompt && attachments.length === 0) {
+        setDraft('');
+        setCommandNotice('Guidance queued for the active Codex turn.');
+        onSend(prompt, []);
+      }
+      return;
+    }
+    if (!prompt && attachments.length === 0) {
       return;
     }
 
@@ -4024,6 +4032,9 @@ function DockChatPanel({
   };
 
   const attachFiles = (files: FileList | null): void => {
+    if (busy) {
+      return;
+    }
     void addImageAttachments(files, setAttachments);
   };
 
@@ -4213,6 +4224,7 @@ function DockChatPanel({
             className="chat-icon-button"
             title={text.attachImages}
             aria-label={text.attachImages}
+            disabled={busy}
             onClick={() => fileInputRef.current?.click()}
           >
             <FilePlus2 size={17} />
@@ -4229,7 +4241,11 @@ function DockChatPanel({
               composingRef.current = false;
             }}
             onPaste={(event) => attachFiles(event.clipboardData.files)}
-            placeholder={isCodex ? 'Message Codex or type / for commands' : text.messageSidelight}
+            placeholder={isCodex && canStopGeneration
+              ? 'Guide the active Codex turn'
+              : isCodex
+                ? 'Message Codex or type / for commands'
+                : text.messageSidelight}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !isComposingKeyboardEvent(event, composingRef.current)) {
                 event.preventDefault();
@@ -4237,7 +4253,7 @@ function DockChatPanel({
               }
             }}
           />
-          {canStopGeneration ? (
+          {canStopGeneration && (!isCodex || !draft.trim() || attachments.length > 0) ? (
             <Button
               type="button"
               rounded
@@ -4252,10 +4268,10 @@ function DockChatPanel({
             <Button
               type="submit"
               rounded
-              className="chat-send-button"
-              title={text.send}
-              aria-label={text.send}
-              disabled={busy || (!draft.trim() && attachments.length === 0)}
+              className={`chat-send-button${canStopGeneration ? ' chat-steer-button' : ''}`}
+              title={canStopGeneration ? 'Send guidance' : text.send}
+              aria-label={canStopGeneration ? 'Send guidance' : text.send}
+              disabled={(!canStopGeneration && busy) || (!draft.trim() && attachments.length === 0)}
             >
               <ArrowUp size={17} />
             </Button>

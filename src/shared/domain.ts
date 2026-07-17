@@ -437,6 +437,11 @@ export interface AiStreamEvent {
   usedProvider?: string;
 }
 
+export interface AiStreamSteerRequest {
+  streamId: string;
+  prompt: string;
+}
+
 export interface CodexStreamRequest {
   streamId: string;
   conversationId: ConversationId;
@@ -556,6 +561,7 @@ export interface SidelightApi {
   completeCodexStream(input: CodexStreamRequest): Promise<void>;
   getCodexAvailability(): Promise<CodexAvailability>;
   listCodexModels(): Promise<CodexModelInfo[]>;
+  steerAiStream(request: AiStreamSteerRequest): Promise<void>;
   cancelAiStream(streamId: string): Promise<void>;
   onAiStreamEvent(listener: (event: AiStreamEvent) => void): () => void;
   onLibraryChanged(listener: () => void): () => void;

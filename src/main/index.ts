@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   AiCompletionRequest,
   AiStreamEvent,
+  AiStreamSteerRequest,
   AiStreamRequest,
   CodexStreamRequest,
   ReaderAiStreamRequest,
@@ -250,6 +251,12 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
   ipcMain.handle('ai:cancelStream', (_event, streamId: string) => {
     activeAiStreams.get(streamId)?.abort();
     void codexAgent.cancel(streamId);
+  });
+  ipcMain.handle('ai:steerStream', async (_event, request: AiStreamSteerRequest) => {
+    if (!activeAiStreams.has(request.streamId)) {
+      throw new Error('This Codex turn is no longer active.');
+    }
+    await codexAgent.steer(request.streamId, request.prompt);
   });
   ipcMain.handle('ai:completeStream', async (event, input: AiStreamRequest) => {
     const sender = event.sender;

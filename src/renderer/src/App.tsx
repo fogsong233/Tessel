@@ -81,6 +81,12 @@ interface TransientAidState {
   error?: string;
 }
 
+interface ActiveConversationStreamController {
+  streamId: string;
+  conversationId: string;
+  steer(prompt: string): Promise<void>;
+}
+
 export function App(): ReactElement {
   const readerDocumentId = useMemo(() => new URLSearchParams(window.location.search).get('documentId') ?? undefined, []);
   const [documents, setDocuments] = useState<PdfDocumentMeta[]>([]);
@@ -113,6 +119,7 @@ export function App(): ReactElement {
   const loadedReaderDocumentRef = useRef<string | undefined>(undefined);
   const readerLoadRequestRef = useRef<string | undefined>(undefined);
   const stoppedStreamIdsRef = useRef<Set<string>>(new Set());
+  const activeConversationStreamRef = useRef<ActiveConversationStreamController>();
 
   useEffect(() => {
     void refreshSettings();
@@ -464,6 +471,14 @@ export function App(): ReactElement {
     attachments: ConversationAttachment[] = [],
     toolContext?: AiDocumentToolContext
   ): Promise<void> {
+    const activeController = activeConversationStreamRef.current;
+    if (activeController?.conversationId === conversationId) {
+      if (!prompt.trim() || attachments.length > 0) {
+        return;
+      }
+      await activeController.steer(prompt);
+      return;
+    }
     const conversation = conversations.find((candidate) => candidate.id === conversationId);
     if (!conversation) {
       return;
@@ -541,6 +556,7 @@ export function App(): ReactElement {
       createdAt: new Date().toISOString()
     };
     let streamedContent = '';
+    let activeAssistantMessageId = assistantMessage.id;
     let draftConversation: Conversation = {
       ...conversation,
       messages: [...conversation.messages, assistantMessage],
@@ -551,6 +567,50 @@ export function App(): ReactElement {
     const streamId = createId('stream');
     setActiveStream({ streamId, conversationId: conversation.id });
     let finished = false;
+    activeConversationStreamRef.current = {
+      streamId,
+      conversationId: conversation.id,
+      steer: async (guidance) => {
+        if (finished) {
+          throw new Error('This Codex turn is no longer active.');
+        }
+        const createdAt = new Date().toISOString();
+        const guidanceMessage: ConversationMessage = {
+          id: createId('msg'),
+          role: 'user',
+          content: guidance,
+          createdAt
+        };
+        const continuationMessage: ConversationMessage = {
+          id: createId('msg'),
+          role: 'assistant',
+          content: '',
+          createdAt
+        };
+        activeAssistantMessageId = continuationMessage.id;
+        streamedContent = '';
+        draftConversation = {
+          ...draftConversation,
+          messages: [...draftConversation.messages, guidanceMessage, continuationMessage],
+          updatedAt: createdAt
+        };
+        putConversationInState(draftConversation);
+        try {
+          await window.sidelight.steerAiStream({ streamId, prompt: guidance });
+        } catch (error) {
+          streamedContent = `Could not send guidance: ${presentableAiError(error)}`;
+          draftConversation = {
+            ...draftConversation,
+            messages: draftConversation.messages.map((message) =>
+              message.id === activeAssistantMessageId ? { ...message, content: streamedContent } : message
+            ),
+            updatedAt: new Date().toISOString()
+          };
+          putConversationInState(draftConversation);
+          throw error;
+        }
+      }
+    };
     const finishWithConversation = async (conversationToSave: Conversation): Promise<void> => {
       if (finished) {
         return;
@@ -565,6 +625,9 @@ export function App(): ReactElement {
       void refreshConversationSummary(saved);
       setBusy(false);
       setActiveStream((current) => current?.streamId === streamId ? undefined : current);
+      if (activeConversationStreamRef.current?.streamId === streamId) {
+        activeConversationStreamRef.current = undefined;
+      }
       stoppedStreamIdsRef.current.delete(streamId);
     };
 
@@ -577,7 +640,7 @@ export function App(): ReactElement {
         draftConversation = {
           ...draftConversation,
           messages: draftConversation.messages.map((message) =>
-            message.id === assistantMessage.id
+            message.id === activeAssistantMessageId
               ? { ...message, toolCalls: mergeToolCallEvents(message.toolCalls, event.toolCall!) }
               : message
           ),
@@ -590,7 +653,7 @@ export function App(): ReactElement {
         draftConversation = {
           ...draftConversation,
           messages: draftConversation.messages.map((message) =>
-            message.id === assistantMessage.id
+            message.id === activeAssistantMessageId
               ? {
                   ...message,
                   agentActivities: mergeAgentActivityEvents(message.agentActivities, event.activity!),
@@ -607,7 +670,7 @@ export function App(): ReactElement {
         draftConversation = {
           ...draftConversation,
           messages: draftConversation.messages.map((message) =>
-            message.id === assistantMessage.id
+            message.id === activeAssistantMessageId
               ? { ...message, attachments: mergeConversationAttachments(message.attachments, event.artifacts!) }
               : message
           ),
@@ -631,7 +694,7 @@ export function App(): ReactElement {
         draftConversation = {
           ...draftConversation,
           messages: draftConversation.messages.map((message) =>
-            message.id === assistantMessage.id
+            message.id === activeAssistantMessageId
               ? { ...message, agentTimeline: appendAgentTimelineOutput(message.agentTimeline, event.delta!) }
               : message
           ),
@@ -644,7 +707,7 @@ export function App(): ReactElement {
         draftConversation = {
           ...draftConversation,
           messages: draftConversation.messages.map((message) =>
-            message.id === assistantMessage.id
+            message.id === activeAssistantMessageId
               ? { ...message, agentTimeline: appendAgentTimelineOutput(message.agentTimeline, streamedContent) }
               : message
           ),
@@ -660,7 +723,7 @@ export function App(): ReactElement {
         draftConversation = {
           ...draftConversation,
           messages: draftConversation.messages.map((message) =>
-            message.id === assistantMessage.id ? { ...message, content: streamedContent } : message
+            message.id === activeAssistantMessageId ? { ...message, content: streamedContent } : message
           ),
           updatedAt: new Date().toISOString()
         };
@@ -697,7 +760,7 @@ export function App(): ReactElement {
         const stoppedConversation: Conversation = {
           ...draftConversation,
           messages: draftConversation.messages.map((message) =>
-            message.id === assistantMessage.id
+            message.id === activeAssistantMessageId
               ? { ...message, content: streamedContent.trim() ? streamedContent : stoppedGenerationText(appPreferences.aiLanguage) }
               : message
           ),
@@ -710,7 +773,7 @@ export function App(): ReactElement {
       const failedConversation: Conversation = {
         ...draftConversation,
         messages: draftConversation.messages.map((message) =>
-          message.id === assistantMessage.id
+          message.id === activeAssistantMessageId
             ? {
                 ...message,
                 content: wasStopped

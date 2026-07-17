@@ -36,6 +36,7 @@ interface ActiveTurn {
   workspaceDirectory: string;
   workspaceImages: Map<string, string>;
   onEvent: (event: Omit<AiStreamEvent, 'streamId'>) => void;
+  pendingGuidance: PendingSteer[];
   resolve(): void;
   reject(error: Error): void;
 }
@@ -45,6 +46,9 @@ interface ActiveExecTurn {
   workspaceDirectory: string;
   workspaceImages: Map<string, string>;
   onEvent: (event: Omit<AiStreamEvent, 'streamId'>) => void;
+  threadId?: string;
+  pendingGuidance: PendingSteer[];
+  checkpointing: boolean;
   resolve(): void;
   reject(error: Error): void;
   cancelled: boolean;
@@ -58,6 +62,21 @@ interface JsonRpcMessage {
   params?: Record<string, unknown>;
   result?: unknown;
   error?: { message?: string };
+}
+
+interface PendingSteer {
+  id: string;
+  prompt: string;
+}
+
+class ExecSteerCheckpointError extends Error {
+  constructor(
+    readonly guidance: string,
+    readonly threadId?: string
+  ) {
+    super('Codex guidance is ready for the next checkpoint.');
+    this.name = 'ExecSteerCheckpointError';
+  }
 }
 
 /**
@@ -76,6 +95,7 @@ export class CodexAgent {
   private readonly threadContexts = new Map<string, ThreadContext>();
   private readonly activeTurns = new Map<string, ActiveTurn>();
   private readonly activeExecTurns = new Map<string, ActiveExecTurn>();
+  private readonly queuedSteers = new Map<string, PendingSteer[]>();
   private preferredTransport?: 'app-server' | 'exec';
   private transportDetectionPromise?: Promise<'app-server' | 'exec'>;
 
@@ -160,6 +180,34 @@ export class CodexAgent {
     }
   }
 
+  async steer(streamId: string, prompt: string): Promise<void> {
+    const guidance = prompt.trim();
+    if (!guidance) {
+      throw new Error('Guidance cannot be empty.');
+    }
+    const pending: PendingSteer = {
+      id: `guidance:${randomUUID()}`,
+      prompt: guidance
+    };
+    const appTurn = this.activeTurns.get(streamId);
+    if (appTurn) {
+      appTurn.onEvent({ activity: guidanceActivity(pending, 'started') });
+      if (!appTurn.turnId) {
+        appTurn.pendingGuidance.push(pending);
+        return;
+      }
+      await this.deliverAppServerSteer(appTurn, pending);
+      return;
+    }
+    const execTurn = this.activeExecTurns.get(streamId);
+    if (execTurn) {
+      execTurn.pendingGuidance.push(pending);
+      execTurn.onEvent({ activity: guidanceActivity(pending, 'started') });
+      return;
+    }
+    this.queuedSteers.set(streamId, [...(this.queuedSteers.get(streamId) ?? []), pending]);
+  }
+
   private async initialTransport(): Promise<'app-server' | 'exec'> {
     if (!this.transportDetectionPromise) {
       this.transportDetectionPromise = promisify(execFile)('codex', ['login', 'status'], { timeout: 4_000 })
@@ -189,9 +237,13 @@ export class CodexAgent {
         workspaceDirectory: documentWorkspace,
         workspaceImages,
         onEvent,
+        pendingGuidance: this.takeQueuedSteers(input.streamId),
         resolve,
         reject
       };
+      for (const pending of active.pendingGuidance) {
+        onEvent({ activity: guidanceActivity(pending, 'started') });
+      }
       this.activeTurns.set(input.streamId, active);
       void this.startTurn(input, runtime, active)
         .catch((error: unknown) => {
@@ -202,6 +254,7 @@ export class CodexAgent {
   }
 
   async cancel(streamId: string): Promise<void> {
+    this.queuedSteers.delete(streamId);
     const execTurn = this.activeExecTurns.get(streamId);
     if (execTurn) {
       execTurn.cancelled = true;
@@ -230,6 +283,7 @@ export class CodexAgent {
       execTurn.child.kill('SIGINT');
     }
     this.activeExecTurns.clear();
+    this.queuedSteers.clear();
   }
 
   private async resolveThread(
@@ -352,6 +406,36 @@ export class CodexAgent {
     }
     active.turnId = turn.turn.id;
     active.onEvent({ activity: activity(`session:${active.threadId}`, 'reading', 'Preparing PDF context', 'completed') });
+    const pendingGuidance = active.pendingGuidance.splice(0);
+    for (const pending of pendingGuidance) {
+      await this.deliverAppServerSteer(active, pending);
+    }
+  }
+
+  private async deliverAppServerSteer(active: ActiveTurn, pending: PendingSteer): Promise<void> {
+    try {
+      await this.request('turn/steer', {
+        threadId: active.threadId,
+        expectedTurnId: active.turnId,
+        input: [{ type: 'text', text: pending.prompt, text_elements: [] }]
+      });
+      active.onEvent({ activity: guidanceActivity(pending, 'completed') });
+    } catch (error) {
+      active.onEvent({
+        activity: guidanceActivity(
+          pending,
+          'error',
+          error instanceof Error ? error.message : String(error)
+        )
+      });
+      throw error;
+    }
+  }
+
+  private takeQueuedSteers(streamId: string): PendingSteer[] {
+    const pending = this.queuedSteers.get(streamId) ?? [];
+    this.queuedSteers.delete(streamId);
+    return pending;
   }
 
   private async documentWorkspace(document: PdfDocumentMeta): Promise<string> {
@@ -427,6 +511,8 @@ export class CodexAgent {
         workspaceDirectory,
         workspaceImages,
         onEvent,
+        pendingGuidance: this.takeQueuedSteers(input.streamId),
+        checkpointing: false,
         resolve,
         reject,
         cancelled: false,
@@ -434,6 +520,9 @@ export class CodexAgent {
         stderr: ''
       };
       this.activeExecTurns.set(input.streamId, active);
+      for (const pending of active.pendingGuidance) {
+        onEvent({ activity: guidanceActivity(pending, 'started') });
+      }
       let buffer = '';
       let receivedOutput = false;
       const startupTimeout = setTimeout(() => {
@@ -491,14 +580,35 @@ export class CodexAgent {
     input: CodexStreamRequest,
     onEvent: (event: Omit<AiStreamEvent, 'streamId'>) => void
   ): Promise<void> {
-    try {
-      await this.streamWithExec(input, onEvent);
-    } catch (error) {
-      if (!input.codexThreadId || input.transient || !isMissingExecSession(error)) {
-        throw error;
+    let currentInput = input;
+    let restoredMissingSession = false;
+    for (;;) {
+      try {
+        await this.streamWithExec(currentInput, onEvent);
+        return;
+      } catch (error) {
+        if (error instanceof ExecSteerCheckpointError) {
+          currentInput = {
+            ...currentInput,
+            codexThreadId: error.threadId ?? currentInput.codexThreadId,
+            prompt: steerContinuationPrompt(error.guidance),
+            attachments: undefined,
+            history: undefined
+          };
+          continue;
+        }
+        if (
+          restoredMissingSession
+          || !currentInput.codexThreadId
+          || currentInput.transient
+          || !isMissingExecSession(error)
+        ) {
+          throw error;
+        }
+        restoredMissingSession = true;
+        onEvent({ activity: activity('session:restore', 'reading', 'Starting a local Codex session from synced chat history', 'completed') });
+        currentInput = { ...currentInput, codexThreadId: undefined };
       }
-      onEvent({ activity: activity('session:restore', 'reading', 'Starting a local Codex session from synced chat history', 'completed') });
-      await this.streamWithExec({ ...input, codexThreadId: undefined }, onEvent);
     }
   }
 
@@ -509,6 +619,7 @@ export class CodexAgent {
     }
     const type = typeof event.type === 'string' ? event.type : '';
     if (type === 'thread.started' && typeof event.thread_id === 'string') {
+      active.threadId = event.thread_id;
       active.onEvent({ activity: activity('transport:exec', 'reading', 'Local Codex session started', 'completed') });
       active.onEvent({ agentThreadId: event.thread_id, usedProvider: 'Codex' });
       return;
@@ -522,10 +633,36 @@ export class CodexAgent {
       if (activityEvent) {
         active.onEvent({ activity: activityEvent });
       }
+      if (type === 'item.completed' && execItemIsSteerCheckpoint(item)) {
+        this.checkpointExecSteer(streamId, active, true);
+      }
       return;
     }
     if (type === 'turn.completed') {
+      if (active.pendingGuidance.length) {
+        this.checkpointExecSteer(streamId, active, false);
+        return;
+      }
       void this.finishExecTurn(streamId, active);
+    }
+  }
+
+  private checkpointExecSteer(streamId: string, active: ActiveExecTurn, interrupt: boolean): void {
+    if (active.settled || active.checkpointing || active.pendingGuidance.length === 0) {
+      return;
+    }
+    active.checkpointing = true;
+    const pending = active.pendingGuidance.splice(0);
+    for (const guidance of pending) {
+      active.onEvent({ activity: guidanceActivity(guidance, 'completed') });
+    }
+    void this.finishExecTurn(
+      streamId,
+      active,
+      new ExecSteerCheckpointError(pending.map((guidance) => guidance.prompt).join('\n\n'), active.threadId)
+    );
+    if (interrupt && !active.child.killed) {
+      active.child.kill('SIGINT');
     }
   }
 
@@ -889,6 +1026,24 @@ function activity(
   return { id, kind, label, status, detail, updatedAt: new Date().toISOString() };
 }
 
+function guidanceActivity(
+  pending: PendingSteer,
+  status: AgentActivityEvent['status'],
+  errorDetail?: string
+): AgentActivityEvent {
+  return activity(
+    pending.id,
+    'reading',
+    status === 'started'
+      ? 'Guidance queued for the next checkpoint'
+      : status === 'error'
+        ? 'Could not deliver guidance to Codex'
+        : 'Guidance delivered to Codex',
+    status,
+    errorDetail ?? pending.prompt.slice(0, 240)
+  );
+}
+
 function activityFromCodexItem(
   item: { id?: unknown; type?: unknown; tool?: unknown; command?: unknown; changes?: unknown } | undefined,
   status: AgentActivityEvent['status']
@@ -931,6 +1086,26 @@ function activityFromExecItem(
     return activity(item.id, 'tool', 'Searching for supporting information', status);
   }
   return undefined;
+}
+
+function execItemIsSteerCheckpoint(item: { type?: unknown } | undefined): boolean {
+  return typeof item?.type === 'string' && [
+    'command_execution',
+    'file_change',
+    'image_generation',
+    'web_search',
+    'mcp_tool_call',
+    'dynamic_tool_call'
+  ].includes(item.type);
+}
+
+function steerContinuationPrompt(guidance: string): string {
+  return [
+    'The user sent the following guidance while you were working:',
+    guidance,
+    '',
+    'Apply it to the active PDF task now. Continue from the existing thread without repeating completed work.'
+  ].join('\n');
 }
 
 function execArgs(input: CodexStreamRequest, workspaceDirectory: string, prompt: string, imagePaths: string[]): string[] {
