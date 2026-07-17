@@ -1,4 +1,4 @@
-import { Conversation, PdfReadingState, WebDavSyncConfig } from '../shared/domain';
+import { Conversation, PdfReadingState, TranslationEntry, WebDavSyncConfig } from '../shared/domain';
 
 export interface PdfSessionSnapshot {
   version: 1;
@@ -6,6 +6,7 @@ export interface PdfSessionSnapshot {
   updatedAt: string;
   readingState?: PdfReadingState;
   conversations: Conversation[];
+  translations: TranslationEntry[];
 }
 
 export interface WebDavSessionSyncInput {
@@ -57,6 +58,13 @@ export function mergePdfSessionSnapshots(
   }
 
   const readingState = latestByUpdatedAt(remote.readingState, local.readingState);
+  const translations = new Map<string, TranslationEntry>();
+  for (const translation of [...remote.translations, ...local.translations]) {
+    const existing = translations.get(translation.id);
+    if (!existing || translation.updatedAt >= existing.updatedAt) {
+      translations.set(translation.id, translation);
+    }
+  }
   const updatedAt = [remote.updatedAt, local.updatedAt, readingState?.updatedAt]
     .filter((value): value is string => Boolean(value))
     .sort()
@@ -67,7 +75,10 @@ export function mergePdfSessionSnapshots(
     documentHash: local.documentHash,
     updatedAt,
     readingState,
-    conversations: Array.from(conversations.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    conversations: Array.from(conversations.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    translations: Array.from(translations.values())
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, 10)
   };
 }
 
@@ -91,9 +102,9 @@ async function getRemoteSnapshot(url: string, config: WebDavSyncConfig): Promise
   }
 
   try {
-    const value = await response.json() as PdfSessionSnapshot;
+    const value = await response.json() as Partial<PdfSessionSnapshot>;
     return value?.version === 1 && typeof value.documentHash === 'string' && Array.isArray(value.conversations)
-      ? value
+      ? { ...value, translations: Array.isArray(value.translations) ? value.translations : [] } as PdfSessionSnapshot
       : undefined;
   } catch {
     throw new Error('WebDAV returned invalid PDF session metadata.');

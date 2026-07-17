@@ -6,6 +6,7 @@ import {
   AiProviderConfig,
   AppPreferences,
   Conversation,
+  TranslationEntry,
   defaultAppPreferences,
   defaultAiProvider,
   defaultGitHubUpload,
@@ -58,6 +59,7 @@ interface StoreFile {
   documents: PdfDocumentMeta[];
   libraryGroups: LibraryGroup[];
   conversations: Conversation[];
+  translations: TranslationEntry[];
   notes: NoteDocument[];
   workspaceBlocks: WorkspaceBlock[];
   generatedOutlines: PdfGeneratedOutline[];
@@ -74,6 +76,7 @@ const emptyStore = (): StoreFile => ({
   documents: [],
   libraryGroups: [],
   conversations: [],
+  translations: [],
   notes: [],
   workspaceBlocks: [],
   generatedOutlines: [],
@@ -359,6 +362,38 @@ export class JsonWorkspaceStore {
     return conversation;
   }
 
+  async listTranslations(documentId: string): Promise<TranslationEntry[]> {
+    const store = await this.read();
+    return store.translations
+      .filter((translation) => translation.documentId === documentId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async saveTranslation(translation: TranslationEntry): Promise<TranslationEntry> {
+    const store = await this.read();
+    const others = store.translations.filter((candidate) => candidate.id !== translation.id);
+    const documentTranslations = [translation, ...others.filter((candidate) => candidate.documentId === translation.documentId)]
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, 10);
+    store.translations = [
+      ...documentTranslations,
+      ...others.filter((candidate) => candidate.documentId !== translation.documentId)
+    ];
+    await this.write(store);
+    this.queueDocumentMetadataSync(translation.documentId);
+    return translation;
+  }
+
+  async deleteTranslation(translationId: string): Promise<void> {
+    const store = await this.read();
+    const translation = store.translations.find((candidate) => candidate.id === translationId);
+    store.translations = store.translations.filter((candidate) => candidate.id !== translationId);
+    await this.write(store);
+    if (translation) {
+      this.queueDocumentMetadataSync(translation.documentId);
+    }
+  }
+
   async listNotes(documentId: string): Promise<NoteDocument[]> {
     const store = await this.read();
     const document = store.documents.find((candidate) => candidate.id === documentId);
@@ -631,6 +666,7 @@ export class JsonWorkspaceStore {
         githubUpload: { ...fallback.githubUpload, ...parsed.githubUpload },
         webDavSync: { ...fallback.webDavSync, ...parsed.webDavSync },
         appPreferences: normalizeAppPreferences({ ...fallback.appPreferences, ...parsed.appPreferences }),
+        translations: parsed.translations ?? fallback.translations,
         workspaceBlocks: parsed.workspaceBlocks ?? fallback.workspaceBlocks,
         generatedOutlines: parsed.generatedOutlines ?? fallback.generatedOutlines
       };
@@ -684,16 +720,22 @@ export class JsonWorkspaceStore {
   private snapshotForDocument(store: StoreFile, documentId: string, documentHash: string): PdfSessionSnapshot {
     const readingState = store.readingStates.find((state) => state.documentId === documentId);
     const conversations = store.conversations.filter((conversation) => conversation.documentId === documentId);
+    const translations = store.translations
+      .filter((translation) => translation.documentId === documentId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, 10);
     const latestConversationUpdate = conversations.map((conversation) => conversation.updatedAt).sort().at(-1);
+    const latestTranslationUpdate = translations.map((translation) => translation.updatedAt).sort().at(-1);
     return {
       version: 1,
       documentHash,
-      updatedAt: [readingState?.updatedAt, latestConversationUpdate, new Date().toISOString()]
+      updatedAt: [readingState?.updatedAt, latestConversationUpdate, latestTranslationUpdate, new Date().toISOString()]
         .filter((value): value is string => Boolean(value))
         .sort()
         .at(-1)!,
       readingState,
-      conversations
+      conversations,
+      translations
     };
   }
 
@@ -709,6 +751,12 @@ export class JsonWorkspaceStore {
     store.conversations = [
       ...snapshot.conversations.map((conversation) => ({ ...conversation, documentId })),
       ...store.conversations.filter((conversation) => conversation.documentId !== documentId || !remoteConversationIds.has(conversation.id))
+    ];
+
+    const remoteTranslationIds = new Set(snapshot.translations.map((translation) => translation.id));
+    store.translations = [
+      ...snapshot.translations.map((translation) => ({ ...translation, documentId })).slice(0, 10),
+      ...store.translations.filter((translation) => translation.documentId !== documentId || !remoteTranslationIds.has(translation.id))
     ];
   }
 
@@ -759,6 +807,7 @@ function rekeyDocumentSession(store: StoreFile, previousId: string, nextId: stri
     items.map((item) => item.documentId === previousId ? { ...item, documentId: nextId } : item);
 
   store.conversations = rekey(store.conversations);
+  store.translations = rekey(store.translations);
   store.notes = rekey(store.notes);
   store.workspaceBlocks = rekey(store.workspaceBlocks);
   store.generatedOutlines = rekey(store.generatedOutlines);
@@ -783,6 +832,7 @@ function normalizeAppPreferences(config: AppPreferences): AppPreferences {
   return {
     uiLanguage: config.uiLanguage === 'zh-CN' ? 'zh-CN' : 'en',
     aiLanguage: normalizeAiLanguage(config.aiLanguage),
+    translationBackend: config.translationBackend === 'codex' ? 'codex' : 'provider',
     selectionColors: normalizeSelectionColors(config.selectionColors),
     experimentalCodexAgent: {
       enabled: Boolean(config.experimentalCodexAgent?.enabled),

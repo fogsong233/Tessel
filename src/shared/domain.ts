@@ -1,6 +1,7 @@
 export type ISODate = string;
 export type DocumentId = string;
 export type ConversationId = string;
+export type TranslationId = string;
 export type AnchorId = string;
 export type NoteId = string;
 export type WorkspaceBlockId = string;
@@ -19,6 +20,8 @@ export type WorkspaceBlockAnchor = 'page' | 'viewport' | 'document' | 'selection
 export type WorkspaceBlockContentKind = 'markdown' | 'text' | 'image' | 'html' | 'external' | 'custom';
 export type UiLanguage = 'en' | 'zh-CN';
 export type AiPreferredLanguage = 'English' | 'Chinese' | 'Simplified Chinese';
+export type TranslationBackend = 'provider' | 'codex';
+export type TranslationStatus = 'pending' | 'completed' | 'error';
 
 export const pdfRangeChunkSize = 512 * 1024;
 
@@ -221,6 +224,20 @@ export interface Conversation {
   updatedAt: ISODate;
 }
 
+export interface TranslationEntry {
+  id: TranslationId;
+  documentId: DocumentId;
+  pageNumber: number;
+  quote: string;
+  rects?: AnchorRect[];
+  content: string;
+  backend: TranslationBackend;
+  status: TranslationStatus;
+  error?: string;
+  createdAt: ISODate;
+  updatedAt: ISODate;
+}
+
 export type CodexPermissionMode = 'read-only' | 'workspace-write' | 'full-access';
 
 export interface CodexConversationSettings {
@@ -326,6 +343,7 @@ export interface WorkspaceSyncResult {
 export interface AppPreferences {
   uiLanguage: UiLanguage;
   aiLanguage: AiPreferredLanguage;
+  translationBackend: TranslationBackend;
   selectionColors: SelectionColorPreferences;
   experimentalCodexAgent: ExperimentalCodexAgentPreferences;
 }
@@ -492,6 +510,10 @@ export interface SaveConversationInput {
   conversation: Conversation;
 }
 
+export interface SaveTranslationInput {
+  translation: TranslationEntry;
+}
+
 export interface SaveNoteInput {
   note: NoteDocument;
 }
@@ -542,6 +564,9 @@ export interface SidelightApi {
   saveReadingState(state: PdfReadingState): Promise<PdfReadingState>;
   listConversations(documentId: DocumentId): Promise<Conversation[]>;
   saveConversation(input: SaveConversationInput): Promise<Conversation>;
+  listTranslations(documentId: DocumentId): Promise<TranslationEntry[]>;
+  saveTranslation(input: SaveTranslationInput): Promise<TranslationEntry>;
+  deleteTranslation(translationId: TranslationId): Promise<void>;
   listNotes(documentId: DocumentId): Promise<NoteDocument[]>;
   getNote(documentId: DocumentId): Promise<NoteDocument>;
   saveNote(input: SaveNoteInput): Promise<NoteDocument>;
@@ -599,6 +624,7 @@ export const defaultWebDavSync: SafeWebDavSyncConfig = {
 export const defaultAppPreferences: AppPreferences = {
   uiLanguage: 'en',
   aiLanguage: 'Simplified Chinese',
+  translationBackend: 'provider',
   selectionColors: {
     highlight: '#d8ead4',
     underline: '#8fa4b8',

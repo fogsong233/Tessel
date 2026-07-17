@@ -282,6 +282,50 @@ test.describe('PDF reader flow', () => {
       const modelIndex = args.indexOf('--model');
       return modelIndex >= 0 ? args[modelIndex + 1] : undefined;
     }).toBe('gpt-test-mini');
+
+    await expect.poll(async () => {
+      const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+        translations?: Array<{ content: string; backend: string; status: string }>;
+      };
+      return store.translations?.[0];
+    }).toMatchObject({ content: 'Translated quickly.', backend: 'codex', status: 'completed' });
+
+    await page.locator('.transient-aid-panel').getByTitle('Close').click();
+    await page.getByTitle('Translations').click();
+    await expect(page.getByText('Translated quickly.')).toBeVisible();
+  });
+
+  test('keeps the ten most recent translations and reopens them from history', async () => {
+    const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+      documents: Array<{ id: string }>;
+    };
+    const documentId = store.documents[0]?.id;
+    expect(documentId).toBeTruthy();
+    await page.evaluate(async (documentId) => {
+      const now = Date.now();
+      for (let index = 1; index <= 12; index += 1) {
+        await window.sidelight.saveTranslation({
+          translation: {
+            id: `translation_fixture_${index}`,
+            documentId,
+            pageNumber: 1,
+            quote: `source ${index}`,
+            content: `translation ${index}`,
+            backend: 'provider',
+            status: 'completed',
+            createdAt: new Date(now + index).toISOString(),
+            updatedAt: new Date(now + index).toISOString()
+          }
+        });
+      }
+    }, documentId!);
+
+    await page.reload();
+    await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
+    await page.getByTitle('Translations').click();
+    await expect(page.getByText('source 12', { exact: true })).toBeVisible();
+    await expect(page.getByText('source 1', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('Translations').first()).toBeVisible();
   });
 
   test('gives Codex outline generation sampled PDF page evidence', async () => {
@@ -418,7 +462,8 @@ async function enableCodexReader(page: Page): Promise<void> {
       experimentalCodexAgent: {
         ...preferences.experimentalCodexAgent,
         enabled: true
-      }
+      },
+      translationBackend: 'codex'
     });
   });
 }

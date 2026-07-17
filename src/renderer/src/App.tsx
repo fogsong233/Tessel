@@ -58,6 +58,7 @@ import {
   SafeWebDavSyncConfig,
   WebDavSyncConfig,
   TextAnchor,
+  TranslationEntry,
   ReaderAiStreamRequest,
   UiLanguage,
   WorkspaceBlock,
@@ -95,6 +96,7 @@ export function App(): ReactElement {
   const [pdfSource, setPdfSource] = useState<PdfSourceDescriptor>();
   const [currentPage, setCurrentPage] = useState(1);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [translations, setTranslations] = useState<TranslationEntry[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string>();
   const [marks, setMarks] = useState<PdfMark[]>([]);
   const [bookmarks, setBookmarks] = useState<PdfUserBookmark[]>([]);
@@ -238,8 +240,9 @@ export function App(): ReactElement {
 
   async function activateDocument(document: PdfDocumentMeta, source: PdfSourceDescriptor): Promise<void> {
     const documentId = document.id;
-    const [loadedConversations, loadedMarks, loadedBookmarks, readingState, loadedMainNote, loadedWorkspaceBlocks, loadedGeneratedOutline] = await Promise.all([
+    const [loadedConversations, loadedTranslations, loadedMarks, loadedBookmarks, readingState, loadedMainNote, loadedWorkspaceBlocks, loadedGeneratedOutline] = await Promise.all([
       window.sidelight.listConversations(documentId),
+      window.sidelight.listTranslations(documentId),
       window.sidelight.listPdfMarks(documentId),
       window.sidelight.listPdfBookmarks(documentId),
       window.sidelight.getReadingState(documentId),
@@ -253,6 +256,7 @@ export function App(): ReactElement {
     setCurrentPage(readingState?.lastPage ?? 1);
     setPdfSource(source);
     setConversations(loadedConversations);
+    setTranslations(loadedTranslations);
     setActiveConversationId(loadedConversations[0]?.id);
     setMarks(loadedMarks);
     setBookmarks(loadedBookmarks);
@@ -364,10 +368,28 @@ export function App(): ReactElement {
       return;
     }
 
-    const aidId = createId('aid');
+    const now = new Date().toISOString();
+    const translation: TranslationEntry | undefined = mode === 'translate'
+      ? {
+          id: createId('translation'),
+          documentId: activeDocument.id,
+          pageNumber: selection.pageNumber,
+          quote: selection.quote,
+          rects: selectionAreasToAnchorRects(selection),
+          content: '',
+          backend: appPreferences.translationBackend,
+          status: 'pending',
+          createdAt: now,
+          updatedAt: now
+        }
+      : undefined;
+    const aidId = translation?.id ?? createId('aid');
     const streamId = createId('stream');
     let streamedContent = '';
     let finished = false;
+    if (translation) {
+      await saveTranslationLocally(translation);
+    }
     focusTransientAid({
       id: aidId,
       mode,
@@ -384,6 +406,16 @@ export function App(): ReactElement {
 
       finished = true;
       unsubscribe();
+      if (translation) {
+        const updatedAt = new Date().toISOString();
+        void saveTranslationLocally({
+          ...translation,
+          content: patch.content ?? streamedContent,
+          status: patch.error ? 'error' : 'completed',
+          ...(patch.error ? { error: patch.error } : {}),
+          updatedAt
+        });
+      }
       setTransientAid((current) =>
         current?.id === aidId
           ? {
@@ -813,6 +845,28 @@ export function App(): ReactElement {
       ...current.filter((candidate) => candidate.id !== saved.id)
     ]);
     return saved;
+  }
+
+  async function saveTranslationLocally(translation: TranslationEntry): Promise<TranslationEntry> {
+    const saved = await window.sidelight.saveTranslation({ translation });
+    setTranslations((current) => [
+      saved,
+      ...current.filter((candidate) => candidate.id !== saved.id)
+    ].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 10));
+    return saved;
+  }
+
+  function openTranslation(translation: TranslationEntry): void {
+    setPanelOpen(false);
+    setTransientAid({
+      id: translation.id,
+      mode: 'translate',
+      pageNumber: translation.pageNumber,
+      quote: translation.quote,
+      content: translation.content,
+      busy: translation.status === 'pending',
+      error: translation.error
+    });
   }
 
   async function refreshConversationSummary(conversation: Conversation): Promise<void> {
@@ -1279,6 +1333,7 @@ export function App(): ReactElement {
         marks={marks}
         bookmarks={bookmarks}
         conversations={conversations}
+        translations={translations}
         workspaceBlocks={[]}
         generatedOutline={generatedOutline}
         activeConversationId={activeConversationId}
@@ -1302,6 +1357,7 @@ export function App(): ReactElement {
         onDeleteMark={(markId) => void deleteMark(markId)}
         onCreatePageChat={(pageNumber) => void createPageChat(pageNumber)}
         onOpenConversation={openConversation}
+        onOpenTranslation={openTranslation}
         onCloseConversation={() => setPanelOpen(false)}
         onCloseTransientAid={() => setTransientAid(undefined)}
         onSendMessage={(conversationId, prompt, attachments, toolContext) =>
@@ -1443,6 +1499,7 @@ function ReaderSettingsPanel({
       {
         uiLanguage,
         aiLanguage,
+        translationBackend: preferences.translationBackend,
         selectionColors: normalizeSelectionColors(preferences.selectionColors),
         experimentalCodexAgent: {
           enabled: codexEnabled && Boolean(codexAvailability?.available),
@@ -2272,6 +2329,7 @@ function FloatingSettingsPanel({
   const currentPreferences = (): AppPreferences => ({
     uiLanguage,
     aiLanguage,
+    translationBackend: preferences.translationBackend,
     selectionColors: normalizeSelectionColors(selectionColors),
     experimentalCodexAgent: preferences.experimentalCodexAgent
   });

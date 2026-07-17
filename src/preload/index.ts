@@ -15,6 +15,7 @@ import {
   SavePdfGeneratedOutlineInput,
   SaveLibraryGroupInput,
   SaveConversationInput,
+  SaveTranslationInput,
   SaveNoteInput,
   SaveWorkspaceBlockInput,
   SidelightApi
@@ -46,6 +47,9 @@ const api: SidelightApi = {
   saveReadingState: (state) => ipcRenderer.invoke('pdf:saveReadingState', state),
   listConversations: (documentId) => ipcRenderer.invoke('conversation:list', documentId),
   saveConversation: (input: SaveConversationInput) => ipcRenderer.invoke('conversation:save', input),
+  listTranslations: (documentId) => ipcRenderer.invoke('translation:list', documentId),
+  saveTranslation: (input: SaveTranslationInput) => ipcRenderer.invoke('translation:save', input),
+  deleteTranslation: (translationId) => ipcRenderer.invoke('translation:delete', translationId),
   listNotes: (documentId) => ipcRenderer.invoke('note:list', documentId),
   getNote: (documentId) => ipcRenderer.invoke('note:get', documentId),
   saveNote: (input: SaveNoteInput) => ipcRenderer.invoke('note:save', input),

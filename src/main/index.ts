@@ -12,6 +12,7 @@ import {
   AiProviderConfig,
   AppPreferences,
   Conversation,
+  TranslationEntry,
   LibraryGroup,
   NoteDocument,
   PdfGeneratedOutline,
@@ -213,6 +214,13 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
   ipcMain.handle('conversation:save', (_event, input: { conversation: Conversation }) =>
     runStoreMutation(() => store.saveConversation(input.conversation))
   );
+  ipcMain.handle('translation:list', (_event, documentId: string) => store.listTranslations(documentId));
+  ipcMain.handle('translation:save', (_event, input: { translation: TranslationEntry }) =>
+    runStoreMutation(() => store.saveTranslation(input.translation))
+  );
+  ipcMain.handle('translation:delete', async (_event, translationId: string) => {
+    await runStoreMutation(() => store.deleteTranslation(translationId));
+  });
 
   ipcMain.handle('note:get', (_event, documentId: string) => store.getNote(documentId));
   ipcMain.handle('note:list', (_event, documentId: string) => store.listNotes(documentId));
@@ -336,7 +344,10 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
     sender.once('render-process-gone', abortStream);
     try {
       const preferences = await store.getAppPreferences();
-      const useCodex = preferences.experimentalCodexAgent.enabled && Boolean(input.documentId && input.codexContext);
+      const isTranslation = (input.task ?? input.request.mode) === 'translate';
+      const useCodex = preferences.experimentalCodexAgent.enabled
+        && Boolean(input.documentId && input.codexContext)
+        && (!isTranslation || preferences.translationBackend === 'codex');
       if (useCodex) {
         const task = input.task ?? (input.request.mode === 'translate' ? 'translate' : 'chat');
         const useTranslationConfig = task === 'translate';

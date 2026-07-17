@@ -91,6 +91,7 @@ import {
   SelectionColorPreferences,
   SelectionColorRole,
   TextAnchor,
+  TranslationEntry,
   UiLanguage,
   WorkspaceBlock,
   pdfRangeChunkSize
@@ -133,6 +134,7 @@ interface PdfReaderProps {
   marks: PdfMark[];
   bookmarks: PdfUserBookmark[];
   conversations: Conversation[];
+  translations: TranslationEntry[];
   workspaceBlocks: WorkspaceBlock[];
   generatedOutline?: PdfGeneratedOutline | null;
   activeConversation?: Conversation;
@@ -159,6 +161,7 @@ interface PdfReaderProps {
   onDeleteMark(markId: string): void;
   onCreatePageChat(pageNumber: number): void;
   onOpenConversation(conversationId: string): void;
+  onOpenTranslation(translation: TranslationEntry): void;
   onCloseConversation(): void;
   onCloseTransientAid(): void;
   onSendMessage(
@@ -177,7 +180,7 @@ interface PdfReaderProps {
   onGenerateOutline(toolContext?: AiDocumentToolContext): void;
 }
 
-type DockTab = 'chat' | 'notes' | 'search' | 'bookmarks' | 'marks';
+type DockTab = 'chat' | 'translations' | 'notes' | 'search' | 'bookmarks' | 'marks';
 type DockForegroundPanel = 'chat' | 'note' | 'transient';
 type LeftTab = 'outline';
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -273,6 +276,8 @@ function readerText(language: UiLanguage) {
       bookmarks: '书签',
       chat: '对话',
       chats: '对话',
+      translationHistory: '翻译记录',
+      noTranslations: '还没有翻译记录。',
       close: '关闭',
       collapseChat: '收起对话',
       conversation: '对话',
@@ -390,6 +395,8 @@ function readerText(language: UiLanguage) {
     bookmarks: 'Bookmarks',
     chat: 'Chat',
     chats: 'Chats',
+    translationHistory: 'Translations',
+    noTranslations: 'No translations for this document yet.',
     close: 'Close',
     collapseChat: 'Collapse chat',
     conversation: 'Conversation',
@@ -509,6 +516,7 @@ export function PdfReader({
   marks,
   bookmarks,
   conversations,
+  translations,
   workspaceBlocks,
   generatedOutline,
   activeConversation,
@@ -535,6 +543,7 @@ export function PdfReader({
   onDeleteMark,
   onCreatePageChat,
   onOpenConversation,
+  onOpenTranslation,
   onCloseConversation,
   onCloseTransientAid,
   onSendMessage,
@@ -2382,6 +2391,7 @@ export function PdfReader({
                         composerPrefill={composerPrefill}
                         conversations={visibleConversations}
                         allConversations={conversations}
+                        translations={translations}
                         marks={pageMarks}
                         notes={visibleNotes}
                         allNotes={notes}
@@ -2404,6 +2414,7 @@ export function PdfReader({
                         onDeleteNote={deleteDockNote}
                         onJumpToPage={jumpToPage}
                         onOpenConversation={openDockConversation}
+                        onOpenTranslation={onOpenTranslation}
                         onOpenNote={openDockNote}
                         onNoteDraftChange={setNoteEditorNote}
                         onGenerateNote={generateNoteForRange}
@@ -2790,6 +2801,7 @@ function ReaderDock({
   composerPrefill,
   conversations,
   allConversations,
+  translations,
   marks,
   notes,
   allNotes,
@@ -2812,6 +2824,7 @@ function ReaderDock({
   onDeleteNote,
   onJumpToPage,
   onOpenConversation,
+  onOpenTranslation,
   onOpenNote,
   onNoteDraftChange,
   onGenerateNote,
@@ -2834,6 +2847,7 @@ function ReaderDock({
   composerPrefill?: { conversationId: string; text: string; nonce: string };
   conversations: Conversation[];
   allConversations: Conversation[];
+  translations: TranslationEntry[];
   marks: PdfMark[];
   notes: NoteDocument[];
   allNotes: NoteDocument[];
@@ -2856,6 +2870,7 @@ function ReaderDock({
   onDeleteNote(noteId: string): void;
   onJumpToPage(pageNumber: number): void;
   onOpenConversation(conversationId: string): void;
+  onOpenTranslation(translation: TranslationEntry): void;
   onOpenNote(note: NoteDocument): void;
   onNoteDraftChange(note: NoteDocument): void;
   onGenerateNote(pageStart: number, pageEnd: number): void;
@@ -2894,6 +2909,17 @@ function ReaderDock({
             onClick={() => onTabChange('chat')}
           >
             <MessageCircle size={17} />
+          </Button>
+          <Button
+            type="button"
+            text
+            rounded
+            className={activeTab === 'translations' ? 'is-active' : ''}
+            title={t.translationHistory}
+            aria-label={t.translationHistory}
+            onClick={() => onTabChange('translations')}
+          >
+            <Languages size={17} />
           </Button>
         </span>
         <span className="dock-iconbar__actions">
@@ -2970,6 +2996,36 @@ function ReaderDock({
                       </span>
                       <span className="trace-card__title">{conversation.summary.title}</span>
                       <span className="trace-card__brief">{conversation.summary.brief}</span>
+                    </Button>
+                  ))}
+                </div>
+              </ScrollPanel>
+            </div>
+          )}
+
+          {tab === 'translations' && (
+            <div className="dock-section dock-section--page-list">
+              <div className="trace-list-header">
+                <span>{t.translationHistory}</span>
+                <Badge value={translations.length} />
+              </div>
+              <ScrollPanel className="trace-scroll">
+                <div className="trace-list">
+                  {translations.length === 0 && <span className="empty-line">{t.noTranslations}</span>}
+                  {translations.map((translation) => (
+                    <Button
+                      key={translation.id}
+                      type="button"
+                      text
+                      className="trace-card"
+                      onClick={() => onOpenTranslation(translation)}
+                    >
+                      <span className="trace-card__meta">
+                        <Badge value={`p.${translation.pageNumber}`} />
+                        <span>{translation.status === 'error' ? 'error' : translation.backend}</span>
+                      </span>
+                      <span className="trace-card__title">{translation.quote}</span>
+                      <span className="trace-card__brief">{translation.content || translation.error || t.thinking}</span>
                     </Button>
                   ))}
                 </div>
