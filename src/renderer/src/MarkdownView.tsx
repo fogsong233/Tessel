@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import { type ComponentPropsWithoutRef, type ReactElement, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
@@ -41,16 +41,51 @@ export function MarkdownView({ children }: MarkdownViewProps): ReactElement {
             </a>
           );
         },
-        img: ({ src, alt, ...props }) => {
-          const localPath = localPathFromMarkdownUrl(src);
-          return <img {...props} src={localPath ? toFileUrl(localPath) : src} alt={alt ?? ''} loading="lazy" />;
-        }
+        img: ({ src, alt, ...props }) => <MarkdownImage src={src} alt={alt ?? ''} {...props} />
       }}
       >
         {markdown}
       </ReactMarkdown>
     </div>
   );
+}
+
+function MarkdownImage({ src, alt = '', ...props }: ComponentPropsWithoutRef<'img'>): ReactElement {
+  const localPath = localPathFromMarkdownUrl(src);
+  const localUrl = localPath ? toFileUrl(localPath) : src;
+  const shouldResolveRemotely = Boolean(src && !localPath && /^https?:\/\//i.test(src));
+  const [resolvedUrl, setResolvedUrl] = useState<string | undefined>(shouldResolveRemotely ? undefined : localUrl);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let disposed = false;
+    setResolvedUrl(shouldResolveRemotely ? undefined : localUrl);
+    setFailed(false);
+    if (!shouldResolveRemotely || !src) {
+      return () => {
+        disposed = true;
+      };
+    }
+
+    void window.sidelight.resolveRemoteImage(src).then((value) => {
+      if (!disposed && value) {
+        setResolvedUrl(value);
+      }
+    }).catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, [localUrl, shouldResolveRemotely, src]);
+
+  if (failed) {
+    return src ? <a className="markdown-view__image-source" href={src} target="_blank" rel="noreferrer">{alt || src}</a> : <span />;
+  }
+
+  if (!resolvedUrl) {
+    return <span className="markdown-view__image-pending">{alt}</span>;
+  }
+
+  return <img {...props} src={resolvedUrl} alt={alt} loading="lazy" onError={() => setFailed(true)} />;
 }
 
 function normalizeLocalMarkdownLinks(markdown: string): string {

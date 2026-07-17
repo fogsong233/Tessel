@@ -575,6 +575,7 @@ export interface SidelightApi {
   saveWorkspaceBlock(input: SaveWorkspaceBlockInput): Promise<WorkspaceBlock>;
   deleteWorkspaceBlock(blockId: WorkspaceBlockId): Promise<void>;
   openLocalPath(path: string): Promise<void>;
+  resolveRemoteImage(url: string): Promise<string | undefined>;
   getAiProvider(): Promise<SafeAiProviderConfig>;
   saveAiProvider(config: AiProviderConfig): Promise<SafeAiProviderConfig>;
   getGitHubUpload(): Promise<SafeGitHubUploadConfig>;

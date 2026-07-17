@@ -7330,6 +7330,21 @@ body.is-resizing-workspace-block * {
   overflow-wrap: anywhere;
 }
 
+.markdown-view__image-source {
+  display: inline-flex;
+  margin: 8px 0;
+  color: inherit;
+  text-decoration: underline;
+}
+
+.markdown-view__image-pending {
+  display: inline-flex;
+  min-height: 20px;
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .typing-dot {
   display: inline-flex;
   align-items: center;

@@ -178,6 +178,40 @@ test.describe('PDF reader flow', () => {
     await expect(bubble.getByRole('link', { name: 'Open analysis' })).not.toHaveAttribute('href', /%25/);
   });
 
+  test('resolves an agent image that incorrectly points at a public HTML profile page', async () => {
+    const resolvedImage = await page.evaluate(() => window.sidelight.resolveRemoteImage('https://cs.fudan.edu.cn/qxp/'));
+    expect(resolvedImage).toMatch(/^data:image\//);
+    const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+      documents: Array<{ id: string }>;
+    };
+    const documentId = store.documents[0]?.id;
+    expect(documentId).toBeTruthy();
+    const now = new Date().toISOString();
+    await page.evaluate(async ({ documentId, now }) => {
+      await window.sidelight.saveConversation({
+        conversation: {
+          id: 'chat_profile_image_fixture',
+          documentId,
+          pageNumber: 1,
+          mode: 'ask',
+          agentKind: 'codex',
+          summary: { title: 'Profile image', brief: 'Public profile image fixture.', keywords: [] },
+          messages: [{
+            id: 'msg_profile_image_fixture',
+            role: 'assistant',
+            content: '![Professor profile](https://cs.fudan.edu.cn/qxp/)',
+            createdAt: now
+          }],
+          createdAt: now,
+          updatedAt: now
+        }
+      });
+    }, { documentId: documentId!, now });
+
+    await page.reload();
+    await expect(page.locator('.chat-bubble img[alt="Professor profile"]')).toHaveAttribute('src', /^data:image\//, { timeout: 20_000 });
+  });
+
   test('renders Codex output and activity in a collapsible timeline', async () => {
     await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
     const documentId = `pdf_${createHash('sha256').update(await readFile(pdfPath)).digest('hex')}`;

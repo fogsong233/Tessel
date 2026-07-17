@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from 'electron';
+import { execFile } from 'node:child_process';
 import { open, rm, stat } from 'node:fs/promises';
 import { extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -245,6 +246,7 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
       throw new Error(error);
     }
   });
+  ipcMain.handle('media:resolveRemoteImage', (_event, url: string) => resolveRemoteImageDataUrl(url));
 
   ipcMain.handle('settings:getAiProvider', () => store.getSafeAiProvider());
   ipcMain.handle('settings:saveAiProvider', (_event, config: AiProviderConfig) => runStoreMutation(() => store.saveAiProvider(config)));
@@ -603,6 +605,119 @@ function normalizeLocalResourcePath(value: string): string | undefined {
   }
 
   return isAbsolute(candidate) ? resolve(candidate) : undefined;
+}
+
+const remoteImageCache = new Map<string, Promise<string | undefined>>();
+
+function resolveRemoteImageDataUrl(url: string): Promise<string | undefined> {
+  const cached = remoteImageCache.get(url);
+  if (cached) {
+    return cached;
+  }
+
+  const pending = loadRemoteImageDataUrl(url).catch(() => undefined);
+  remoteImageCache.set(url, pending);
+  return pending;
+}
+
+async function loadRemoteImageDataUrl(value: string, depth = 0): Promise<string | undefined> {
+  if (depth > 1) {
+    return undefined;
+  }
+
+  const url = new URL(value);
+  if (!/^https?:$/.test(url.protocol) || isLoopbackHost(url.hostname)) {
+    return undefined;
+  }
+
+  const metadata = await curlMetadata(url.toString());
+  if (metadata.contentType.startsWith('image/')) {
+    const bytes = await curlBody(metadata.url, 12 * 1024 * 1024);
+    return bytes.byteLength <= 12 * 1024 * 1024
+      ? `data:${metadata.contentType};base64,${bytes.toString('base64')}`
+      : undefined;
+  }
+
+  if (!metadata.contentType.includes('html')) {
+    return undefined;
+  }
+  const html = (await curlBody(metadata.url, 2 * 1024 * 1024)).toString('utf8');
+  const imageUrl = imageCandidateFromHtml(html, metadata.url);
+  return imageUrl ? loadRemoteImageDataUrl(imageUrl, depth + 1) : undefined;
+}
+
+const remoteMediaUserAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36';
+const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+
+async function curlMetadata(url: string): Promise<{ contentType: string; url: string }> {
+  const output = (await runCurl([
+    '--fail', '--location', '--silent', '--show-error', '--max-time', '10',
+    '--user-agent', remoteMediaUserAgent,
+    '--header', 'Accept: image/avif,image/webp,image/apng,image/svg+xml,image/*;q=0.9,text/html;q=0.6',
+    '--dump-header', '-', '--output', nullDevice,
+    '--write-out', '\nTYPE:%{content_type}\nURL:%{url_effective}\n',
+    url
+  ], 256 * 1024)).toString('utf8');
+  const contentType = output.match(/\nTYPE:([^\r\n]+)/)?.[1]?.split(';', 1)[0].trim().toLowerCase();
+  const effectiveUrl = output.match(/\nURL:([^\r\n]+)/)?.[1]?.trim();
+  if (!contentType || !effectiveUrl) {
+    throw new Error('Remote media did not return usable metadata.');
+  }
+  return { contentType, url: effectiveUrl };
+}
+
+function curlBody(url: string, maxBytes: number): Promise<Buffer> {
+  return runCurl([
+    '--fail', '--location', '--silent', '--show-error', '--max-time', '10', '--max-filesize', String(maxBytes),
+    '--user-agent', remoteMediaUserAgent,
+    '--output', '-',
+    url
+  ], maxBytes + 128 * 1024);
+}
+
+function runCurl(args: string[], maxBuffer: number): Promise<Buffer> {
+  return new Promise((resolveCurl, rejectCurl) => {
+    execFile('curl', args, { encoding: 'buffer', maxBuffer }, (error, stdout) => {
+      if (error) {
+        rejectCurl(error);
+        return;
+      }
+      resolveCurl(Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout));
+    });
+  });
+}
+
+function imageCandidateFromHtml(html: string, baseUrl: string): string | undefined {
+  const tags = html.match(/<meta\b[^>]*>/gi) ?? [];
+  for (const tag of tags) {
+    const property = htmlAttribute(tag, 'property') ?? htmlAttribute(tag, 'name');
+    if (!/^(?:og|twitter):image(?::url)?$/i.test(property ?? '')) {
+      continue;
+    }
+    const content = htmlAttribute(tag, 'content');
+    if (content) {
+      return new URL(content, baseUrl).toString();
+    }
+  }
+
+  const imageTags = html.match(/<img\b[^>]*>/gi) ?? [];
+  for (const tag of imageTags) {
+    const candidate = htmlAttribute(tag, 'data-imgsrc') ?? htmlAttribute(tag, 'src');
+    if (!candidate || /(?:logo|banner|template|_visitcount)/i.test(candidate)) {
+      continue;
+    }
+    return new URL(candidate, baseUrl).toString();
+  }
+  return undefined;
+}
+
+function htmlAttribute(tag: string, attribute: string): string | undefined {
+  const match = new RegExp(`\\b${attribute}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i').exec(tag);
+  return match?.[1] ?? match?.[2] ?? match?.[3];
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === 'localhost' || host === '::1' || /^127(?:\.\d{1,3}){3}$/.test(host);
 }
 
 function focusFirstWindow(): void {

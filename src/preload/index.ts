@@ -58,6 +58,7 @@ const api: SidelightApi = {
   saveWorkspaceBlock: (input: SaveWorkspaceBlockInput) => ipcRenderer.invoke('workspaceBlock:save', input),
   deleteWorkspaceBlock: (blockId) => ipcRenderer.invoke('workspaceBlock:delete', blockId),
   openLocalPath: (path) => ipcRenderer.invoke('shell:openLocalPath', path),
+  resolveRemoteImage: (url) => ipcRenderer.invoke('media:resolveRemoteImage', url),
   getAiProvider: () => ipcRenderer.invoke('settings:getAiProvider'),
   saveAiProvider: (config: AiProviderConfig) => ipcRenderer.invoke('settings:saveAiProvider', config),
   getGitHubUpload: () => ipcRenderer.invoke('settings:getGitHubUpload'),
