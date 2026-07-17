@@ -548,6 +548,40 @@ test.describe('PDF reader flow', () => {
     }).toBe('codex');
   });
 
+  test('persists reader appearance and keeps the chat composer at a two-line height', async () => {
+    await page.getByTitle('Settings').click();
+    const settings = page.locator('.reader-settings');
+    await settings.getByRole('button', { name: 'Appearance' }).click();
+    await settings.getByLabel('Chat').evaluate((input) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      setter?.call(input, '#b8d6ec');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await settings.getByLabel('Interface font').selectOption('rounded');
+    await settings.getByLabel('Interface size').fill('16');
+    await settings.getByLabel('Agent font').selectOption('serif');
+    await settings.getByLabel('Agent size').fill('15');
+    await settings.getByRole('button', { name: 'Save' }).click();
+
+    await expect.poll(async () => {
+      const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+        appPreferences?: { selectionColors?: { chat?: string }; appearance?: { uiFont?: string; uiFontSize?: number; agentFont?: string; agentFontSize?: number } };
+      };
+      return store.appPreferences;
+    }).toMatchObject({
+      selectionColors: { chat: '#b8d6ec' },
+      appearance: { uiFont: 'rounded', uiFontSize: 16, agentFont: 'serif', agentFontSize: 15 }
+    });
+
+    await selectPdfText(page);
+    await page.locator('.selection-toolbar').getByRole('button', { name: /^Chat$/i }).click();
+    const composer = page.locator('.chat-composer textarea');
+    await expect(composer).toBeVisible();
+    await expect(composer).toHaveCSS('font-family', /Iowan|Charter|Georgia|serif/);
+    expect(await composer.evaluate((textarea) => textarea.getBoundingClientRect().height)).toBeGreaterThanOrEqual(58);
+  });
+
   test('gives Codex outline generation sampled PDF page evidence', async () => {
     await enableCodexReader(page);
     await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');

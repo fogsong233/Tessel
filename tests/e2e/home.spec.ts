@@ -41,6 +41,8 @@ test('opens a focused start page when no PDF is supplied', async ({}, testInfo) 
     await expect(page.getByLabel('AI 首选语言').locator('option:checked')).toHaveText('简体中文');
     await page.locator('.reader-settings').getByRole('button', { name: '更新' }).click();
     await expect(page.getByLabel('更新状态')).toHaveText('更新仅在已安装的正式版中可用。');
+    await expect(page.getByRole('button', { name: '下载更新' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '重启并更新' })).toHaveCount(0);
   } finally {
     await app?.close();
     await rm(runDir, { recursive: true, force: true });

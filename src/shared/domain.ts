@@ -624,6 +624,8 @@ export interface SidelightApi {
   cancelAiStream(streamId: string): Promise<void>;
   getAppUpdateState(): Promise<AppUpdateState>;
   checkForAppUpdates(): Promise<AppUpdateState>;
+  downloadAppUpdate(): Promise<AppUpdateState>;
+  dismissAppUpdate(): Promise<AppUpdateState>;
   installAppUpdate(): Promise<void>;
   onAppUpdateState(listener: (state: AppUpdateState) => void): () => void;
   onWindowChromeState(listener: (state: WindowChromeState) => void): () => void;

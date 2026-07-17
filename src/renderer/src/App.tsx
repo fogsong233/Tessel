@@ -1809,7 +1809,12 @@ function ReaderSettingsPanel({
               {updateState?.releaseNotes && <label className="reader-settings__notes">{t.releaseNotes}<textarea readOnly rows={4} value={updateState.releaseNotes} /></label>}
               <div className="reader-settings__actions reader-settings__actions--inline">
                 <button className="quiet-button" type="button" disabled={updateState?.status === 'checking' || updateState?.status === 'downloading'} onClick={() => void window.sidelight.checkForAppUpdates()}>{t.checkForUpdates}</button>
+                {updateState?.status === 'available' && <>
+                  <button className="quiet-button" type="button" onClick={() => void window.sidelight.dismissAppUpdate()}>{t.later}</button>
+                  <button className="primary-button" type="button" onClick={() => void window.sidelight.downloadAppUpdate()}>{t.downloadUpdate}</button>
+                </>}
                 {updateState?.status === 'ready' && <button className="primary-button" type="button" onClick={() => void window.sidelight.installAppUpdate()}>{t.restartToUpdate}</button>}
+                {updateState?.status === 'unsupported' && updateState.message?.includes('manual updates') && <a className="quiet-button" href="https://github.com/fogsong233/Tessel/releases/latest" target="_blank" rel="noreferrer">{t.openDownloads}</a>}
               </div>
             </section>
             )}
@@ -1852,8 +1857,8 @@ function readerSettingsText(language: UiLanguage) {
       translation: '翻译', translationBackend: '翻译后端', translationModel: '翻译模型', translationReasoning: '翻译推理强度', fastestAvailable: '最快可用模型',
       webDavSync: 'WebDAV 同步', perPdfMetadata: '按 PDF 保存元数据', serverUrl: '服务器 URL', folder: '文件夹', username: '用户名', password: '密码', storedPassword: '已保存。输入新密码可替换。',
       languageDescription: '界面文本和 AI 回复', uiLanguage: '界面语言', aiPreferredLanguage: 'AI 首选语言',
-      updateDescription: '自动检查 GitHub Releases，并在下载完成后于重启时安装。', currentVersion: '当前版本', updateStatus: '更新状态', availableVersion: '可用版本', releaseNotes: '发行说明', checkForUpdates: '检查更新', restartToUpdate: '重启并更新', cancel: '取消', save: '保存',
-      updateUnsupported: '更新仅在已安装的正式版中可用。', updateChecking: '正在检查更新...', updateAvailable: '发现新版本，正在后台下载...', updateDownloading: (percent?: number) => `正在下载更新${percent === undefined ? '...' : `（${percent}%）`}`, updateReady: '更新已下载，重启即可安装。', updateCurrent: '已是最新版本。', updateError: '无法检查更新。'
+      updateDescription: '自动检查 GitHub Releases；下载和安装均由你确认。未签名 macOS 版使用手动更新。', currentVersion: '当前版本', updateStatus: '更新状态', availableVersion: '可用版本', releaseNotes: '发行说明', checkForUpdates: '检查更新', downloadUpdate: '下载更新', later: '稍后', openDownloads: '前往下载页', restartToUpdate: '重启并更新', cancel: '取消', save: '保存',
+      updateUnsupported: '更新仅在已安装的正式版中可用。', updateManualMac: '当前未签名 macOS 版本请下载新安装包更新。', updateChecking: '正在检查更新...', updateAvailable: '发现新版本，等待下载确认。', updateDownloading: (percent?: number) => `正在下载更新${percent === undefined ? '...' : `（${percent}%）`}`, updateReady: '更新已下载，重启即可安装。', updateCurrent: '已是最新版本。', updateError: '无法检查更新。'
     };
   }
   return {
@@ -1863,8 +1868,8 @@ function readerSettingsText(language: UiLanguage) {
     translation: 'Translation', translationBackend: 'Translation backend', translationModel: 'Translation model', translationReasoning: 'Translation reasoning', fastestAvailable: 'Fastest available',
     webDavSync: 'WebDAV sync', perPdfMetadata: 'Per-PDF metadata', serverUrl: 'Server URL', folder: 'Folder', username: 'Username', password: 'Password', storedPassword: 'Stored. Enter a new password to replace it.',
     languageDescription: 'Interface text and AI responses', uiLanguage: 'UI language', aiPreferredLanguage: 'AI preferred language',
-    updateDescription: 'Checks GitHub Releases automatically and installs after a downloaded update is restarted.', currentVersion: 'Current version', updateStatus: 'Update status', availableVersion: 'Available version', releaseNotes: 'Release notes', checkForUpdates: 'Check for updates', restartToUpdate: 'Restart to update', cancel: 'Cancel', save: 'Save',
-    updateUnsupported: 'Updates are available in installed releases only.', updateChecking: 'Checking for updates...', updateAvailable: 'A new version is downloading in the background...', updateDownloading: (percent?: number) => `Downloading update${percent === undefined ? '...' : ` (${percent}%)`}`, updateReady: 'Update downloaded. Restart to install.', updateCurrent: 'You are up to date.', updateError: 'Unable to check for updates.'
+    updateDescription: 'Checks GitHub Releases automatically; downloading and installing require your confirmation. Unsigned macOS builds update manually.', currentVersion: 'Current version', updateStatus: 'Update status', availableVersion: 'Available version', releaseNotes: 'Release notes', checkForUpdates: 'Check for updates', downloadUpdate: 'Download update', later: 'Later', openDownloads: 'Open downloads', restartToUpdate: 'Restart to update', cancel: 'Cancel', save: 'Save',
+    updateUnsupported: 'Updates are available in installed releases only.', updateManualMac: 'This unsigned macOS build is updated by downloading a new installer.', updateChecking: 'Checking for updates...', updateAvailable: 'A new version is available. Choose whether to download it.', updateDownloading: (percent?: number) => `Downloading update${percent === undefined ? '...' : ` (${percent}%)`}`, updateReady: 'Update downloaded. Restart to install.', updateCurrent: 'You are up to date.', updateError: 'Unable to check for updates.'
   };
 }
 
@@ -1873,13 +1878,13 @@ function updateStatusText(state: AppUpdateState | undefined, text: ReturnType<ty
     return text.updateChecking;
   }
   switch (state.status) {
-    case 'unsupported': return text.updateUnsupported;
+    case 'unsupported': return state.message?.includes('manual updates') ? text.updateManualMac : text.updateUnsupported;
     case 'checking': return text.updateChecking;
-    case 'available': return text.updateAvailable;
+    case 'available': return state.message ? `${text.updateAvailable} ${state.message}` : text.updateAvailable;
     case 'downloading': return text.updateDownloading(state.downloadPercent);
-    case 'ready': return text.updateReady;
+    case 'ready': return state.message ? `${text.updateReady} ${state.message}` : text.updateReady;
     case 'not-available': return text.updateCurrent;
-    case 'error': return text.updateError;
+    case 'error': return state.message ? `${text.updateError} ${state.message}` : text.updateError;
     default: return text.updateChecking;
   }
 }

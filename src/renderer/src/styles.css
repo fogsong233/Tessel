@@ -11166,6 +11166,7 @@ body.is-moving-dock .reader-float-dock.is-chat-open {
 .reader-settings__model .quiet-button,
 .reader-settings__main > .reader-settings__actions .quiet-button,
 .reader-settings__main > .reader-settings__actions .primary-button,
+.reader-settings__actions--inline a.quiet-button,
 .reader-settings__actions--inline .quiet-button,
 .reader-settings__actions--inline .primary-button,
 .left-panel .panel-search,
@@ -11180,9 +11181,18 @@ body.is-moving-dock .reader-float-dock.is-chat-open {
 .reader-settings__color-control .quiet-button,
 .reader-settings__main > .reader-settings__actions .quiet-button,
 .reader-settings__main > .reader-settings__actions .primary-button,
+.reader-settings__actions--inline a.quiet-button,
 .reader-settings__actions--inline .quiet-button,
 .reader-settings__actions--inline .primary-button {
   min-height: 36px;
+}
+
+.reader-settings__actions--inline a.quiet-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  text-decoration: none;
 }
 
 /* Reader controls use two deliberate rows at sidebar width: navigation gets room to breathe. */

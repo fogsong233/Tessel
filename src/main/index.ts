@@ -264,6 +264,8 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
   ipcMain.handle('media:resolveRemoteImage', (_event, url: string) => resolveRemoteImageDataUrl(url));
   ipcMain.handle('app:update:getState', () => appUpdater.getState());
   ipcMain.handle('app:update:check', () => appUpdater.check());
+  ipcMain.handle('app:update:download', () => appUpdater.download());
+  ipcMain.handle('app:update:dismiss', () => appUpdater.dismiss());
   ipcMain.handle('app:update:install', () => appUpdater.install());
 
   ipcMain.handle('settings:getAiProvider', () => store.getSafeAiProvider());
