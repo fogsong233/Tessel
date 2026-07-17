@@ -1,8 +1,9 @@
-import { type FormEvent, type ReactElement, useEffect, useMemo, useRef, useState } from 'react';
+import { type ComponentPropsWithoutRef, type FormEvent, type ReactElement, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
   Bot,
   Check,
+  ChevronDown,
   Clock3,
   Cloud,
   FileText,
@@ -1570,21 +1571,21 @@ function ReaderSettingsPanel({
             )}
             {settingsSection === 'codex' && (
               <section className="reader-settings__section">
-              <div className="reader-settings__section-heading"><Sparkles size={17} /><div><strong>Codex</strong><span>{codexAvailability?.available ? codexAvailability.version ?? t.codexAvailable : codexAvailability?.reason ?? t.codexChecking}</span></div><label className="reader-settings__switch"><input type="checkbox" checked={codexEnabled} disabled={!codexAvailability?.available} onChange={(event) => setCodexEnabled(event.target.checked)} />{t.enabled}</label></div>
+              <div className="reader-settings__section-heading"><Sparkles size={17} /><div><strong>Codex</strong><span>{codexAvailability?.available ? codexAvailability.version ?? t.codexAvailable : codexAvailability?.reason ?? t.codexChecking}</span></div><SettingsToggle label={t.enabled} checked={codexEnabled} disabled={!codexAvailability?.available} onChange={(event) => setCodexEnabled(event.target.checked)} /></div>
               <div className="reader-settings__subsection"><strong>{t.chat}</strong><div className="reader-settings__fields">
-                <label>{t.chatModel}<select value={codexChatModel} disabled={!codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexChatModel(event.target.value); setCodexChatEffort(''); }}><option value="">{t.codexDefault}</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</select></label>
-                <label>{t.chatReasoning}<select value={codexChatEffort} disabled={!codexEnabled || !codexAvailability?.available || chatEfforts.length === 0} onChange={(event) => setCodexChatEffort(event.target.value)}><option value="">{t.readerDefault}</option>{chatEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort, uiLanguage)}</option>)}</select></label>
+                <label>{t.chatModel}<SettingsSelect value={codexChatModel} disabled={!codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexChatModel(event.target.value); setCodexChatEffort(''); }}><option value="">{t.codexDefault}</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</SettingsSelect></label>
+                <label>{t.chatReasoning}<SettingsSelect value={codexChatEffort} disabled={!codexEnabled || !codexAvailability?.available || chatEfforts.length === 0} onChange={(event) => setCodexChatEffort(event.target.value)}><option value="">{t.readerDefault}</option>{chatEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort, uiLanguage)}</option>)}</SettingsSelect></label>
               </div></div>
               <div className="reader-settings__subsection"><strong>{t.translation}</strong><div className="reader-settings__fields">
-                <label>{t.translationBackend}<select value={translationBackend} onChange={(event) => setTranslationBackend(event.target.value as AppPreferences['translationBackend'])}><option value="provider">{t.aiProvider}</option><option value="codex" disabled={!codexEnabled || !codexAvailability?.available}>Codex</option></select></label>
-                <label>{t.translationModel}<select value={codexTranslationModel} disabled={translationBackend !== 'codex' || !codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexTranslationModel(event.target.value); setCodexTranslationEffort(''); }}><option value="">{t.fastestAvailable}</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</select></label>
-                <label>{t.translationReasoning}<select value={codexTranslationEffort} disabled={translationBackend !== 'codex' || !codexEnabled || !codexAvailability?.available || translationEfforts.length === 0} onChange={(event) => setCodexTranslationEffort(event.target.value)}><option value="">{t.readerDefault}</option>{translationEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort, uiLanguage)}</option>)}</select></label>
+                <label>{t.translationBackend}<SettingsSelect value={translationBackend} onChange={(event) => setTranslationBackend(event.target.value as AppPreferences['translationBackend'])}><option value="provider">{t.aiProvider}</option><option value="codex" disabled={!codexEnabled || !codexAvailability?.available}>Codex</option></SettingsSelect></label>
+                <label>{t.translationModel}<SettingsSelect value={codexTranslationModel} disabled={translationBackend !== 'codex' || !codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexTranslationModel(event.target.value); setCodexTranslationEffort(''); }}><option value="">{t.fastestAvailable}</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</SettingsSelect></label>
+                <label>{t.translationReasoning}<SettingsSelect value={codexTranslationEffort} disabled={translationBackend !== 'codex' || !codexEnabled || !codexAvailability?.available || translationEfforts.length === 0} onChange={(event) => setCodexTranslationEffort(event.target.value)}><option value="">{t.readerDefault}</option>{translationEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort, uiLanguage)}</option>)}</SettingsSelect></label>
               </div></div>
             </section>
             )}
             {settingsSection === 'sync' && (
             <section className="reader-settings__section">
-              <div className="reader-settings__section-heading"><Cloud size={17} /><div><strong>{t.webDavSync}</strong><span>{t.perPdfMetadata}</span></div><label className="reader-settings__switch"><input type="checkbox" checked={syncEnabled} onChange={(event) => setSyncEnabled(event.target.checked)} />{t.enabled}</label></div>
+              <div className="reader-settings__section-heading"><Cloud size={17} /><div><strong>{t.webDavSync}</strong><span>{t.perPdfMetadata}</span></div><SettingsToggle label={t.enabled} checked={syncEnabled} onChange={(event) => setSyncEnabled(event.target.checked)} /></div>
               <div className="reader-settings__fields">
                 <label className="reader-settings__wide">{t.serverUrl}<input value={webDavUrl} placeholder="https://dav.example.com/remote.php/dav/files/name" onChange={(event) => setWebDavUrl(event.target.value)} /></label>
                 <label>{t.folder}<input value={webDavPath} placeholder="tessel" onChange={(event) => setWebDavPath(event.target.value)} /></label>
@@ -1597,20 +1598,20 @@ function ReaderSettingsPanel({
             <section className="reader-settings__section">
               <div className="reader-settings__section-heading"><LanguagesIcon size={17} /><div><strong>{t.language}</strong><span>{t.languageDescription}</span></div></div>
               <div className="reader-settings__fields">
-                <label>{t.uiLanguage}<select value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value as UiLanguage)}><option value="en">English</option><option value="zh-CN">简体中文</option></select></label>
-                <label>{t.aiPreferredLanguage}<select value={aiLanguage} onChange={(event) => setAiLanguage(event.target.value as AiPreferredLanguage)}><option value="Simplified Chinese">简体中文</option><option value="Chinese">中文</option><option value="English">English</option></select></label>
+                <label>{t.uiLanguage}<SettingsSelect value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value as UiLanguage)}><option value="en">English</option><option value="zh-CN">简体中文</option></SettingsSelect></label>
+                <label>{t.aiPreferredLanguage}<SettingsSelect value={aiLanguage} onChange={(event) => setAiLanguage(event.target.value as AiPreferredLanguage)}><option value="Simplified Chinese">简体中文</option><option value="Chinese">中文</option><option value="English">English</option></SettingsSelect></label>
               </div>
             </section>
             )}
             {settingsSection === 'updates' && (
             <section className="reader-settings__section">
               <div className="reader-settings__section-heading"><RefreshCw size={17} /><div><strong>{t.updates}</strong><span>{t.updateDescription}</span></div></div>
-              <div className="reader-settings__fields">
-                <label>{t.currentVersion}<input readOnly value={updateState?.currentVersion ?? '...'} /></label>
-                <label>{t.updateStatus}<input readOnly value={updateStatusText(updateState, t)} /></label>
-                {updateState?.availableVersion && <label>{t.availableVersion}<input readOnly value={updateState.availableVersion} /></label>}
-                {updateState?.releaseNotes && <label className="reader-settings__wide">{t.releaseNotes}<textarea readOnly rows={4} value={updateState.releaseNotes} /></label>}
+              <div className="reader-settings__update-summary">
+                <div><span>{t.currentVersion}</span><output aria-label={t.currentVersion}>{updateState?.currentVersion ?? '...'}</output></div>
+                <div><span>{t.updateStatus}</span><output aria-label={t.updateStatus}>{updateStatusText(updateState, t)}</output></div>
+                {updateState?.availableVersion && <div><span>{t.availableVersion}</span><output aria-label={t.availableVersion}>{updateState.availableVersion}</output></div>}
               </div>
+              {updateState?.releaseNotes && <label className="reader-settings__notes">{t.releaseNotes}<textarea readOnly rows={4} value={updateState.releaseNotes} /></label>}
               <div className="reader-settings__actions reader-settings__actions--inline">
                 <button className="quiet-button" type="button" disabled={updateState?.status === 'checking' || updateState?.status === 'downloading'} onClick={() => void window.sidelight.checkForAppUpdates()}>{t.checkForUpdates}</button>
                 {updateState?.status === 'ready' && <button className="primary-button" type="button" onClick={() => void window.sidelight.installAppUpdate()}>{t.restartToUpdate}</button>}
@@ -1623,6 +1624,25 @@ function ReaderSettingsPanel({
         </form>
       </section>
     </div>
+  );
+}
+
+function SettingsSelect({ children, ...props }: ComponentPropsWithoutRef<'select'>): ReactElement {
+  return (
+    <span className="reader-settings__select">
+      <select {...props}>{children}</select>
+      <ChevronDown size={15} strokeWidth={2} aria-hidden="true" />
+    </span>
+  );
+}
+
+function SettingsToggle({ label, ...props }: ComponentPropsWithoutRef<'input'> & { label: string }): ReactElement {
+  return (
+    <label className="reader-settings__switch">
+      <input {...props} type="checkbox" />
+      <span className="reader-settings__switch-control" aria-hidden="true" />
+      <span>{label}</span>
+    </label>
   );
 }
 
