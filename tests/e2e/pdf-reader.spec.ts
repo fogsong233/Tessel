@@ -435,7 +435,7 @@ test.describe('PDF reader flow', () => {
     await expect(settings).toBeVisible();
     await settings.getByRole('button', { name: 'Codex' }).click();
     await settings.getByLabel('Enabled').check();
-    await settings.getByLabel('Backend').selectOption('codex');
+    await settings.getByLabel('Translation backend').selectOption('codex');
     await settings.getByRole('button', { name: 'Save' }).click();
 
     await expect.poll(async () => {

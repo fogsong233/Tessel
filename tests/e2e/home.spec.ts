@@ -33,6 +33,7 @@ test('opens a focused start page when no PDF is supplied', async ({}, testInfo) 
     expect(viewport.height).toBeLessThanOrEqual(520);
     await page.getByRole('button', { name: 'Settings' }).click();
     await expect(page.locator('.reader-settings')).toBeVisible();
+    await page.locator('.reader-settings').getByRole('button', { name: 'Codex' }).click();
     await expect(page.getByLabel('Chat model')).toBeVisible();
     await expect(page.getByLabel('Chat reasoning')).toBeVisible();
   } finally {
