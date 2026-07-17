@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from 'electron';
 import { open, rm, stat } from 'node:fs/promises';
-import { extname, join, resolve } from 'node:path';
+import { extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   AiCompletionRequest,
@@ -234,6 +234,16 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
   });
   ipcMain.handle('workspaceBlock:delete', async (_event, blockId: string) => {
     await runStoreMutation(() => store.deleteWorkspaceBlock(blockId));
+  });
+  ipcMain.handle('shell:openLocalPath', async (_event, path: string) => {
+    const localPath = normalizeLocalResourcePath(path);
+    if (!localPath) {
+      throw new Error('Only absolute local file paths can be opened.');
+    }
+    const error = await shell.openPath(localPath);
+    if (error) {
+      throw new Error(error);
+    }
   });
 
   ipcMain.handle('settings:getAiProvider', () => store.getSafeAiProvider());
@@ -572,6 +582,27 @@ function normalizePdfOpenPath(value: string): string | undefined {
   }
 
   return resolve(candidate);
+}
+
+function normalizeLocalResourcePath(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  let candidate = trimmed;
+  if (/^sandbox:/i.test(candidate)) {
+    candidate = candidate.replace(/^sandbox:\/{0,2}/i, '/');
+  }
+  if (/^file:/i.test(candidate)) {
+    try {
+      candidate = fileURLToPath(candidate);
+    } catch {
+      return undefined;
+    }
+  }
+
+  return isAbsolute(candidate) ? resolve(candidate) : undefined;
 }
 
 function focusFirstWindow(): void {

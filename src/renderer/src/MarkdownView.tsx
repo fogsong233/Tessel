@@ -9,23 +9,85 @@ interface MarkdownViewProps {
 }
 
 export function MarkdownView({ children }: MarkdownViewProps): ReactElement {
-  const markdown = normalizeLatexDelimiters(cleanStoredAiError(children));
+  const markdown = normalizeLatexDelimiters(normalizeLocalMarkdownLinks(cleanStoredAiError(children)));
 
   return (
-    <ReactMarkdown
+    <div className="markdown-view">
+      <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[rehypeKatex]}
-      components={{
-        a: ({ children: linkChildren, ...props }) => (
-          <a {...props} target="_blank" rel="noreferrer">
-            {linkChildren}
-          </a>
-        )
+      urlTransform={(url) => {
+        const localPath = localPathFromMarkdownUrl(url);
+        return localPath ? toFileUrl(localPath) : url;
       }}
-    >
-      {markdown}
-    </ReactMarkdown>
+      components={{
+        a: ({ children: linkChildren, href, ...props }) => {
+          const localPath = localPathFromMarkdownUrl(href);
+          return (
+            <a
+              {...props}
+              href={localPath ? toFileUrl(localPath) : href}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(event) => {
+                if (!localPath) {
+                  return;
+                }
+                event.preventDefault();
+                void window.sidelight.openLocalPath(localPath);
+              }}
+            >
+              {linkChildren}
+            </a>
+          );
+        },
+        img: ({ src, alt, ...props }) => {
+          const localPath = localPathFromMarkdownUrl(src);
+          return <img {...props} src={localPath ? toFileUrl(localPath) : src} alt={alt ?? ''} loading="lazy" />;
+        }
+      }}
+      >
+        {markdown}
+      </ReactMarkdown>
+    </div>
   );
+}
+
+function normalizeLocalMarkdownLinks(markdown: string): string {
+  return markdown.replace(/(!?\[[^\]]*\]\()((?:sandbox:|file:|\/)[^)]+)(\))/g, (_match, prefix: string, url: string, suffix: string) => {
+    const trimmed = url.trim();
+    if (!trimmed) {
+      return _match;
+    }
+    return `${prefix}${encodeURI(trimmed).replace(/#/g, '%23')}${suffix}`;
+  });
+}
+
+function localPathFromMarkdownUrl(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (/^sandbox:/i.test(trimmed)) {
+    const path = trimmed.replace(/^sandbox:\/{0,2}/i, '/');
+    return path.startsWith('/') ? decodeURIComponent(path) : undefined;
+  }
+
+  if (/^file:/i.test(trimmed)) {
+    try {
+      const url = new URL(trimmed);
+      return decodeURIComponent(url.pathname);
+    } catch {
+      return undefined;
+    }
+  }
+
+  return trimmed.startsWith('/') ? decodeURIComponent(trimmed) : undefined;
+}
+
+function toFileUrl(path: string): string {
+  return `file://${encodeURI(path).replace(/#/g, '%23')}`;
 }
 
 function cleanStoredAiError(markdown: string): string {

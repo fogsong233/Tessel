@@ -133,6 +133,46 @@ test.describe('PDF reader flow', () => {
     await expect(card.locator('img')).toHaveAttribute('style', /width: 150%/);
   });
 
+  test('renders agent local images and local result links without routing through localhost', async () => {
+    const imagePath = join(runDir, 'generated chart.png');
+    const resultPath = join(runDir, 'analysis result.txt');
+    await writeFile(imagePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2kQAAAABJRU5ErkJggg==', 'base64'));
+    await writeFile(resultPath, 'Local Codex result', 'utf8');
+    const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+      documents: Array<{ id: string }>;
+    };
+    const documentId = store.documents[0]?.id;
+    expect(documentId).toBeTruthy();
+    const now = new Date().toISOString();
+    await page.evaluate(async ({ documentId, imagePath, resultPath, now }) => {
+      await window.sidelight.saveConversation({
+        conversation: {
+          id: 'chat_local_result_fixture',
+          documentId,
+          pageNumber: 1,
+          mode: 'ask',
+          agentKind: 'codex',
+          summary: { title: 'Local result', brief: 'Agent local output fixture.', keywords: [] },
+          messages: [{
+            id: 'msg_local_result_fixture',
+            role: 'assistant',
+            content: `![Generated chart](sandbox:${imagePath})\n\n[Open analysis](${resultPath})`,
+            createdAt: now
+          }],
+          createdAt: now,
+          updatedAt: now
+        }
+      });
+    }, { documentId: documentId!, imagePath, resultPath, now });
+
+    await page.reload();
+    const bubble = page.locator('.chat-bubble').last();
+    await expect(bubble.locator('img[alt="Generated chart"]')).toHaveAttribute('src', /^file:\/\//);
+    await expect(bubble.getByRole('link', { name: 'Open analysis' })).toHaveAttribute('href', /^file:\/\//);
+    await expect(bubble.getByRole('link', { name: 'Open analysis' })).not.toHaveAttribute('href', /^https?:\/\/localhost/);
+    await expect(bubble.getByRole('link', { name: 'Open analysis' })).not.toHaveAttribute('href', /%25/);
+  });
+
   test('renders Codex output and activity in a collapsible timeline', async () => {
     await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
     const documentId = `pdf_${createHash('sha256').update(await readFile(pdfPath)).digest('hex')}`;
