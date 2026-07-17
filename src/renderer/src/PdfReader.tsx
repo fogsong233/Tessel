@@ -37,6 +37,7 @@ import {
   BookOpen,
   ArrowLeft,
   BookmarkPlus,
+  ChevronDown,
   ChevronsLeft,
   ChevronsRight,
   Check,
@@ -306,7 +307,7 @@ function readerText(language: UiLanguage) {
       localPdfWorkspace: '本地 PDF 工作区',
       transientPdf: '临时打开，尚未加入资料库',
       manual: '手动',
-      messageSidelight: '给 Sidelight 发消息',
+      messageSidelight: '给 Tessel 发消息',
       newPageChat: '新建页面对话',
       newPageNote: '新建页面笔记',
       noConversations: '这个文档还没有对话。',
@@ -423,7 +424,7 @@ function readerText(language: UiLanguage) {
     localPdfWorkspace: 'Local PDF workspace',
     transientPdf: 'Opened temporarily, not in library',
     manual: 'Manual',
-    messageSidelight: 'Message Sidelight',
+    messageSidelight: 'Message Tessel',
     newPageChat: 'New page chat',
     newPageNote: 'New page note',
     noConversations: 'No conversations on this document yet.',
@@ -2507,7 +2508,7 @@ export function PdfReader({
                 <div className="reader-empty__mark">
                   <FileText size={42} strokeWidth={1.5} />
                 </div>
-                <h1>Sidelight</h1>
+                <h1>Tessel</h1>
                 <p>{uiLanguage === 'zh-CN'
                   ? '打开 PDF，开始使用持久高亮、书签和锚定 AI 对话阅读。'
                   : 'Open a PDF to start reading with durable highlights, bookmarks, and anchored AI conversations.'}</p>
@@ -2617,7 +2618,7 @@ function ReaderLeftPanel({
     <aside className="left-panel">
       <header className="left-panel__top">
         <div className="reader-title-block">
-          <span>Sidelight</span>
+          <span>Tessel</span>
           <strong title={title ?? t.noPdfOpen}>{title ?? t.noPdfOpen}</strong>
           <small>
             {status === 'loading'
@@ -3822,9 +3823,9 @@ function DockChatPanel({
   const [dragActive, setDragActive] = useState(false);
   const [codexModels, setCodexModels] = useState<CodexModelInfo[]>([]);
   const [commandNotice, setCommandNotice] = useState<string>();
+  const [configMenu, setConfigMenu] = useState<'model' | 'permissions'>();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const modelSelectRef = useRef<HTMLSelectElement>(null);
-  const permissionSelectRef = useRef<HTMLSelectElement>(null);
+  const configMenuRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
@@ -3845,6 +3846,7 @@ function DockChatPanel({
 
   useEffect(() => {
     setCommandNotice(undefined);
+    setConfigMenu(undefined);
     if (!isCodex) {
       setCodexModels([]);
       return;
@@ -3865,6 +3867,28 @@ function DockChatPanel({
       disposed = true;
     };
   }, [conversation.id, isCodex]);
+
+  useEffect(() => {
+    if (!configMenu) {
+      return;
+    }
+    const closeOnPointerDown = (event: PointerEvent): void => {
+      if (!configMenuRef.current?.contains(event.target as Node)) {
+        setConfigMenu(undefined);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setConfigMenu(undefined);
+      }
+    };
+    document.addEventListener('pointerdown', closeOnPointerDown);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnPointerDown);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [configMenu]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -3957,28 +3981,9 @@ function DockChatPanel({
       ].join(' · '));
       return true;
     }
-    if (command === '/model') {
-      if (!argument) {
-        modelSelectRef.current?.focus();
-        setCommandNotice('Choose a model for this conversation.');
-        return true;
-      }
-      const model = codexModels.find((candidate) =>
-        candidate.id.toLowerCase() === argument.toLowerCase()
-        || candidate.displayName.toLowerCase() === argument.toLowerCase()
-      );
-      if (!model) {
-        setCommandNotice(`Unknown model: ${argument}`);
-        return true;
-      }
-      updateCodexSettings({ model: model.id, effort: undefined });
-      setCommandNotice(`Model changed to ${model.displayName}.`);
-      return true;
-    }
     if (command === '/permissions') {
       if (!argument) {
-        permissionSelectRef.current?.focus();
-        setCommandNotice('Choose permissions for this conversation.');
+        setConfigMenu('permissions');
         return true;
       }
       const permission = parsePermissionMode(argument);
@@ -3990,11 +3995,7 @@ function DockChatPanel({
       setCommandNotice(`Permissions changed to ${permissionLabel(permission, text)}.`);
       return true;
     }
-    if (command === '/help') {
-      setCommandNotice(slashCommands.map((item) => item.command).join('  '));
-      return true;
-    }
-    setCommandNotice(`Unknown command: ${command}. Type /help to list available commands.`);
+    setCommandNotice(`Unknown command: ${command}. Type / to list available commands.`);
     return true;
   };
 
@@ -4073,7 +4074,7 @@ function DockChatPanel({
               <article key={message.id} className={`chat-message chat-message--${message.role}`}>
                 {message.role === 'assistant' && <div className="chat-avatar">{conversation.agentKind === 'codex' ? 'C' : 'S'}</div>}
                 <div className="chat-message__content">
-                  <div className="chat-message__role">{message.role === 'assistant' ? conversation.agentKind === 'codex' ? 'Codex' : 'Sidelight' : 'You'}</div>
+                  <div className="chat-message__role">{message.role === 'assistant' ? conversation.agentKind === 'codex' ? 'Codex' : 'Tessel' : 'You'}</div>
                   {message.attachments?.length ? (
                     <div className="chat-attachments">
                       {message.attachments.map((attachment) => (
@@ -4262,46 +4263,127 @@ function DockChatPanel({
         </div>
         {isCodex && (
           <>
-            <div className="chat-composer__controls">
-              <label title={text.codexModel}>
-                <Cpu size={13} />
-                <select
-                  ref={modelSelectRef}
+            <div className="chat-config-shell" ref={configMenuRef}>
+              <div className="chat-composer__controls">
+                <button
+                  type="button"
+                  className="chat-config-trigger chat-config-trigger--model"
                   aria-label={text.codexModel}
-                  value={codexSettings.model ?? ''}
+                  aria-expanded={configMenu === 'model'}
+                  aria-haspopup="dialog"
                   disabled={busy}
-                  onChange={(event) => updateCodexSettings({ model: event.target.value || undefined, effort: undefined })}
+                  onClick={() => setConfigMenu((current) => current === 'model' ? undefined : 'model')}
                 >
-                  <option value="">{text.codexDefaultModel}</option>
-                  {codexModels.map((model) => <option value={model.id} key={model.id}>{model.displayName}</option>)}
-                </select>
-              </label>
-              <label title={text.codexReasoning}>
-                <Gauge size={13} />
-                <select
-                  aria-label={text.codexReasoning}
-                  value={codexSettings.effort ?? ''}
-                  disabled={busy}
-                  onChange={(event) => updateCodexSettings({ effort: event.target.value || undefined })}
-                >
-                  <option value="">{text.codexDefaultEffort}</option>
-                  {reasoningEfforts.map((effort) => <option value={effort} key={effort}>{reasoningEffortLabel(effort)}</option>)}
-                </select>
-              </label>
-              <label className={`chat-permission-select is-${permissionMode}`} title={text.codexPermissions}>
-                <ShieldCheck size={13} />
-                <select
-                  ref={permissionSelectRef}
+                  <Cpu size={13} />
+                  <span>{selectedModel?.displayName ?? codexSettings.model ?? text.codexDefaultModel}</span>
+                  <small><Gauge size={11} />{codexSettings.effort ? reasoningEffortLabel(codexSettings.effort) : text.codexDefaultEffort}</small>
+                  <ChevronDown size={13} />
+                </button>
+                <button
+                  type="button"
+                  className={`chat-config-trigger chat-config-trigger--permission is-${permissionMode}`}
                   aria-label={text.codexPermissions}
-                  value={permissionMode}
+                  aria-expanded={configMenu === 'permissions'}
+                  aria-haspopup="menu"
                   disabled={busy}
-                  onChange={(event) => updateCodexSettings({ permissionMode: event.target.value as CodexPermissionMode })}
+                  onClick={() => setConfigMenu((current) => current === 'permissions' ? undefined : 'permissions')}
                 >
-                  <option value="read-only">{text.permissionReadOnly}</option>
-                  <option value="workspace-write">{text.permissionWorkspace}</option>
-                  <option value="full-access">{text.permissionFullAccess}</option>
-                </select>
-              </label>
+                  <ShieldCheck size={13} />
+                  <span>{permissionLabel(permissionMode, text)}</span>
+                  <ChevronDown size={13} />
+                </button>
+              </div>
+
+              {configMenu === 'model' && (
+                <div className="chat-config-popover chat-model-menu" role="dialog" aria-label={text.codexModel}>
+                  <div className="chat-config-popover__heading">
+                    <span>{text.codexModel}</span>
+                    <small>{text.conversation}</small>
+                  </div>
+                  <div className="chat-config-option-list" role="listbox" aria-label={text.codexModel}>
+                    <button
+                      type="button"
+                      className={!codexSettings.model ? 'chat-config-option is-selected' : 'chat-config-option'}
+                      role="option"
+                      aria-selected={!codexSettings.model}
+                      onClick={() => {
+                        updateCodexSettings({ model: undefined, effort: undefined });
+                        setConfigMenu(undefined);
+                      }}
+                    >
+                      <span><strong>{text.codexDefaultModel}</strong><small>Use the model selected in Settings</small></span>
+                      {!codexSettings.model ? <Check size={14} /> : null}
+                    </button>
+                    {codexModels.map((model) => (
+                      <button
+                        type="button"
+                        className={codexSettings.model === model.id ? 'chat-config-option is-selected' : 'chat-config-option'}
+                        role="option"
+                        aria-selected={codexSettings.model === model.id}
+                        key={model.id}
+                        onClick={() => {
+                          updateCodexSettings({ model: model.id, effort: undefined });
+                          setConfigMenu(undefined);
+                        }}
+                      >
+                        <span><strong>{model.displayName}</strong><small>{model.description || model.id}</small></span>
+                        {codexSettings.model === model.id ? <Check size={14} /> : null}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="chat-config-popover__heading chat-config-popover__heading--reasoning">
+                    <span>{text.codexReasoning}</span>
+                    <small>{codexSettings.effort ? reasoningEffortLabel(codexSettings.effort) : text.codexDefaultEffort}</small>
+                  </div>
+                  <div className="chat-effort-options" role="group" aria-label={text.codexReasoning}>
+                    <button
+                      type="button"
+                      className={!codexSettings.effort ? 'is-selected' : ''}
+                      onClick={() => updateCodexSettings({ effort: undefined })}
+                    >
+                      Default
+                    </button>
+                    {reasoningEfforts.map((effort) => (
+                      <button
+                        type="button"
+                        className={codexSettings.effort === effort ? 'is-selected' : ''}
+                        key={effort}
+                        onClick={() => updateCodexSettings({ effort })}
+                      >
+                        {reasoningEffortLabel(effort)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {configMenu === 'permissions' && (
+                <div className="chat-config-popover chat-permission-menu" role="menu" aria-label={text.codexPermissions}>
+                  <div className="chat-config-popover__heading">
+                    <span>{text.codexPermissions}</span>
+                    <small>{text.conversation}</small>
+                  </div>
+                  {(['read-only', 'workspace-write', 'full-access'] as CodexPermissionMode[]).map((permission) => (
+                    <button
+                      type="button"
+                      className={`chat-config-option${permissionMode === permission ? ' is-selected' : ''}${permission === 'full-access' ? ' is-danger' : ''}`}
+                      role="menuitemradio"
+                      aria-checked={permissionMode === permission}
+                      key={permission}
+                      onClick={() => {
+                        updateCodexSettings({ permissionMode: permission });
+                        setConfigMenu(undefined);
+                      }}
+                    >
+                      <span>
+                        <strong>{permissionLabel(permission, text)}</strong>
+                        <small>{permissionDescription(permission)}</small>
+                      </span>
+                      {permissionMode === permission ? <Check size={14} /> : null}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             {permissionMode === 'full-access' && <div className="chat-permission-warning">{text.fullAccessWarning}</div>}
           </>
@@ -4313,12 +4395,10 @@ function DockChatPanel({
 
 function chatSlashCommands(text: ReaderText): Array<{ command: string; description: string }> {
   return [
-    { command: '/model', description: text.codexModel },
     { command: '/permissions', description: text.codexPermissions },
     { command: '/status', description: 'Show model, reasoning, and permissions' },
     { command: '/ps', description: 'Show active tasks in this conversation' },
-    { command: '/stop', description: 'Stop the active Codex turn' },
-    { command: '/help', description: text.slashCommands }
+    { command: '/stop', description: 'Stop the active Codex turn' }
   ];
 }
 
@@ -4344,6 +4424,16 @@ function permissionLabel(permission: CodexPermissionMode, text: ReaderText): str
     return text.permissionFullAccess;
   }
   return text.permissionWorkspace;
+}
+
+function permissionDescription(permission: CodexPermissionMode): string {
+  if (permission === 'read-only') {
+    return 'Read the PDF and search without changing local files';
+  }
+  if (permission === 'full-access') {
+    return 'Access and modify files anywhere on this computer';
+  }
+  return "Work only inside this PDF's private analysis folder";
 }
 
 function reasoningEffortLabel(effort: string): string {
@@ -4453,7 +4543,9 @@ function AgentTimelineActivity({
         {entry.activities.map((activity, index) => (
           <div className={`codex-timeline__activity-item is-${activity.status}`} key={activity.id}>
             <span className="codex-timeline__rail" aria-hidden="true">
-              <span className="codex-timeline__node">{activity.kind === 'command' ? <Terminal size={10} /> : null}</span>
+              <span className={`codex-timeline__node${activity.kind === 'command' ? ' is-command' : ''}`}>
+                {activity.kind === 'command' ? <Terminal size={12} /> : null}
+              </span>
               {index < entry.activities.length - 1 ? <span className="codex-timeline__line" /> : null}
             </span>
             <span className="codex-timeline__activity-copy">

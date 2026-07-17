@@ -90,7 +90,7 @@ test.describe('PDF reader flow', () => {
                 createdAt: now,
                 activities: [
                   { id: 'read_1', kind: 'reading', label: 'Reading selected passage', status: 'completed', updatedAt: now },
-                  { id: 'search_1', kind: 'tool', label: 'Checking surrounding context', status: 'completed', updatedAt: now }
+                  { id: 'command_1', kind: 'command', label: 'Running local analysis', status: 'completed', updatedAt: now }
                 ]
               },
               { id: 'output_2', type: 'output', content: 'The passage is about a persistent PDF reader session.', createdAt: now }
@@ -111,17 +111,29 @@ test.describe('PDF reader flow', () => {
     await expect(activity).toHaveAttribute('open', '');
     await expect(activity.locator('.codex-timeline__activity-item')).toHaveCount(2);
     await expect(activity.locator('.codex-timeline__line')).toHaveCount(1);
+    const commandNode = activity.locator('.codex-timeline__node.is-command');
+    await expect(commandNode.locator('svg')).toBeVisible();
+    await expect(commandNode).toHaveCSS('border-radius', '0px');
 
-    await expect(page.getByLabel('Current chat model')).toBeVisible();
-    await expect(page.getByLabel('Reasoning effort')).toBeVisible();
-    await expect(page.getByLabel('Permissions')).toHaveValue('workspace-write');
+    const modelButton = page.getByRole('button', { name: 'Current chat model' });
+    await expect(modelButton).toBeVisible();
+    await modelButton.click();
+    await expect(page.getByRole('dialog', { name: 'Current chat model' })).toBeVisible();
+    await expect(page.getByRole('group', { name: 'Reasoning effort' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    const permissionButton = page.getByRole('button', { name: 'Permissions' });
+    await expect(permissionButton).toContainText('PDF workspace');
     const composer = page.locator('.dock-chat-panel textarea');
+    await composer.fill('/');
+    await expect(page.locator('.chat-slash-menu button')).toHaveCount(4);
+    await expect(page.locator('.chat-slash-menu')).not.toContainText('/model');
+    await expect(page.locator('.chat-slash-menu')).not.toContainText('/help');
     await composer.fill('/status');
     await composer.press('Enter');
     await expect(page.locator('.chat-command-notice')).toContainText('PDF workspace');
     await composer.fill('/permissions full-access');
     await composer.press('Enter');
-    await expect(page.getByLabel('Permissions')).toHaveValue('full-access');
+    await expect(permissionButton).toContainText('Full access');
     await expect(page.locator('.chat-permission-warning')).toBeVisible();
     await expect(page.locator('.chat-message')).toHaveCount(1);
     await expect.poll(async () => {
