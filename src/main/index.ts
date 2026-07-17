@@ -595,7 +595,7 @@ function normalizeLocalResourcePath(value: string): string | undefined {
 
   let candidate = trimmed;
   if (/^sandbox:/i.test(candidate)) {
-    candidate = candidate.replace(/^sandbox:\/{0,2}/i, '/');
+    candidate = sandboxLocalPath(candidate);
   }
   if (/^file:/i.test(candidate)) {
     try {
@@ -606,6 +606,11 @@ function normalizeLocalResourcePath(value: string): string | undefined {
   }
 
   return isAbsolute(candidate) ? resolve(candidate) : undefined;
+}
+
+function sandboxLocalPath(value: string): string {
+  const path = value.replace(/^sandbox:/i, '');
+  return /^\/{1,2}[A-Za-z]:[\\/]/.test(path) ? path.replace(/^\/+/, '') : path;
 }
 
 const remoteImageCache = new Map<string, Promise<string | undefined>>();

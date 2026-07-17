@@ -128,7 +128,7 @@ function MarkdownImage({ src, alt = '', ...props }: ComponentPropsWithoutRef<'im
 }
 
 function normalizeLocalMarkdownLinks(markdown: string): string {
-  return markdown.replace(/(!?\[[^\]]*\]\()((?:sandbox:|file:|\/)[^)]+)(\))/g, (_match, prefix: string, url: string, suffix: string) => {
+  return markdown.replace(/(!?\[[^\]]*\]\()((?:sandbox:|file:|\/|[A-Za-z]:[\\/])[^)]+)(\))/g, (_match, prefix: string, url: string, suffix: string) => {
     const trimmed = url.trim();
     if (!trimmed) {
       return _match;
@@ -144,24 +144,48 @@ function localPathFromMarkdownUrl(value: string | undefined): string | undefined
   }
 
   if (/^sandbox:/i.test(trimmed)) {
-    const path = trimmed.replace(/^sandbox:\/{0,2}/i, '/');
-    return path.startsWith('/') ? decodeURIComponent(path) : undefined;
+    return absoluteLocalPath(sandboxLocalPath(trimmed));
   }
 
   if (/^file:/i.test(trimmed)) {
     try {
       const url = new URL(trimmed);
-      return decodeURIComponent(url.pathname);
+      const pathname = decodeURIComponent(url.pathname);
+      if (url.hostname) {
+        return `\\\\${url.hostname}${pathname.replaceAll('/', '\\')}`;
+      }
+      return absoluteLocalPath(pathname);
     } catch {
       return undefined;
     }
   }
 
-  return trimmed.startsWith('/') ? decodeURIComponent(trimmed) : undefined;
+  return absoluteLocalPath(trimmed);
 }
 
 function toFileUrl(path: string): string {
+  if (/^[A-Za-z]:[\\/]/.test(path)) {
+    return `file:///${encodeURI(path.replaceAll('\\', '/')).replace(/#/g, '%23')}`;
+  }
+  if (/^\\\\[^\\]+\\/.test(path)) {
+    return `file://${encodeURI(path.replaceAll('\\', '/')).replace(/#/g, '%23')}`;
+  }
   return `file://${encodeURI(path).replace(/#/g, '%23')}`;
+}
+
+function absoluteLocalPath(value: string): string | undefined {
+  const decoded = decodeURIComponent(value);
+  if (/^\/[A-Za-z]:[\\/]/.test(decoded)) {
+    return decoded.slice(1);
+  }
+  return decoded.startsWith('/') || /^[A-Za-z]:[\\/]/.test(decoded) || /^\\\\[^\\]+\\/.test(decoded)
+    ? decoded
+    : undefined;
+}
+
+function sandboxLocalPath(value: string): string {
+  const path = value.replace(/^sandbox:/i, '');
+  return /^\/{1,2}[A-Za-z]:[\\/]/.test(path) ? path.replace(/^\/+/, '') : path;
 }
 
 function messageRequestsVisual(markdown: string): boolean {

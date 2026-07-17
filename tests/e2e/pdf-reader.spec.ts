@@ -178,6 +178,38 @@ test.describe('PDF reader flow', () => {
     await expect(bubble.getByRole('link', { name: 'Open analysis' })).not.toHaveAttribute('href', /%25/);
   });
 
+  test('renders Windows sandbox paths as local file URLs', async () => {
+    const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+      documents: Array<{ id: string }>;
+    };
+    const documentId = store.documents[0]?.id;
+    expect(documentId).toBeTruthy();
+    const now = new Date().toISOString();
+    await page.evaluate(async ({ documentId, now }) => {
+      await window.sidelight.saveConversation({
+        conversation: {
+          id: 'chat_windows_result_fixture',
+          documentId,
+          pageNumber: 1,
+          mode: 'ask',
+          agentKind: 'codex',
+          summary: { title: 'Windows result', brief: 'Windows local output fixture.', keywords: [] },
+          messages: [{
+            id: 'msg_windows_result_fixture',
+            role: 'assistant',
+            content: '[Open Windows analysis](sandbox:C:\\Users\\reader\\analysis.html)',
+            createdAt: now
+          }],
+          createdAt: now,
+          updatedAt: now
+        }
+      });
+    }, { documentId: documentId!, now });
+
+    await page.reload();
+    await expect(page.getByRole('link', { name: 'Open Windows analysis' })).toHaveAttribute('href', 'file:///C:/Users/reader/analysis.html');
+  });
+
   test('resolves an agent image that incorrectly points at a public HTML profile page', async () => {
     const resolvedImage = await page.evaluate(() => window.sidelight.resolveRemoteImage('https://cs.fudan.edu.cn/qxp/'));
     expect(resolvedImage).toMatch(/^data:image\//);
