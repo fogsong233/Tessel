@@ -445,6 +445,7 @@ export interface AiStreamSteerRequest {
 export interface CodexStreamRequest {
   streamId: string;
   conversationId: ConversationId;
+  task?: ReaderAiTask;
   transient?: boolean;
   codexThreadId?: string;
   documentId: DocumentId;
@@ -474,6 +475,7 @@ export interface CodexModelInfo {
 
 export interface ReaderAiStreamRequest {
   streamId: string;
+  task?: ReaderAiTask;
   documentId?: DocumentId;
   conversationId?: ConversationId;
   codexThreadId?: string;
@@ -483,6 +485,8 @@ export interface ReaderAiStreamRequest {
   request: AiCompletionRequest;
   codexContext?: AiDocumentToolContext;
 }
+
+export type ReaderAiTask = 'chat' | 'translate' | 'summarize' | 'note' | 'outline';
 
 export interface SaveConversationInput {
   conversation: Conversation;

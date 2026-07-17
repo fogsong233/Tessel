@@ -21,7 +21,13 @@ test.describe('PDF reader flow', () => {
     await mkdir(userDataDir, { recursive: true });
     await createFixturePdf(pdfPath);
     const fakeCodexBin = join(runDir, 'bin');
+    const fakeCodexHome = join(runDir, 'codex-home');
+    const fakeCodexLog = join(runDir, 'codex-requests.jsonl');
     await createFakeCodex(fakeCodexBin);
+    await createFakeCodexModelCache(fakeCodexHome);
+    const useExecTransport = testInfo.title.includes('exec checkpoint')
+      || testInfo.title.includes('fast translation')
+      || testInfo.title.includes('Codex outline');
 
     app = await electron.launch({
       args: [mainEntry, pdfPath],
@@ -29,7 +35,9 @@ test.describe('PDF reader flow', () => {
       env: {
         ...process.env,
         PATH: `${fakeCodexBin}:${process.env.PATH ?? ''}`,
-        FAKE_CODEX_AUTH: testInfo.title.includes('exec checkpoint') ? 'api-key' : 'chatgpt',
+        CODEX_HOME: fakeCodexHome,
+        FAKE_CODEX_LOG: fakeCodexLog,
+        FAKE_CODEX_AUTH: useExecTransport ? 'api-key' : 'chatgpt',
         SIDELIGHT_USER_DATA_DIR: userDataDir,
         SIDELIGHT_E2E_HIDE_WINDOWS: '1'
       }
@@ -186,7 +194,7 @@ test.describe('PDF reader flow', () => {
 
     await composer.fill('Focus on the Alpha Beta wording.');
     await page.getByRole('button', { name: 'Send guidance' }).click();
-    await expect(page.getByText('Focus on the Alpha Beta wording.')).toBeVisible();
+    await expect(page.locator('.chat-message--user').filter({ hasText: 'Focus on the Alpha Beta wording.' })).toBeVisible();
     await expect(page.getByText('Guided result.')).toBeVisible();
     await expect(page.getByText('Guidance delivered to Codex')).toHaveCount(1);
 
@@ -257,6 +265,38 @@ test.describe('PDF reader flow', () => {
       'assistant:Guided exec result.'
     ]);
   });
+
+  test('uses the fastest cached Codex model for a fast translation', async () => {
+    await enableCodexReader(page);
+    await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
+    await selectPdfText(page);
+    await page.locator('.selection-toolbar').getByRole('button', { name: /^Translate$/i }).click();
+    await expect(page.locator('.transient-aid-panel')).toContainText('Translated quickly.');
+
+    await expect.poll(async () => {
+      const requests = await readFakeCodexRequests(join(runDir, 'codex-requests.jsonl'));
+      const args = requests.find((request) => request[0] === 'exec' && request.includes('--ephemeral'));
+      if (!args) {
+        return undefined;
+      }
+      const modelIndex = args.indexOf('--model');
+      return modelIndex >= 0 ? args[modelIndex + 1] : undefined;
+    }).toBe('gpt-test-mini');
+  });
+
+  test('gives Codex outline generation sampled PDF page evidence', async () => {
+    await enableCodexReader(page);
+    await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
+    await page.getByRole('button', { name: 'AI-generate PDF outline' }).click();
+    await expect(page.locator('.outline-item').filter({ hasText: 'Fixture introduction' })).toBeVisible();
+
+    await expect.poll(async () => {
+      const requests = await readFakeCodexRequests(join(runDir, 'codex-requests.jsonl'));
+      const args = requests.find((request) => request[0] === 'exec' && request.includes('--ephemeral'));
+      const prompt = args?.at(-1) ?? '';
+      return prompt.includes('"pageSamples"') && prompt.includes('Reader fixture quote Alpha Beta');
+    }).toBe(true);
+  });
 });
 
 async function createFixturePdf(filePath: string): Promise<void> {
@@ -275,6 +315,9 @@ async function createFakeCodex(binDirectory: string): Promise<void> {
   await writeFile(executable, `#!/usr/bin/env node
 const readline = require('node:readline');
 const args = process.argv.slice(2);
+if (process.env.FAKE_CODEX_LOG) {
+  require('node:fs').appendFileSync(process.env.FAKE_CODEX_LOG, JSON.stringify(args) + '\\n');
+}
 if (args.includes('--version')) {
   process.stdout.write('codex-cli 0.0.0-test\\n');
   process.exit(0);
@@ -287,7 +330,14 @@ if (args[0] === 'exec') {
   const resumed = args[1] === 'resume';
   const sendExec = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
   sendExec({ type: 'thread.started', thread_id: 'thread_exec_steer_fixture' });
-  if (resumed) {
+  if (args.includes('--ephemeral')) {
+    const prompt = args[args.length - 1] || '';
+    const text = prompt.includes('external PDF table of contents')
+      ? '{"items":[{"title":"Fixture introduction","level":0,"pageNumber":1}]}'
+      : 'Translated quickly.';
+    setTimeout(() => sendExec({ type: 'item.completed', item: { id: 'exec_utility_answer', type: 'agent_message', text } }), 25);
+    setTimeout(() => sendExec({ type: 'turn.completed' }), 45);
+  } else if (resumed) {
     setTimeout(() => sendExec({ type: 'item.completed', item: { id: 'exec_answer_2', type: 'agent_message', text: 'Guided exec result.' } }), 25);
     setTimeout(() => sendExec({ type: 'turn.completed' }), 45);
   } else {
@@ -333,6 +383,55 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
 process.on('exit', () => { for (const timer of timers) clearTimeout(timer); });
 `, 'utf8');
   await chmod(executable, 0o755);
+}
+
+async function createFakeCodexModelCache(codexHome: string): Promise<void> {
+  await mkdir(codexHome, { recursive: true });
+  await writeFile(join(codexHome, 'models_cache.json'), JSON.stringify({
+    fetched_at: new Date().toISOString(),
+    models: [
+      {
+        slug: 'gpt-test-large',
+        display_name: 'GPT Test Large',
+        description: 'Test quality model',
+        supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }],
+        default_reasoning_level: 'high',
+        visibility: 'list'
+      },
+      {
+        slug: 'gpt-test-mini',
+        display_name: 'GPT Test Mini',
+        description: 'Test fast model',
+        supported_reasoning_levels: [{ effort: 'low' }, { effort: 'medium' }],
+        default_reasoning_level: 'low',
+        visibility: 'list'
+      }
+    ]
+  }), 'utf8');
+}
+
+async function enableCodexReader(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const preferences = await window.sidelight.getAppPreferences();
+    await window.sidelight.saveAppPreferences({
+      ...preferences,
+      experimentalCodexAgent: {
+        ...preferences.experimentalCodexAgent,
+        enabled: true
+      }
+    });
+  });
+}
+
+async function readFakeCodexRequests(filePath: string): Promise<string[][]> {
+  try {
+    return (await readFile(filePath, 'utf8'))
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as string[]);
+  } catch {
+    return [];
+  }
 }
 
 async function selectPdfText(page: Page): Promise<void> {

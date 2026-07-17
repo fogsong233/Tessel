@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { extname, join, relative, resolve } from 'node:path';
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -96,6 +97,7 @@ export class CodexAgent {
   private readonly activeTurns = new Map<string, ActiveTurn>();
   private readonly activeExecTurns = new Map<string, ActiveExecTurn>();
   private readonly queuedSteers = new Map<string, PendingSteer[]>();
+  private modelListPromise?: Promise<CodexModelInfo[]>;
   private preferredTransport?: 'app-server' | 'exec';
   private transportDetectionPromise?: Promise<'app-server' | 'exec'>;
 
@@ -120,6 +122,27 @@ export class CodexAgent {
   }
 
   async listModels(): Promise<CodexModelInfo[]> {
+    if (!this.modelListPromise) {
+      this.modelListPromise = this.loadModels().catch(() => fallbackCodexModels);
+    }
+    return this.modelListPromise;
+  }
+
+  async preferredFastModel(): Promise<string | undefined> {
+    const models = await this.listModels();
+    return models.find((model) => /(?:mini|nano|flash|haiku)/i.test(`${model.id} ${model.displayName}`))?.id;
+  }
+
+  warmup(): void {
+    void this.initialTransport();
+    void this.listModels();
+  }
+
+  private async loadModels(): Promise<CodexModelInfo[]> {
+    const cached = await readCachedCodexModels().catch(() => []);
+    if (cached.length) {
+      return cached;
+    }
     try {
       await this.initialize();
       const models: CodexModelInfo[] = [];
@@ -326,6 +349,10 @@ export class CodexAgent {
   private async turnInput(input: CodexStreamRequest, runtime: PdfRuntime): Promise<Array<Record<string, unknown>>> {
     const context = input.context;
     const documentHash = runtime.document.fingerprint?.hash ?? runtime.document.sha256;
+    const isChatTask = !input.task || input.task === 'chat';
+    const pageSamples = input.task === 'outline'
+      ? await this.outlinePageSamples(runtime, context.totalPages ?? runtime.document.pageCount ?? 1)
+      : undefined;
     const contextEnvelope = {
       document: {
         id: runtime.document.id,
@@ -344,16 +371,21 @@ export class CodexAgent {
         : undefined,
       currentPage: context.currentPage,
       responseLanguage: input.preferredLanguage,
-      conversationContext: context.conversations?.slice(-4).map((conversation) => ({
-        title: conversation.title.slice(0, 240),
-        brief: conversation.brief?.slice(0, 700),
-        pageNumber: conversation.pageNumber,
-        anchorQuote: conversation.anchorQuote?.slice(0, 700)
-      }))
+      embeddedOutline: context.outline?.slice(0, 160),
+      providedPageText: context.pdfText?.slice(0, 40_000),
+      pageSamples,
+      conversationContext: isChatTask
+        ? context.conversations?.slice(-4).map((conversation) => ({
+            title: conversation.title.slice(0, 240),
+            brief: conversation.brief?.slice(0, 700),
+            pageNumber: conversation.pageNumber,
+            anchorQuote: conversation.anchorQuote?.slice(0, 700)
+          }))
+        : undefined
     };
     // A resumed Codex thread already contains its transcript. Synced app
     // history is only needed when creating or reconstructing a local thread.
-    const history = !input.codexThreadId ? input.history?.slice(-8).map((message) => ({
+    const history = isChatTask && !input.codexThreadId ? input.history?.slice(-8).map((message) => ({
       role: message.role,
       content: message.content.slice(0, 2000),
       attachments: message.attachments?.map((attachment) => attachment.name)
@@ -371,6 +403,30 @@ export class CodexAgent {
       { type: 'text', text, text_elements: [] },
       ...attachments
     ];
+  }
+
+  private async outlinePageSamples(runtime: PdfRuntime, pageCount: number): Promise<Array<{
+    pageNumber: number;
+    text: string;
+  }>> {
+    const ranges = outlineSampleStarts(pageCount).map((pageStart) => ({
+      pageStart,
+      pageEnd: Math.min(pageCount, pageStart + 7)
+    }));
+    const results = await Promise.all(ranges.map((range) =>
+      runtime.readPages(range.pageStart, range.pageEnd, 12_000)
+    ));
+    const pages = new Map<number, string>();
+    for (const result of results) {
+      for (const page of result.pages) {
+        if (page.text.trim()) {
+          pages.set(page.pageNumber, page.text);
+        }
+      }
+    }
+    return [...pages.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([pageNumber, text]) => ({ pageNumber, text }));
   }
 
   private async writeInputImage(streamId: string, attachment: ConversationAttachment): Promise<Record<string, unknown>> {
@@ -1200,6 +1256,19 @@ function selectionBounds(rects: AiDocumentToolContext['selectionRects']): Array<
     }));
 }
 
+function outlineSampleStarts(pageCount: number): number[] {
+  const total = Math.max(1, Math.floor(pageCount));
+  if (total <= 24) {
+    return Array.from({ length: Math.ceil(total / 8) }, (_, index) => index * 8 + 1);
+  }
+  return [...new Set([
+    1,
+    Math.max(1, Math.floor(total / 3) - 3),
+    Math.max(1, Math.floor(total * 2 / 3) - 3),
+    Math.max(1, total - 7)
+  ])].sort((left, right) => left - right);
+}
+
 function isAppServerClientForbidden(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /403\s+forbidden/i.test(message) && /only allows Codex official clients/i.test(message);
@@ -1210,27 +1279,73 @@ function isMissingExecSession(error: unknown): boolean {
   return /no rollout found for thread id|thread\/resume failed/i.test(message);
 }
 
+async function readCachedCodexModels(): Promise<CodexModelInfo[]> {
+  const codexHome = process.env.CODEX_HOME?.trim() || join(homedir(), '.codex');
+  const parsed = JSON.parse(await readFile(join(codexHome, 'models_cache.json'), 'utf8')) as {
+    models?: Array<Record<string, unknown>>;
+  };
+  return (parsed.models ?? []).flatMap((model) => {
+    const id = typeof model.slug === 'string'
+      ? model.slug
+      : typeof model.model === 'string'
+        ? model.model
+        : '';
+    if (!id || model.visibility === 'hide') {
+      return [];
+    }
+    const reasoningLevels = Array.isArray(model.supported_reasoning_levels)
+      ? model.supported_reasoning_levels
+      : Array.isArray(model.supportedReasoningEfforts)
+        ? model.supportedReasoningEfforts
+        : [];
+    const supportedReasoningEfforts = reasoningLevels
+      .map((entry) => {
+        if (typeof entry === 'string') {
+          return entry;
+        }
+        if (!entry || typeof entry !== 'object') {
+          return undefined;
+        }
+        const value = entry as { effort?: unknown; reasoningEffort?: unknown };
+        return typeof value.effort === 'string'
+          ? value.effort
+          : typeof value.reasoningEffort === 'string'
+            ? value.reasoningEffort
+            : undefined;
+      })
+      .filter((effort): effort is string => Boolean(effort));
+    return [{
+      id,
+      displayName: typeof model.display_name === 'string'
+        ? model.display_name
+        : typeof model.displayName === 'string'
+          ? model.displayName
+          : id,
+      ...(typeof model.description === 'string' && model.description ? { description: model.description } : {}),
+      supportedReasoningEfforts,
+      ...(typeof model.default_reasoning_level === 'string'
+        ? { defaultReasoningEffort: model.default_reasoning_level }
+        : typeof model.defaultReasoningEffort === 'string'
+          ? { defaultReasoningEffort: model.defaultReasoningEffort }
+          : {})
+    }];
+  });
+}
+
 const fallbackCodexModels: CodexModelInfo[] = [
   {
-    id: 'gpt-5.6-sol',
-    displayName: 'GPT-5.6 Sol',
-    description: 'Complex reasoning and coding',
-    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    id: 'gpt-5.5',
+    displayName: 'GPT-5.5',
+    description: 'Frontier model for complex coding, research, and real-world work',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+    defaultReasoningEffort: 'medium'
+  },
+  {
+    id: 'gpt-5.4-mini',
+    displayName: 'GPT-5.4-Mini',
+    description: 'Small, fast, and cost-efficient model for simpler tasks',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
     defaultReasoningEffort: 'low'
-  },
-  {
-    id: 'gpt-5.6-terra',
-    displayName: 'GPT-5.6 Terra',
-    description: 'Balanced reasoning and cost',
-    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
-    defaultReasoningEffort: 'medium'
-  },
-  {
-    id: 'gpt-5.6-luna',
-    displayName: 'GPT-5.6 Luna',
-    description: 'Fast, high-volume reading tasks',
-    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    defaultReasoningEffort: 'medium'
   }
 ];
 

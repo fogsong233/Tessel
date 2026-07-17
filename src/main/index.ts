@@ -338,10 +338,14 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
       const preferences = await store.getAppPreferences();
       const useCodex = preferences.experimentalCodexAgent.enabled && Boolean(input.documentId && input.codexContext);
       if (useCodex) {
-        const useTranslationConfig = input.request.mode === 'translate';
+        const task = input.task ?? (input.request.mode === 'translate' ? 'translate' : 'chat');
+        const useTranslationConfig = task === 'translate';
+        const translationModel = preferences.experimentalCodexAgent.translationModel
+          ?? await codexAgent.preferredFastModel();
         await codexAgent.stream({
           streamId: input.streamId,
           conversationId: input.conversationId ?? input.streamId,
+          task,
           codexThreadId: input.codexThreadId,
           transient: input.transient,
           documentId: input.documentId!,
@@ -350,7 +354,7 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
           history: input.history,
           context: input.codexContext!,
           model: useTranslationConfig
-            ? preferences.experimentalCodexAgent.translationModel
+            ? translationModel
             : input.codexOptions?.model ?? preferences.experimentalCodexAgent.chatModel,
           effort: useTranslationConfig
             ? preferences.experimentalCodexAgent.translationReasoningEffort ?? 'low'
@@ -466,6 +470,7 @@ if (hasSingleInstanceLock) {
       join(app.getPath('userData'), 'codex-inputs'),
       join(app.getPath('userData'), 'codex-workspaces')
     );
+    codexAgent.warmup();
 
     registerIpc(store, aiService, codexAgent);
     app.once('before-quit', () => {

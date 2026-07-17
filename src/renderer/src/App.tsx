@@ -443,6 +443,7 @@ export function App(): ReactElement {
       });
       await window.sidelight.completeReaderAiStream({
         streamId,
+        task: mode,
         conversationId: aidId,
         transient: true,
         documentId: activeDocument.id,
@@ -738,6 +739,7 @@ export function App(): ReactElement {
     try {
       await window.sidelight.completeReaderAiStream({
         streamId,
+        task: 'chat',
         conversationId: conversation.id,
         codexThreadId: conversation.codexThreadId,
         codexOptions: conversation.codexSettings,
@@ -1086,6 +1088,7 @@ export function App(): ReactElement {
 
     try {
       const content = await completeReaderAi({
+        task: 'note',
         documentId: activeDocument.id,
         conversationId: noteToSave.id,
         transient: true,
@@ -1142,6 +1145,7 @@ export function App(): ReactElement {
 
     try {
       const content = await completeReaderAi({
+        task: 'outline',
         documentId: activeDocument.id,
         conversationId: `outline_${activeDocument.id}`,
         transient: true,
@@ -1497,9 +1501,9 @@ function ReaderSettingsPanel({
               <div className="reader-settings__section-heading"><Bot size={17} /><div><strong>Experimental Codex reader</strong><span>Local Codex handles PDF chat and translation in a private per-PDF workspace.</span></div><label className="reader-settings__switch"><input type="checkbox" checked={codexEnabled} disabled={!codexAvailability?.available} onChange={(event) => setCodexEnabled(event.target.checked)} />Enabled</label></div>
               <div className="reader-settings__fields">
                 <label>Chat model<select value={codexChatModel} disabled={!codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexChatModel(event.target.value); setCodexChatEffort(''); }}><option value="">Codex default</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</select></label>
-                <label>Chat reasoning<select value={codexChatEffort} disabled={!codexEnabled || !codexAvailability?.available || chatEfforts.length === 0} onChange={(event) => setCodexChatEffort(event.target.value)}><option value="">Model default</option>{chatEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort)}</option>)}</select></label>
-                <label>Translation model<select value={codexTranslationModel} disabled={!codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexTranslationModel(event.target.value); setCodexTranslationEffort(''); }}><option value="">Codex default</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</select></label>
-                <label>Translation reasoning<select value={codexTranslationEffort} disabled={!codexEnabled || !codexAvailability?.available || translationEfforts.length === 0} onChange={(event) => setCodexTranslationEffort(event.target.value)}><option value="">Model default</option>{translationEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort)}</option>)}</select></label>
+                <label>Chat reasoning<select value={codexChatEffort} disabled={!codexEnabled || !codexAvailability?.available || chatEfforts.length === 0} onChange={(event) => setCodexChatEffort(event.target.value)}><option value="">Reader default (Low)</option>{chatEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort)}</option>)}</select></label>
+                <label>Translation model<select value={codexTranslationModel} disabled={!codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexTranslationModel(event.target.value); setCodexTranslationEffort(''); }}><option value="">Fastest available</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</select></label>
+                <label>Translation reasoning<select value={codexTranslationEffort} disabled={!codexEnabled || !codexAvailability?.available || translationEfforts.length === 0} onChange={(event) => setCodexTranslationEffort(event.target.value)}><option value="">Reader default (Low)</option>{translationEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort)}</option>)}</select></label>
                 <small className={codexAvailability?.available ? 'reader-settings__status' : 'reader-settings__status is-error'}>{codexAvailability?.available ? `Available locally: ${codexAvailability.version ?? 'Codex CLI'}` : codexAvailability?.reason ?? 'Checking local Codex CLI...'}</small>
               </div>
             </section>
@@ -2813,7 +2817,7 @@ function notePromptForLanguage(pageStart: number, pageEnd: number, language: AiP
 function outlinePromptForLanguage(totalPages: number, language: AiPreferredLanguage): string {
   return [
     'Create an external PDF table of contents for the currently open PDF.',
-    'Use the PDF tools. First check the embedded outline; if it is empty, inspect page text with view_current_pdf.',
+    'Use the supplied page samples first. When PDF tools are available, use sidelight_pdf_read_outline and sidelight_pdf_read_pages to verify uncertain sections.',
     totalPages <= 48
       ? 'For this short PDF, inspect enough page ranges to cover the full document.'
       : 'For this longer PDF, inspect the beginning, ending, and representative middle page ranges before proposing sections.',
