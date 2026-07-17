@@ -77,6 +77,18 @@ test.describe('PDF reader flow', () => {
     await expect(page.locator('.chat-message')).toHaveCount(0);
   });
 
+  test('persists pinned conversations on the PDF canvas', async () => {
+    await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
+    await selectPdfText(page);
+    await page.locator('.selection-toolbar').getByRole('button', { name: /^Chat$/i }).click();
+    await page.locator('.dock-chat-panel').getByTitle('Pin to learning space').click();
+    await expect(page.locator('.workspace-block-card--conversation')).toBeVisible();
+
+    await page.reload();
+    await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
+    await expect(page.locator('.workspace-block-card--conversation')).toBeVisible();
+  });
+
   test('renders Codex output and activity in a collapsible timeline', async () => {
     await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
     const documentId = `pdf_${createHash('sha256').update(await readFile(pdfPath)).digest('hex')}`;
@@ -272,6 +284,8 @@ test.describe('PDF reader flow', () => {
     await selectPdfText(page);
     await page.locator('.selection-toolbar').getByRole('button', { name: /^Translate$/i }).click();
     await expect(page.locator('.transient-aid-panel')).toContainText('Translated quickly.');
+    await page.locator('.transient-aid-panel').getByTitle('Pin to learning space').click();
+    await expect(page.locator('.workspace-block-card--translation')).toBeVisible();
 
     await expect.poll(async () => {
       const requests = await readFakeCodexRequests(join(runDir, 'codex-requests.jsonl'));
@@ -291,8 +305,11 @@ test.describe('PDF reader flow', () => {
     }).toMatchObject({ content: 'Translated quickly.', backend: 'codex', status: 'completed' });
 
     await page.locator('.transient-aid-panel').getByTitle('Close').click();
+    await page.locator('.workspace-block-card--translation .workspace-block-card__body').click();
+    await expect(page.locator('.transient-aid-panel')).toContainText('Translated quickly.');
+    await page.locator('.transient-aid-panel').getByTitle('Close').click();
     await page.getByTitle('Translations').click();
-    await expect(page.getByText('Translated quickly.')).toBeVisible();
+    await expect(page.locator('.trace-card__brief').getByText('Translated quickly.', { exact: true })).toBeVisible();
   });
 
   test('keeps the ten most recent translations and reopens them from history', async () => {

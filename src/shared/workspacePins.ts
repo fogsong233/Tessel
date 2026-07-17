@@ -24,6 +24,17 @@ export const workspaceBlockKindSpecs: Record<WorkspaceBlockKind, WorkspaceBlockK
     defaultContentKind: 'markdown',
     openableSource: true
   },
+  translation: {
+    kind: 'translation',
+    label: 'Translation',
+    defaultWidth: 292,
+    minWidth: 220,
+    maxWidth: 620,
+    minHeight: 120,
+    maxHeight: 760,
+    defaultContentKind: 'markdown',
+    openableSource: true
+  },
   note: {
     kind: 'note',
     label: 'Note',

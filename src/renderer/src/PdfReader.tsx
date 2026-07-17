@@ -1240,6 +1240,68 @@ export function PdfReader({
     workspaceBlocksForPlacement
   ]);
 
+  const pinTranslationToCanvas = useCallback((translation: TranslationEntry): void => {
+    if (!meta) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const pageNumber = currentWorkspacePageNumber();
+    const layoutScale = currentWorkspacePageScale();
+    const existing = workspaceBlocksForPlacement().find((block) => block.kind === 'translation' && block.sourceId === translation.id);
+    const width = existing?.width ?? defaultWorkspaceBlockWidth('translation');
+    const position = avoidWorkspaceBlockOverlap(
+      pageNumber,
+      defaultWorkspaceBlockX(width),
+      defaultWorkspaceBlockY(pageNumber, 300),
+      width,
+      existing?.id
+    );
+    const block: WorkspaceBlock = {
+      id: existing?.id ?? createId('block'),
+      documentId: meta.id,
+      kind: 'translation',
+      anchor: 'page',
+      sourceId: translation.id,
+      sourceKind: 'translation',
+      contentKind: 'markdown',
+      pageNumber,
+      title: compactPreview(translation.quote) || t.translation,
+      body: compactPreview(translation.content || translation.error || ''),
+      payload: workspaceBlockPayloadWithLayoutScale(existing?.payload, layoutScale),
+      x: position.x,
+      y: position.y,
+      width,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now
+    };
+
+    optimisticWorkspaceBlocksRef.current = [
+      block,
+      ...optimisticWorkspaceBlocksRef.current.filter((candidate) => candidate.id !== block.id)
+    ];
+    rememberWorkspacePinTail(pageNumber, block.x, block.y, block.height);
+    setOptimisticWorkspaceBlocks((current) => [
+      block,
+      ...current.filter((candidate) => candidate.id !== block.id)
+    ]);
+    workspaceBlocksRef.current = [block, ...workspaceBlocksRef.current.filter((candidate) => candidate.id !== block.id)];
+    onSaveWorkspaceBlock(block);
+    pendingRevealScrollTopRef.current = containerRef.current?.scrollTop;
+    setPendingRevealBlockId(block.id);
+  }, [
+    avoidWorkspaceBlockOverlap,
+    currentWorkspacePageNumber,
+    currentWorkspacePageScale,
+    defaultWorkspaceBlockX,
+    defaultWorkspaceBlockY,
+    meta,
+    onSaveWorkspaceBlock,
+    rememberWorkspacePinTail,
+    t.translation,
+    workspaceBlocksForPlacement
+  ]);
+
   const pinNoteToCanvas = useCallback((note: NoteDocument): void => {
     if (!meta) {
       return;
@@ -2371,10 +2433,12 @@ export function PdfReader({
                     <div className="pdfViewer" ref={viewerRef} />
                     <WorkspaceBlockLayer
                       blocks={effectiveWorkspaceBlocks}
+                      translations={translations}
                       layouts={workspaceBlockLayouts}
                       text={t}
                       onDelete={onDeleteWorkspaceBlock}
                       onOpenConversation={openDockConversation}
+                      onOpenTranslation={onOpenTranslation}
                       onOpenNote={openDockNoteById}
                       onSave={onSaveWorkspaceBlock}
                     />
@@ -2430,6 +2494,7 @@ export function PdfReader({
                         onUpdateConversationCodexSettings={onUpdateConversationCodexSettings}
                         onStopGeneration={onStopGeneration}
                         onPinConversation={pinConversationToCanvas}
+                        onPinTranslation={pinTranslationToCanvas}
                         onPinImage={pinImageToCanvas}
                         onPinNote={pinNoteToCanvas}
                         onStartMove={startDockMove}
@@ -2832,6 +2897,7 @@ function ReaderDock({
   onUpdateConversationCodexSettings,
   onStopGeneration,
   onPinConversation,
+  onPinTranslation,
   onPinImage,
   onPinNote,
   onStartMove,
@@ -2878,6 +2944,7 @@ function ReaderDock({
   onUpdateConversationCodexSettings(conversationId: string, settings: CodexConversationSettings): void;
   onStopGeneration(): void;
   onPinConversation(conversation: Conversation): void;
+  onPinTranslation(translation: TranslationEntry): void;
   onPinImage(attachment: ConversationAttachment, conversation?: Conversation): void;
   onPinNote(note: NoteDocument): void;
   onStartMove(event: ReactMouseEvent<HTMLButtonElement>): void;
@@ -2954,7 +3021,7 @@ function ReaderDock({
           pdfReadingSignal={pdfReadingSignal}
           text={t}
           onClose={onCloseConversation}
-          onPin={() => undefined}
+          onPin={() => onPinConversation(activeConversation)}
           onPinImage={(attachment) => onPinImage(attachment, activeConversation)}
           onSend={(prompt, attachments) => onSendMessage(activeConversation.id, prompt, attachments)}
           onUpdateCodexSettings={(settings) => onUpdateConversationCodexSettings(activeConversation.id, settings)}
@@ -2970,7 +3037,19 @@ function ReaderDock({
           onPin={() => onPinNote(noteEditorNote)}
         />
       ) : transientAid ? (
-        <TransientAidPanel aid={transientAid} text={t} onClose={onCloseTransientAid} />
+        <TransientAidPanel
+          aid={transientAid}
+          text={t}
+          onClose={onCloseTransientAid}
+          onPin={transientAid.mode === 'translate'
+            ? () => {
+                const translation = translations.find((candidate) => candidate.id === transientAid.id);
+                if (translation) {
+                  onPinTranslation(translation);
+                }
+              }
+            : undefined}
+        />
       ) : (
         <>
           {tab === 'chat' && (
@@ -3112,11 +3191,13 @@ function ReaderDock({
 function TransientAidPanel({
   aid,
   text,
-  onClose
+  onClose,
+  onPin
 }: {
   aid: ReaderTransientAid;
   text: ReaderText;
   onClose(): void;
+  onPin?(): void;
 }): ReactElement {
   const Icon = aid.mode === 'translate' ? Languages : Sparkles;
   const title = aid.mode === 'translate' ? text.translation : text.summary;
@@ -3132,6 +3213,7 @@ function TransientAidPanel({
           </strong>
         </div>
         <Badge value={`p.${aid.pageNumber}`} />
+        {onPin && <Button type="button" text rounded title={text.pinToCanvas} aria-label={text.pinToCanvas} onClick={onPin}><Pin size={15} /></Button>}
         <Button type="button" text rounded className="panel-close-button" title={text.close} aria-label={text.close} onClick={onClose}>
           <X size={15} />
         </Button>
@@ -3603,18 +3685,22 @@ function DockSearchPanel({
 
 function WorkspaceBlockLayer({
   blocks,
+  translations,
   layouts,
   text,
   onDelete,
   onOpenConversation,
+  onOpenTranslation,
   onOpenNote,
   onSave
 }: {
   blocks: WorkspaceBlock[];
+  translations: TranslationEntry[];
   layouts: Record<string, WorkspaceBlockLayout>;
   text: ReaderText;
   onDelete(blockId: string): void;
   onOpenConversation(conversationId: string): void;
+  onOpenTranslation(translation: TranslationEntry): void;
   onOpenNote(noteId: string): void;
   onSave(block: WorkspaceBlock): void;
 }): ReactElement {
@@ -3661,11 +3747,16 @@ function WorkspaceBlockLayer({
       return;
     }
 
-    const openHandlers: Partial<Record<WorkspaceBlock['kind'], (sourceId: string) => void>> = {
-      conversation: onOpenConversation,
-      note: onOpenNote
-    };
-    openHandlers[block.kind]?.(block.sourceId);
+    if (block.kind === 'conversation') {
+      onOpenConversation(block.sourceId);
+    } else if (block.kind === 'note') {
+      onOpenNote(block.sourceId);
+    } else if (block.kind === 'translation') {
+      const translation = translations.find((candidate) => candidate.id === block.sourceId);
+      if (translation) {
+        onOpenTranslation(translation);
+      }
+    }
   };
 
   const startMove = (block: WorkspaceBlock, event: ReactMouseEvent<HTMLButtonElement>): void => {
@@ -3828,6 +3919,10 @@ function workspaceBlockLabel(block: WorkspaceBlock, text: ReaderText): string {
 
   if (block.kind === 'note') {
     return text.notes;
+  }
+
+  if (block.kind === 'translation') {
+    return text.translation;
   }
 
   if (block.kind === 'image') {
@@ -4102,6 +4197,16 @@ function DockChatPanel({
           <strong>{conversation.summary.title}</strong>
         </div>
         <Badge value={`p.${conversation.pageNumber ?? '-'}`} />
+        <Button
+          type="button"
+          text
+          rounded
+          title={text.pinToCanvas}
+          aria-label={text.pinToCanvas}
+          onClick={onPin}
+        >
+          <Pin size={15} />
+        </Button>
         <Button
           type="button"
           text

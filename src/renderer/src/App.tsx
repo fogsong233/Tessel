@@ -1335,11 +1335,11 @@ export function App(): ReactElement {
         bookmarks={bookmarks}
         conversations={conversations}
         translations={translations}
-        workspaceBlocks={[]}
+        workspaceBlocks={workspaceBlocks}
         generatedOutline={generatedOutline}
         activeConversationId={activeConversationId}
         activeConversation={activeConversation}
-        notes={[]}
+        notes={notes}
         chatOpen={panelOpen}
         busy={busy}
         canStopGeneration={busy && activeStream?.conversationId === activeConversation?.id}
