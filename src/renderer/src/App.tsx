@@ -36,6 +36,7 @@ import {
   AgentActivityEvent,
   AgentTimelineEntry,
   AppPreferences,
+  AppearanceFont,
   AppUpdateState,
   CodexAvailability,
   CodexConversationSettings,
@@ -117,6 +118,19 @@ function sidebarTheme(color: string): SidebarTheme {
   };
 }
 
+function fontStack(font: AppearanceFont): string {
+  switch (font) {
+    case 'serif':
+      return 'Iowan Old Style, Charter, Georgia, ui-serif, serif';
+    case 'rounded':
+      return 'ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", Inter, system-ui, sans-serif';
+    case 'mono':
+      return 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+    default:
+      return 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  }
+}
+
 export function App(): ReactElement {
   const readerDocumentId = useMemo(() => new URLSearchParams(window.location.search).get('documentId') ?? undefined, []);
   const [documents, setDocuments] = useState<PdfDocumentMeta[]>([]);
@@ -164,8 +178,20 @@ export function App(): ReactElement {
     '--tessel-sidebar-ink': resolvedSidebarTheme.ink,
     '--tessel-sidebar-muted': resolvedSidebarTheme.muted,
     '--tessel-directory-ink': resolvedSidebarTheme.ink,
-    '--tessel-directory-muted': resolvedSidebarTheme.muted
-  } as CSSProperties), [resolvedSidebarActiveColor, resolvedSidebarColor, resolvedSidebarTheme.ink, resolvedSidebarTheme.muted]);
+    '--tessel-directory-muted': resolvedSidebarTheme.muted,
+    '--tessel-ui-font': fontStack(appPreferences.appearance.uiFont),
+    '--tessel-agent-font': fontStack(appPreferences.appearance.agentFont),
+    '--tessel-code-font': fontStack(appPreferences.appearance.codeFont),
+    '--tessel-ui-font-size': `${appPreferences.appearance.uiFontSize}px`,
+    '--tessel-agent-font-size': `${appPreferences.appearance.agentFontSize}px`,
+    '--tessel-code-font-size': `${appPreferences.appearance.codeFontSize}px`,
+    '--tessel-highlight-color': appPreferences.selectionColors.highlight,
+    '--tessel-underline-color': appPreferences.selectionColors.underline,
+    '--tessel-chat-color': appPreferences.selectionColors.chat,
+    '--tessel-note-color': appPreferences.selectionColors.note,
+    '--tessel-summary-color': appPreferences.selectionColors.summary,
+    '--tessel-translate-color': appPreferences.selectionColors.translate
+  } as CSSProperties), [appPreferences.appearance, appPreferences.selectionColors, resolvedSidebarActiveColor, resolvedSidebarColor, resolvedSidebarTheme.ink, resolvedSidebarTheme.muted]);
   const appShellClass = macTrafficLightsVisible ? 'app-shell has-mac-traffic-lights' : 'app-shell';
 
   useEffect(() => {
@@ -1486,6 +1512,8 @@ function ReaderSettingsPanel({
   const [aiLanguage, setAiLanguage] = useState<AiPreferredLanguage>(preferences.aiLanguage);
   const [translationBackend, setTranslationBackend] = useState(preferences.translationBackend);
   const [sidebarColor, setSidebarColor] = useState(preferences.sidebarColor ?? defaultAppPreferences.sidebarColor);
+  const [selectionColors, setSelectionColors] = useState(normalizeSelectionColors(preferences.selectionColors));
+  const [appearance, setAppearance] = useState(preferences.appearance ?? defaultAppPreferences.appearance);
   const [settingsSection, setSettingsSection] = useState<ReaderSettingsSection>('provider');
   const [settingsQuery, setSettingsQuery] = useState('');
   const [updateState, setUpdateState] = useState<AppUpdateState>();
@@ -1602,7 +1630,8 @@ function ReaderSettingsPanel({
           ? 'codex'
           : 'provider',
         sidebarColor,
-        selectionColors: normalizeSelectionColors(preferences.selectionColors),
+        selectionColors: normalizeSelectionColors(selectionColors),
+        appearance,
         experimentalCodexAgent: {
           enabled: codexEnabled && Boolean(codexAvailability?.available),
           ...(codexChatModel.trim() ? { chatModel: codexChatModel.trim() } : {}),
@@ -1739,6 +1768,33 @@ function ReaderSettingsPanel({
                     <button className="quiet-button" type="button" onClick={() => setSidebarColor(defaultAppPreferences.sidebarColor)}>{t.reset}</button>
                   </span>
                 </label>
+                <div className="reader-settings__wide reader-settings__appearance-group">
+                  <strong>{t.annotationColors}</strong>
+                  <span>{t.annotationColorsDescription}</span>
+                  <div className="reader-settings__color-grid">
+                    {([
+                      ['highlight', t.highlightColor], ['underline', t.underlineColor], ['chat', t.chatColor],
+                      ['note', t.noteColor], ['summary', t.summaryColor], ['translate', t.translateColor]
+                    ] as Array<[keyof typeof selectionColors, string]>).map(([role, label]) => (
+                      <label key={role} className="reader-settings__swatch-field">
+                        <span>{label}</span>
+                        <input type="color" value={selectionColors[role]} aria-label={label} onChange={(event) => setSelectionColors((current) => ({ ...current, [role]: event.target.value }))} />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="reader-settings__wide reader-settings__appearance-group">
+                  <strong>{t.typography}</strong>
+                  <span>{t.typographyDescription}</span>
+                  <div className="reader-settings__fields reader-settings__fields--nested">
+                    <label>{t.uiFont}<SettingsSelect value={appearance.uiFont} onChange={(event) => setAppearance((current) => ({ ...current, uiFont: event.target.value as AppearanceFont }))}><option value="system">{t.fontSystem}</option><option value="rounded">{t.fontRounded}</option><option value="serif">{t.fontSerif}</option></SettingsSelect></label>
+                    <label>{t.uiFontSize}<input type="number" min="11" max="20" value={appearance.uiFontSize} onChange={(event) => setAppearance((current) => ({ ...current, uiFontSize: Number(event.target.value) }))} /></label>
+                    <label>{t.agentFont}<SettingsSelect value={appearance.agentFont} onChange={(event) => setAppearance((current) => ({ ...current, agentFont: event.target.value as AppearanceFont }))}><option value="system">{t.fontSystem}</option><option value="rounded">{t.fontRounded}</option><option value="serif">{t.fontSerif}</option><option value="mono">{t.fontMono}</option></SettingsSelect></label>
+                    <label>{t.agentFontSize}<input type="number" min="11" max="20" value={appearance.agentFontSize} onChange={(event) => setAppearance((current) => ({ ...current, agentFontSize: Number(event.target.value) }))} /></label>
+                    <label>{t.codeFont}<SettingsSelect value={appearance.codeFont} onChange={(event) => setAppearance((current) => ({ ...current, codeFont: event.target.value as AppearanceFont }))}><option value="mono">{t.fontMono}</option><option value="system">{t.fontSystem}</option><option value="serif">{t.fontSerif}</option></SettingsSelect></label>
+                    <label>{t.codeFontSize}<input type="number" min="11" max="20" value={appearance.codeFontSize} onChange={(event) => setAppearance((current) => ({ ...current, codeFontSize: Number(event.target.value) }))} /></label>
+                  </div>
+                </div>
               </div>
             </section>
             )}
@@ -1790,7 +1846,7 @@ function SettingsToggle({ label, ...props }: ComponentPropsWithoutRef<'input'> &
 function readerSettingsText(language: UiLanguage) {
   if (language === 'zh-CN') {
     return {
-      settings: '设置', close: '关闭', settingsSections: '设置分区', provider: '服务商', sync: '同步', appearance: '外观', language: '语言', updates: '更新', backToApp: '返回应用', searchSettings: '搜索设置...', configuration: '配置', noSettingsFound: '没有匹配的设置', reset: '恢复默认', sidebarColor: '边栏颜色', appearanceDescription: '目录栏与设置侧栏使用同一颜色。',
+      settings: '设置', close: '关闭', settingsSections: '设置分区', provider: '服务商', sync: '同步', appearance: '外观', language: '语言', updates: '更新', backToApp: '返回应用', searchSettings: '搜索设置...', configuration: '配置', noSettingsFound: '没有匹配的设置', reset: '恢复默认', sidebarColor: '边栏颜色', appearanceDescription: '统一目录、标注、对话与阅读排版。', annotationColors: '标注与对话颜色', annotationColorsDescription: '用于高亮、划线、引用及阅读工作区的视觉提示。', highlightColor: '高亮', underlineColor: '划线', chatColor: '对话', noteColor: '笔记', summaryColor: '总结', translateColor: '翻译', typography: '排版', typographyDescription: '分别调整界面、Agent 回复与代码的字体和字号。', uiFont: '界面字体', uiFontSize: '界面字号', agentFont: 'Agent 字体', agentFontSize: 'Agent 字号', codeFont: '代码字体', codeFontSize: '代码字号', fontSystem: '系统无衬线', fontRounded: '圆体', fontSerif: '阅读衬线', fontMono: '等宽',
       aiProvider: 'AI 服务商', displayName: '显示名称', temperature: '温度', baseUrl: '基础 URL', apiKey: 'API 密钥', model: '模型', storedKey: '已保存。输入新密钥可替换。', loading: '加载中...', fetchModels: '获取模型',
       codexAvailable: '本机 Codex CLI 可用', codexChecking: '正在检查本机 Codex CLI...', enabled: '启用', chat: '对话', chatModel: '对话模型', chatReasoning: '对话推理强度', codexDefault: 'Codex 默认', readerDefault: '阅读器默认（低）',
       translation: '翻译', translationBackend: '翻译后端', translationModel: '翻译模型', translationReasoning: '翻译推理强度', fastestAvailable: '最快可用模型',
@@ -1801,7 +1857,7 @@ function readerSettingsText(language: UiLanguage) {
     };
   }
   return {
-    settings: 'Settings', close: 'Close', settingsSections: 'Settings sections', provider: 'Provider', sync: 'Sync', appearance: 'Appearance', language: 'Language', updates: 'Updates', backToApp: 'Back to app', searchSettings: 'Search settings...', configuration: 'Configuration', noSettingsFound: 'No settings found', reset: 'Reset', sidebarColor: 'Sidebar color', appearanceDescription: 'Used by the PDF directory and settings sidebar.',
+    settings: 'Settings', close: 'Close', settingsSections: 'Settings sections', provider: 'Provider', sync: 'Sync', appearance: 'Appearance', language: 'Language', updates: 'Updates', backToApp: 'Back to app', searchSettings: 'Search settings...', configuration: 'Configuration', noSettingsFound: 'No settings found', reset: 'Reset', sidebarColor: 'Sidebar color', appearanceDescription: 'Unifies the directory, annotations, chat, and reading typography.', annotationColors: 'Annotation and chat colors', annotationColorsDescription: 'Used for highlights, underlines, quotes, and reading workspace cues.', highlightColor: 'Highlight', underlineColor: 'Underline', chatColor: 'Chat', noteColor: 'Note', summaryColor: 'Summary', translateColor: 'Translation', typography: 'Typography', typographyDescription: 'Tune interface, Agent response, and code typography independently.', uiFont: 'Interface font', uiFontSize: 'Interface size', agentFont: 'Agent font', agentFontSize: 'Agent size', codeFont: 'Code font', codeFontSize: 'Code size', fontSystem: 'System sans', fontRounded: 'Rounded', fontSerif: 'Reading serif', fontMono: 'Monospace',
     aiProvider: 'AI provider', displayName: 'Display name', temperature: 'Temperature', baseUrl: 'Base URL', apiKey: 'API key', model: 'Model', storedKey: 'Stored. Enter a new key to replace it.', loading: 'Loading...', fetchModels: 'Fetch models',
     codexAvailable: 'Local Codex CLI available', codexChecking: 'Checking local Codex CLI...', enabled: 'Enabled', chat: 'Chat', chatModel: 'Chat model', chatReasoning: 'Chat reasoning', codexDefault: 'Codex default', readerDefault: 'Reader default (Low)',
     translation: 'Translation', translationBackend: 'Translation backend', translationModel: 'Translation model', translationReasoning: 'Translation reasoning', fastestAvailable: 'Fastest available',
@@ -2588,6 +2644,7 @@ function FloatingSettingsPanel({
     translationBackend: preferences.translationBackend,
     sidebarColor: preferences.sidebarColor ?? defaultAppPreferences.sidebarColor,
     selectionColors: normalizeSelectionColors(selectionColors),
+    appearance: preferences.appearance ?? defaultAppPreferences.appearance,
     experimentalCodexAgent: preferences.experimentalCodexAgent
   });
 

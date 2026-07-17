@@ -347,7 +347,19 @@ export interface AppPreferences {
   translationBackend: TranslationBackend;
   sidebarColor: string;
   selectionColors: SelectionColorPreferences;
+  appearance: AppearancePreferences;
   experimentalCodexAgent: ExperimentalCodexAgentPreferences;
+}
+
+export type AppearanceFont = 'system' | 'serif' | 'rounded' | 'mono';
+
+export interface AppearancePreferences {
+  uiFont: AppearanceFont;
+  agentFont: AppearanceFont;
+  codeFont: AppearanceFont;
+  uiFontSize: number;
+  agentFontSize: number;
+  codeFontSize: number;
 }
 
 export interface AppUpdateState {
@@ -656,6 +668,14 @@ export const defaultAppPreferences: AppPreferences = {
     note: '#f5e3a6',
     summary: '#ded7f0',
     translate: '#d7eadf'
+  },
+  appearance: {
+    uiFont: 'system',
+    agentFont: 'system',
+    codeFont: 'mono',
+    uiFontSize: 14,
+    agentFontSize: 14,
+    codeFontSize: 13
   },
   experimentalCodexAgent: {
     enabled: false

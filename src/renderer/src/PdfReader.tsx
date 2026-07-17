@@ -4177,8 +4177,9 @@ function DockChatPanel({
       return;
     }
 
-    textarea.style.height = '0px';
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 144)}px`;
+    // Preserve a two-line starting field even before the user types.
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.max(58, Math.min(textarea.scrollHeight, 144))}px`;
   }, [draft]);
 
   useEffect(() => {
@@ -4522,7 +4523,7 @@ function DockChatPanel({
           </Button>
           <textarea
             ref={textareaRef}
-            rows={1}
+            rows={2}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onCompositionStart={() => {

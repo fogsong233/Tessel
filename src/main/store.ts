@@ -835,6 +835,7 @@ function normalizeAppPreferences(config: AppPreferences): AppPreferences {
     translationBackend: config.translationBackend === 'codex' ? 'codex' : 'provider',
     sidebarColor: normalizeSidebarColor(config.sidebarColor),
     selectionColors: normalizeSelectionColors(config.selectionColors),
+    appearance: normalizeAppearancePreferences(config.appearance),
     experimentalCodexAgent: {
       enabled: Boolean(config.experimentalCodexAgent?.enabled),
       ...(config.experimentalCodexAgent?.chatModel?.trim()
@@ -852,6 +853,25 @@ function normalizeAppPreferences(config: AppPreferences): AppPreferences {
         ? { translationReasoningEffort: config.experimentalCodexAgent.translationReasoningEffort.trim() }
         : {})
     }
+  };
+}
+
+function normalizeAppearancePreferences(config: AppPreferences['appearance'] | undefined): AppPreferences['appearance'] {
+  const defaults = defaultAppPreferences.appearance;
+  const normalizeFont = (value: unknown): AppPreferences['appearance']['uiFont'] =>
+    value === 'serif' || value === 'rounded' || value === 'mono' || value === 'system' ? value : defaults.uiFont;
+  const normalizeSize = (value: unknown, fallback: number): number => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.max(11, Math.min(20, Math.round(parsed))) : fallback;
+  };
+
+  return {
+    uiFont: normalizeFont(config?.uiFont),
+    agentFont: normalizeFont(config?.agentFont),
+    codeFont: normalizeFont(config?.codeFont),
+    uiFontSize: normalizeSize(config?.uiFontSize, defaults.uiFontSize),
+    agentFontSize: normalizeSize(config?.agentFontSize, defaults.agentFontSize),
+    codeFontSize: normalizeSize(config?.codeFontSize, defaults.codeFontSize)
   };
 }
 

@@ -3681,8 +3681,8 @@ body.is-resizing-workspace-block * {
 
 .chat-composer textarea {
   min-width: 0;
-  min-height: 30px;
-  height: 30px;
+  min-height: 58px;
+  height: 58px;
   max-height: 138px;
   padding: 5px 0;
   overflow-y: auto;
@@ -7600,6 +7600,102 @@ body.is-resizing-workspace-block * {
 
 .chat-composer textarea::placeholder {
   color: #8a8a8a;
+}
+
+/* Reader appearance preferences. Keep type hierarchy local to the application shell. */
+.app-shell {
+  font-family: var(--tessel-ui-font, Inter, ui-sans-serif, system-ui, sans-serif);
+  font-size: var(--tessel-ui-font-size, 14px);
+}
+
+.reader-settings,
+.reader-home,
+.left-panel,
+.reader-dock-lane {
+  font-family: var(--tessel-ui-font, Inter, ui-sans-serif, system-ui, sans-serif);
+}
+
+.chat-bubble,
+.chat-composer textarea,
+.dock-chat-transcript,
+.transient-aid-panel__body {
+  font-family: var(--tessel-agent-font, Inter, ui-sans-serif, system-ui, sans-serif);
+  font-size: var(--tessel-agent-font-size, 14px);
+}
+
+.chat-bubble code,
+.chat-bubble pre,
+.chat-slash-menu strong,
+.codex-timeline code,
+.markdown-view code,
+.markdown-view pre {
+  font-family: var(--tessel-code-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--tessel-code-font-size, 13px);
+}
+
+.chat-message--user .chat-bubble {
+  border-color: color-mix(in srgb, var(--tessel-chat-color, #cfe3f5) 72%, #737373);
+  background: color-mix(in srgb, var(--tessel-chat-color, #cfe3f5) 62%, white);
+}
+
+.reader-settings__appearance-group {
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+}
+
+.reader-settings__appearance-group > strong {
+  color: #303234;
+  font-size: 14px;
+}
+
+.reader-settings__appearance-group > span {
+  color: #747779;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.reader-settings__color-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding-top: 6px;
+}
+
+.reader-settings__swatch-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid #e1e3e4;
+  border-radius: var(--tessel-control-radius, 14px);
+  background: #ffffff;
+  color: #55595b;
+  font-size: 12px;
+}
+
+.reader-settings__swatch-field input[type="color"] {
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+}
+
+.reader-settings__fields--nested {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding-top: 6px;
+}
+
+@media (max-width: 720px) {
+  .reader-settings__color-grid,
+  .reader-settings__fields--nested {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 .chat-attachments,
