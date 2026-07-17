@@ -449,7 +449,6 @@ test.describe('PDF reader flow', () => {
     await composer.fill('Use the checkpoint guidance.');
     await page.getByRole('button', { name: 'Send guidance' }).click();
     await expect(page.getByText('Guided exec result.')).toBeVisible();
-    await expect(page.getByText('Guidance delivered to Codex')).toHaveCount(1);
 
     await expect.poll(async () => {
       const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {

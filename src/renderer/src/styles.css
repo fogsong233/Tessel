@@ -6650,6 +6650,7 @@ body.is-resizing-workspace-block * {
   display: inline-block;
   width: 30px;
   height: 18px;
+  pointer-events: none;
   border-radius: 99px;
   background: #c4cbc5;
   box-shadow: inset 0 0 0 1px rgba(47, 60, 51, 0.12);
