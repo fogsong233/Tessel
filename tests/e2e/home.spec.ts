@@ -25,8 +25,12 @@ test('opens a focused start page when no PDF is supplied', async ({}, testInfo) 
     });
     page = await app.firstWindow();
 
-    await expect(page.getByRole('heading', { name: 'PDF Reader' })).toBeVisible();
+    await expect(page).toHaveTitle('Tessel');
+    await expect(page.getByRole('heading', { name: 'Tessel' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Open PDF' })).toBeVisible();
+    const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+    expect(viewport.width).toBeLessThanOrEqual(720);
+    expect(viewport.height).toBeLessThanOrEqual(520);
     await page.getByRole('button', { name: 'Settings' }).click();
     await expect(page.locator('.reader-settings')).toBeVisible();
     await expect(page.getByLabel('Chat model')).toBeVisible();

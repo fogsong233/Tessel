@@ -1,9 +1,9 @@
 {
-  "name": "sidelight",
+  "name": "tessel",
   "version": "0.1.0",
   "private": true,
-  "author": "Sidelight contributors",
-  "description": "A local-first PDF reading workspace for anchored AI conversations and notes.",
+  "author": "Tessel contributors",
+  "description": "A focused PDF reader with persistent AI conversations and reading progress.",
   "main": "./out/main/index.js",
   "packageManager": "pnpm@10.14.0",
   "scripts": {
@@ -62,7 +62,7 @@
   },
   "build": {
     "appId": "app.sidelight.reader",
-    "productName": "Sidelight",
+    "productName": "Tessel",
     "directories": {
       "output": "dist"
     },

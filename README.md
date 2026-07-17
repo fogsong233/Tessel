@@ -1,12 +1,12 @@
-# Sidelight
+# Tessel
 
-Sidelight is a local-first PDF reading workspace for anchored AI conversations and editable notes.
+Tessel is a focused PDF reader with anchored AI conversations and persistent reading progress.
 
 The first version focuses on one reading loop:
 
 1. Open a PDF.
 2. Select text in the PDF.
-3. Ask Sidelight to explain, translate, or summarize the selection.
+3. Ask Tessel to explain, translate, or summarize the selection.
 4. Keep the conversation attached to the page and selection.
 5. Edit Markdown notes beside the PDF.
 

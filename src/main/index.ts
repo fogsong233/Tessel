@@ -79,12 +79,13 @@ if (shouldUseSingleInstanceLock && hasSingleInstanceLock) {
 }
 
 function createWindow(options: { documentId?: string } = {}): BrowserWindow {
+  const isReaderWindow = Boolean(options.documentId);
   const mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 920,
-    minWidth: 1080,
-    minHeight: 720,
-    title: 'Sidelight Reader',
+    width: isReaderWindow ? 1440 : 720,
+    height: isReaderWindow ? 920 : 520,
+    minWidth: isReaderWindow ? 1080 : 620,
+    minHeight: isReaderWindow ? 720 : 460,
+    title: isReaderWindow ? 'Tessel Reader' : 'Tessel',
     backgroundColor: '#f3f3f3',
     paintWhenInitiallyHidden: true,
     show: !hideE2eWindows,

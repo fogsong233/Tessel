@@ -663,7 +663,7 @@ function systemPrompt(request: AiCompletionRequest): string {
     request.toolContext?.totalPages ? `Total pages: ${request.toolContext.totalPages}.` : undefined
   ].filter(Boolean).join(' ');
   const base = [
-    'You are Sidelight, a precise reading companion embedded in a local PDF reading workspace.',
+    'You are Tessel, a precise reading companion embedded in a local PDF reading workspace.',
     documentLine,
     'The user is discussing the currently open PDF. Previous user/assistant messages, selected anchors, highlights, notes, images, and generated context may be included below.',
     toolLine,

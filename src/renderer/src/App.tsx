@@ -1165,12 +1165,17 @@ export function App(): ReactElement {
     return (
       <main className="app-shell">
         <section className="reader-home" aria-label="PDF reader start">
-          <div className="reader-home__brand"><FileText size={22} /><span>Sidelight</span></div>
+          <div className="reader-home__brand">
+            <span className="tessel-brand-mark" aria-hidden="true">T</span>
+            <strong>Tessel</strong>
+          </div>
           <div className="reader-home__content">
-            <FileText className="reader-home__mark" size={34} strokeWidth={1.45} />
-            <div>
-              <h1>PDF Reader</h1>
-              <p>Open a local PDF to continue reading, chat, and translation.</p>
+            <div className="reader-home__identity">
+              <span className="tessel-brand-mark tessel-brand-mark--large" aria-hidden="true">T</span>
+              <div>
+                <span>PDF reader</span>
+                <h1>Tessel</h1>
+              </div>
             </div>
             <div className="reader-home__actions">
               <button className="primary-button reader-home__open" type="button" onClick={() => void openPdf()}><FolderOpen size={17} />Open PDF</button>

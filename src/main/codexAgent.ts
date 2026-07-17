@@ -252,7 +252,7 @@ export class CodexAgent {
       approvalPolicy: 'never',
       ...(input.transient ? { ephemeral: true } : {}),
       developerInstructions: [
-        'You are Sidelight Codex, an experimental PDF reading agent.',
+        'You are Tessel Codex, an experimental PDF reading agent.',
         'Use sidelight_pdf_* tools to inspect the open PDF. You may search, inspect local files, and run analysis commands inside the private workspace only. Do not modify the PDF or files outside that workspace, and do not expose private reasoning.',
         'When a visual analysis helps, save a PNG, JPEG, WebP, GIF, or SVG file in the workspace root. Sidelight will attach newly generated images to the final response.',
         'Return a concise, well-cited reading answer in Markdown. Mention page numbers when PDF evidence supports a claim.',
@@ -593,7 +593,7 @@ export class CodexAgent {
     await this.request('initialize', {
       clientInfo: {
         name: 'sidelight-reader',
-        title: 'Sidelight Reader',
+        title: 'Tessel Reader',
         version: '0.1.0'
       },
       capabilities: {

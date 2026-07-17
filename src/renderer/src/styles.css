@@ -6268,59 +6268,65 @@ body.is-resizing-workspace-block * {
 /* Reader-only start and settings surfaces. These avoid legacy workspace settings selectors. */
 .reader-home {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: 50px minmax(0, 1fr);
   width: 100%;
   height: 100%;
   color: #202123;
-  background: #f4f4f3;
+  background: #f6f7f6;
 }
 
 .reader-home__brand {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
-  min-height: 52px;
-  padding: 0 24px;
-  border-bottom: 1px solid #dfdfdd;
-  background: #fbfbfa;
-  font-size: 14px;
-  font-weight: 720;
+  gap: 8px;
+  min-height: 50px;
+  padding: 0 18px 0 78px;
+  border-bottom: 1px solid #e3e5e3;
+  background: rgba(252, 252, 251, 0.94);
+  font-size: 13px;
+  font-weight: 740;
 }
 
 .reader-home__content {
   display: grid;
   align-content: center;
-  justify-items: start;
-  gap: 18px;
-  width: min(520px, calc(100% - 48px));
+  justify-items: stretch;
+  gap: 26px;
+  width: min(420px, calc(100% - 52px));
   margin: auto;
-  padding-bottom: 8vh;
+  padding-bottom: 24px;
 }
 
-.reader-home__mark {
-  color: #4e5352;
+.reader-home__identity {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.reader-home__identity > div {
+  display: grid;
+  gap: 2px;
+}
+
+.reader-home__identity span:not(.tessel-brand-mark) {
+  color: #717672;
+  font-size: 12px;
+  font-weight: 620;
+  text-transform: uppercase;
 }
 
 .reader-home h1 {
-  margin: 0 0 8px;
-  color: #202123;
-  font-size: 28px;
-  font-weight: 720;
-  line-height: 1.2;
-}
-
-.reader-home p {
-  max-width: 440px;
   margin: 0;
-  color: #696d6b;
-  font-size: 14px;
-  line-height: 1.55;
+  color: #202123;
+  font-size: 30px;
+  font-weight: 760;
+  line-height: 1.08;
 }
 
 .reader-home__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 9px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
 }
 
 .reader-home__actions button {
@@ -6332,6 +6338,26 @@ body.is-resizing-workspace-block * {
   padding: 0 13px;
   border-radius: 7px;
   font-weight: 700;
+}
+
+.tessel-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: #ffffff;
+  border-radius: 5px;
+  background: #202423;
+  font-size: 12px;
+  font-weight: 790;
+  line-height: 1;
+}
+
+.tessel-brand-mark--large {
+  width: 46px;
+  height: 46px;
+  border-radius: 7px;
+  font-size: 21px;
 }
 
 .reader-settings {
