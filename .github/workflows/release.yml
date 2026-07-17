@@ -109,7 +109,8 @@ jobs:
       - name: Package app
         env:
           CI: true
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.platform == 'windows' && 'false' || 'true' }}
+          # Releases are intentionally unsigned so users can install the macOS build directly.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
         run: pnpm ${{ matrix.script }}
 
       - name: Upload package artifact

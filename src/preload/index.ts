@@ -69,6 +69,7 @@ const api: SidelightApi = {
   syncDocumentMetadata: (documentId) => ipcRenderer.invoke('sync:documentMetadata', documentId),
   getAppPreferences: () => ipcRenderer.invoke('settings:getAppPreferences'),
   saveAppPreferences: (config: AppPreferences) => ipcRenderer.invoke('settings:saveAppPreferences', config),
+  getWindowChromeState: () => ipcRenderer.invoke('window:getChromeState'),
   listAiModels: (config: AiProviderConfig): Promise<AiModelInfo[]> => ipcRenderer.invoke('ai:listModels', config),
   completeAi: (request: AiCompletionRequest) => ipcRenderer.invoke('ai:complete', request),
   completeAiStream: (input: AiStreamRequest) => ipcRenderer.invoke('ai:completeStream', input),
@@ -85,6 +86,11 @@ const api: SidelightApi = {
     const channelListener = (_event: Electron.IpcRendererEvent, payload: AppUpdateState): void => listener(payload);
     ipcRenderer.on('app:update:state', channelListener);
     return () => ipcRenderer.removeListener('app:update:state', channelListener);
+  },
+  onWindowChromeState: (listener) => {
+    const channelListener = (_event: Electron.IpcRendererEvent, payload: { macTrafficLightsVisible: boolean }): void => listener(payload);
+    ipcRenderer.on('window:chromeState', channelListener);
+    return () => ipcRenderer.removeListener('window:chromeState', channelListener);
   },
   onAiStreamEvent: (listener: (event: AiStreamEvent) => void) => {
     const channelListener = (_event: Electron.IpcRendererEvent, payload: AiStreamEvent): void => listener(payload);

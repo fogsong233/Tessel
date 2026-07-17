@@ -1,5 +1,6 @@
-import { type ComponentPropsWithoutRef, type FormEvent, type ReactElement, useEffect, useMemo, useRef, useState } from 'react';
+import { type ComponentPropsWithoutRef, type CSSProperties, type FormEvent, type ReactElement, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   BookOpen,
   Bot,
   Check,
@@ -92,6 +93,30 @@ interface ActiveConversationStreamController {
   steer(prompt: string): Promise<void>;
 }
 
+interface SidebarTheme {
+  color: string;
+  activeColor: string;
+  ink: string;
+  muted: string;
+}
+
+function sidebarTheme(color: string): SidebarTheme {
+  const match = /^#([0-9a-f]{6})$/i.exec(color);
+  const source = match?.[1] ?? defaultAppPreferences.sidebarColor.slice(1);
+  const channels = [0, 2, 4].map((offset) => Number.parseInt(source.slice(offset, offset + 2), 16));
+  const luminance = (channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722) / 255;
+  const isLight = luminance > 0.58;
+  const target = isLight ? 0 : 255;
+  const amount = isLight ? 0.11 : 0.16;
+  const adjusted = channels.map((channel) => Math.round(channel + (target - channel) * amount));
+  return {
+    color: `#${source.toLowerCase()}`,
+    activeColor: `#${adjusted.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`,
+    ink: isLight ? '#39382f' : '#f8f9f5',
+    muted: isLight ? '#756f55' : 'rgba(248, 249, 245, 0.72)'
+  };
+}
+
 export function App(): ReactElement {
   const readerDocumentId = useMemo(() => new URLSearchParams(window.location.search).get('documentId') ?? undefined, []);
   const [documents, setDocuments] = useState<PdfDocumentMeta[]>([]);
@@ -114,6 +139,7 @@ export function App(): ReactElement {
   const [transientAid, setTransientAid] = useState<TransientAidState>();
   const [panelOpen, setPanelOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [macTrafficLightsVisible, setMacTrafficLightsVisible] = useState(false);
   const [busy, setBusy] = useState(false);
   const [noteBusy, setNoteBusy] = useState(false);
   const [outlineGenerationBusy, setOutlineGenerationBusy] = useState(false);
@@ -126,9 +152,38 @@ export function App(): ReactElement {
   const readerLoadRequestRef = useRef<string | undefined>(undefined);
   const stoppedStreamIdsRef = useRef<Set<string>>(new Set());
   const activeConversationStreamRef = useRef<ActiveConversationStreamController>();
+  const resolvedSidebarTheme = useMemo(
+    () => sidebarTheme(appPreferences.sidebarColor ?? defaultAppPreferences.sidebarColor),
+    [appPreferences.sidebarColor]
+  );
+  const resolvedSidebarColor = resolvedSidebarTheme.color;
+  const resolvedSidebarActiveColor = resolvedSidebarTheme.activeColor;
+  const appShellStyle = useMemo(() => ({
+    '--tessel-sidebar-color': resolvedSidebarColor,
+    '--tessel-sidebar-active-color': resolvedSidebarActiveColor,
+    '--tessel-sidebar-ink': resolvedSidebarTheme.ink,
+    '--tessel-sidebar-muted': resolvedSidebarTheme.muted,
+    '--tessel-directory-ink': resolvedSidebarTheme.ink,
+    '--tessel-directory-muted': resolvedSidebarTheme.muted
+  } as CSSProperties), [resolvedSidebarActiveColor, resolvedSidebarColor, resolvedSidebarTheme.ink, resolvedSidebarTheme.muted]);
+  const appShellClass = macTrafficLightsVisible ? 'app-shell has-mac-traffic-lights' : 'app-shell';
 
   useEffect(() => {
     void refreshSettings();
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    void window.sidelight.getWindowChromeState().then((state) => {
+      if (!disposed) {
+        setMacTrafficLightsVisible(state.macTrafficLightsVisible);
+      }
+    }).catch(() => undefined);
+    const unsubscribe = window.sidelight.onWindowChromeState((state) => setMacTrafficLightsVisible(state.macTrafficLightsVisible));
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -1288,7 +1343,7 @@ export function App(): ReactElement {
 
   if (!readerDocumentId) {
     return (
-      <main className="app-shell">
+      <main className={appShellClass} style={appShellStyle}>
         <section className="reader-home" aria-label="PDF reader start">
           <div className="reader-home__brand">
             <img className="tessel-brand-mark" src={tesselLogoUrl} alt="" />
@@ -1323,7 +1378,7 @@ export function App(): ReactElement {
   }
 
   return (
-    <main className="app-shell">
+    <main className={appShellClass} style={appShellStyle}>
       <PdfReader
         documents={[]}
         libraryGroups={[]}
@@ -1333,6 +1388,10 @@ export function App(): ReactElement {
         documentLoadError={readerLoadError}
         uiLanguage={appPreferences.uiLanguage}
         selectionColors={appPreferences.selectionColors}
+        sidebarColor={resolvedSidebarColor}
+        sidebarActiveColor={resolvedSidebarActiveColor}
+        sidebarInk={resolvedSidebarTheme.ink}
+        sidebarMuted={resolvedSidebarTheme.muted}
         activePage={currentPage}
         marks={marks}
         bookmarks={bookmarks}
@@ -1395,6 +1454,8 @@ export function App(): ReactElement {
   );
 }
 
+type ReaderSettingsSection = 'provider' | 'codex' | 'sync' | 'appearance' | 'language' | 'updates';
+
 function ReaderSettingsPanel({
   provider,
   webDavSync,
@@ -1424,7 +1485,9 @@ function ReaderSettingsPanel({
   const [uiLanguage, setUiLanguage] = useState<UiLanguage>(preferences.uiLanguage);
   const [aiLanguage, setAiLanguage] = useState<AiPreferredLanguage>(preferences.aiLanguage);
   const [translationBackend, setTranslationBackend] = useState(preferences.translationBackend);
-  const [settingsSection, setSettingsSection] = useState<'provider' | 'codex' | 'sync' | 'language' | 'updates'>('provider');
+  const [sidebarColor, setSidebarColor] = useState(preferences.sidebarColor ?? defaultAppPreferences.sidebarColor);
+  const [settingsSection, setSettingsSection] = useState<ReaderSettingsSection>('provider');
+  const [settingsQuery, setSettingsQuery] = useState('');
   const [updateState, setUpdateState] = useState<AppUpdateState>();
   const [codexAvailability, setCodexAvailability] = useState<CodexAvailability>();
   const [codexModels, setCodexModels] = useState<CodexModelInfo[]>([]);
@@ -1434,6 +1497,20 @@ function ReaderSettingsPanel({
   const [codexChatEffort, setCodexChatEffort] = useState(preferences.experimentalCodexAgent.chatReasoningEffort ?? '');
   const [codexTranslationEffort, setCodexTranslationEffort] = useState(preferences.experimentalCodexAgent.translationReasoningEffort ?? '');
   const t = readerSettingsText(uiLanguage);
+  const resolvedSettingsSidebarTheme = sidebarTheme(sidebarColor || defaultAppPreferences.sidebarColor);
+  const settingsItems: Array<{ id: ReaderSettingsSection; label: string; icon: typeof Bot }> = [
+    { id: 'provider', label: t.provider, icon: Bot },
+    { id: 'codex', label: 'Codex', icon: Sparkles },
+    { id: 'sync', label: t.sync, icon: Cloud },
+    { id: 'appearance', label: t.appearance, icon: Palette },
+    { id: 'language', label: t.language, icon: LanguagesIcon },
+    { id: 'updates', label: t.updates, icon: RefreshCw }
+  ];
+  const normalizedSettingsQuery = settingsQuery.trim().toLocaleLowerCase();
+  const visibleSettingsItems = normalizedSettingsQuery
+    ? settingsItems.filter((item) => item.label.toLocaleLowerCase().includes(normalizedSettingsQuery))
+    : settingsItems;
+  const activeSettingsItem = settingsItems.find((item) => item.id === settingsSection) ?? settingsItems[0];
 
   useEffect(() => {
     let disposed = false;
@@ -1524,6 +1601,7 @@ function ReaderSettingsPanel({
         translationBackend: translationBackend === 'codex' && codexEnabled && Boolean(codexAvailability?.available)
           ? 'codex'
           : 'provider',
+        sidebarColor,
         selectionColors: normalizeSelectionColors(preferences.selectionColors),
         experimentalCodexAgent: {
           enabled: codexEnabled && Boolean(codexAvailability?.available),
@@ -1538,21 +1616,68 @@ function ReaderSettingsPanel({
 
   return (
     <div className="settings-overlay reader-settings-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="reader-settings" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-        <header className="reader-settings__header">
-          <div className="reader-settings__title"><Settings size={18} /><strong id="settings-title">{t.settings}</strong></div>
-          <button type="button" className="icon-button" title={t.close} onClick={onClose}><X size={16} /></button>
-        </header>
+      <section
+        className="reader-settings"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        style={{
+          '--tessel-sidebar-color': resolvedSettingsSidebarTheme.color,
+          '--tessel-sidebar-active-color': resolvedSettingsSidebarTheme.activeColor,
+          '--tessel-sidebar-ink': resolvedSettingsSidebarTheme.ink,
+          '--tessel-sidebar-muted': resolvedSettingsSidebarTheme.muted,
+          '--tessel-directory-ink': resolvedSettingsSidebarTheme.ink,
+          '--tessel-directory-muted': resolvedSettingsSidebarTheme.muted
+        } as CSSProperties}
+      >
         <form className="reader-settings__form" onSubmit={submit}>
           <div className="reader-settings__workspace">
-            <nav className="reader-settings__nav" aria-label={t.settingsSections}>
-              <button className={settingsSection === 'provider' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('provider')}><Bot size={16} />{t.provider}</button>
-              <button className={settingsSection === 'codex' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('codex')}><Sparkles size={16} />Codex</button>
-              <button className={settingsSection === 'sync' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('sync')}><Cloud size={16} />{t.sync}</button>
-              <button className={settingsSection === 'language' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('language')}><LanguagesIcon size={16} />{t.language}</button>
-              <button className={settingsSection === 'updates' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('updates')}><RefreshCw size={16} />{t.updates}</button>
-            </nav>
-            <div className="reader-settings__body">
+            <aside className="reader-settings__sidebar">
+              <header className="reader-settings__sidebar-header">
+                <button type="button" className="reader-settings__back" onClick={onClose}>
+                  <ArrowLeft size={16} />
+                  <span>{t.backToApp}</span>
+                </button>
+                <div className="reader-settings__brand">
+                  <img src={tesselLogoUrl} alt="" />
+                  <strong>Tessel</strong>
+                </div>
+              </header>
+              <label className="reader-settings__search">
+                <Search size={16} />
+                <input
+                  type="search"
+                  value={settingsQuery}
+                  placeholder={t.searchSettings}
+                  aria-label={t.searchSettings}
+                  onChange={(event) => setSettingsQuery(event.target.value)}
+                />
+              </label>
+              <span className="reader-settings__nav-label">{t.configuration}</span>
+              <nav className="reader-settings__nav" aria-label={t.settingsSections}>
+                {visibleSettingsItems.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.id}
+                      className={settingsSection === item.id ? 'is-active' : ''}
+                      type="button"
+                      onClick={() => setSettingsSection(item.id)}
+                    >
+                      <Icon size={16} />
+                      {item.label}
+                    </button>
+                  );
+                })}
+                {visibleSettingsItems.length === 0 && <span className="reader-settings__nav-empty">{t.noSettingsFound}</span>}
+              </nav>
+            </aside>
+            <div className="reader-settings__main">
+              <div className="reader-settings__body">
+                <div className="reader-settings__body-content">
+                  <header className="reader-settings__page-heading">
+                    <h1 id="settings-title">{activeSettingsItem.label}</h1>
+                  </header>
             {settingsSection === 'provider' && (
               <section className="reader-settings__section">
               <div className="reader-settings__section-heading"><Bot size={17} /><div><strong>{t.aiProvider}</strong><span>OpenAI-compatible</span></div></div>
@@ -1603,6 +1728,20 @@ function ReaderSettingsPanel({
               </div>
             </section>
             )}
+            {settingsSection === 'appearance' && (
+            <section className="reader-settings__section">
+              <div className="reader-settings__section-heading"><Palette size={17} /><div><strong>{t.appearance}</strong><span>{t.appearanceDescription}</span></div></div>
+              <div className="reader-settings__fields">
+                <label className="reader-settings__wide">{t.sidebarColor}
+                  <span className="reader-settings__color-control">
+                    <input type="color" value={sidebarColor} aria-label={t.sidebarColor} onChange={(event) => setSidebarColor(event.target.value)} />
+                    <output>{sidebarColor.toUpperCase()}</output>
+                    <button className="quiet-button" type="button" onClick={() => setSidebarColor(defaultAppPreferences.sidebarColor)}>{t.reset}</button>
+                  </span>
+                </label>
+              </div>
+            </section>
+            )}
             {settingsSection === 'updates' && (
             <section className="reader-settings__section">
               <div className="reader-settings__section-heading"><RefreshCw size={17} /><div><strong>{t.updates}</strong><span>{t.updateDescription}</span></div></div>
@@ -1618,9 +1757,11 @@ function ReaderSettingsPanel({
               </div>
             </section>
             )}
+                </div>
+              </div>
+              <footer className="reader-settings__actions"><button className="quiet-button" type="button" onClick={onClose}>{t.cancel}</button><button className="primary-button" type="submit">{t.save}</button></footer>
             </div>
           </div>
-          <footer className="reader-settings__actions"><button className="quiet-button" type="button" onClick={onClose}>{t.cancel}</button><button className="primary-button" type="submit">{t.save}</button></footer>
         </form>
       </section>
     </div>
@@ -1649,7 +1790,7 @@ function SettingsToggle({ label, ...props }: ComponentPropsWithoutRef<'input'> &
 function readerSettingsText(language: UiLanguage) {
   if (language === 'zh-CN') {
     return {
-      settings: '设置', close: '关闭', settingsSections: '设置分区', provider: '服务商', sync: '同步', language: '语言', updates: '更新',
+      settings: '设置', close: '关闭', settingsSections: '设置分区', provider: '服务商', sync: '同步', appearance: '外观', language: '语言', updates: '更新', backToApp: '返回应用', searchSettings: '搜索设置...', configuration: '配置', noSettingsFound: '没有匹配的设置', reset: '恢复默认', sidebarColor: '边栏颜色', appearanceDescription: '目录栏与设置侧栏使用同一颜色。',
       aiProvider: 'AI 服务商', displayName: '显示名称', temperature: '温度', baseUrl: '基础 URL', apiKey: 'API 密钥', model: '模型', storedKey: '已保存。输入新密钥可替换。', loading: '加载中...', fetchModels: '获取模型',
       codexAvailable: '本机 Codex CLI 可用', codexChecking: '正在检查本机 Codex CLI...', enabled: '启用', chat: '对话', chatModel: '对话模型', chatReasoning: '对话推理强度', codexDefault: 'Codex 默认', readerDefault: '阅读器默认（低）',
       translation: '翻译', translationBackend: '翻译后端', translationModel: '翻译模型', translationReasoning: '翻译推理强度', fastestAvailable: '最快可用模型',
@@ -1660,7 +1801,7 @@ function readerSettingsText(language: UiLanguage) {
     };
   }
   return {
-    settings: 'Settings', close: 'Close', settingsSections: 'Settings sections', provider: 'Provider', sync: 'Sync', language: 'Language', updates: 'Updates',
+    settings: 'Settings', close: 'Close', settingsSections: 'Settings sections', provider: 'Provider', sync: 'Sync', appearance: 'Appearance', language: 'Language', updates: 'Updates', backToApp: 'Back to app', searchSettings: 'Search settings...', configuration: 'Configuration', noSettingsFound: 'No settings found', reset: 'Reset', sidebarColor: 'Sidebar color', appearanceDescription: 'Used by the PDF directory and settings sidebar.',
     aiProvider: 'AI provider', displayName: 'Display name', temperature: 'Temperature', baseUrl: 'Base URL', apiKey: 'API key', model: 'Model', storedKey: 'Stored. Enter a new key to replace it.', loading: 'Loading...', fetchModels: 'Fetch models',
     codexAvailable: 'Local Codex CLI available', codexChecking: 'Checking local Codex CLI...', enabled: 'Enabled', chat: 'Chat', chatModel: 'Chat model', chatReasoning: 'Chat reasoning', codexDefault: 'Codex default', readerDefault: 'Reader default (Low)',
     translation: 'Translation', translationBackend: 'Translation backend', translationModel: 'Translation model', translationReasoning: 'Translation reasoning', fastestAvailable: 'Fastest available',
@@ -2445,6 +2586,7 @@ function FloatingSettingsPanel({
     uiLanguage,
     aiLanguage,
     translationBackend: preferences.translationBackend,
+    sidebarColor: preferences.sidebarColor ?? defaultAppPreferences.sidebarColor,
     selectionColors: normalizeSelectionColors(selectionColors),
     experimentalCodexAgent: preferences.experimentalCodexAgent
   });

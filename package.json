@@ -1,6 +1,6 @@
 {
   "name": "tessel",
-  "version": "0.1.0",
+  "version": "1.2.0",
   "private": true,
   "author": "Tessel contributors",
   "description": "A focused PDF reader with persistent AI conversations and reading progress.",

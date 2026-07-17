@@ -51,6 +51,16 @@ const pendingSystemPdfPaths: string[] = [];
 let handleSystemPdfOpen: ((filePath: string) => Promise<void>) | undefined;
 let storeMutationQueue = Promise.resolve();
 
+function windowChromeState(window?: BrowserWindow | null): { macTrafficLightsVisible: boolean } {
+  return { macTrafficLightsVisible: process.platform === 'darwin' && window != null && !window.isFullScreen() };
+}
+
+function sendWindowChromeState(window: BrowserWindow): void {
+  if (!window.isDestroyed()) {
+    window.webContents.send('window:chromeState', windowChromeState(window));
+  }
+}
+
 function runStoreMutation<T>(operation: () => Promise<T>): Promise<T> {
   const next = storeMutationQueue.then(operation, operation);
   storeMutationQueue = next.then(() => undefined, () => undefined);
@@ -104,6 +114,9 @@ function createWindow(options: { documentId?: string } = {}): BrowserWindow {
       nodeIntegration: false
     }
   });
+
+  mainWindow.on('enter-full-screen', () => sendWindowChromeState(mainWindow));
+  mainWindow.on('leave-full-screen', () => sendWindowChromeState(mainWindow));
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
@@ -259,6 +272,7 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
   ipcMain.handle('settings:saveWebDavSync', (_event, config) => runStoreMutation(() => store.saveWebDavSync(config)));
   ipcMain.handle('settings:getAppPreferences', () => store.getAppPreferences());
   ipcMain.handle('settings:saveAppPreferences', (_event, config: AppPreferences) => runStoreMutation(() => store.saveAppPreferences(config)));
+  ipcMain.handle('window:getChromeState', (event) => windowChromeState(BrowserWindow.fromWebContents(event.sender)));
   ipcMain.handle('sync:documentMetadata', (_event, documentId: string) => runStoreMutation(() => store.syncDocumentMetadata(documentId)));
   ipcMain.handle('codex:availability', () => CodexAgent.availability());
   ipcMain.handle('codex:listModels', () => codexAgent.listModels());
@@ -740,7 +754,12 @@ function focusFirstWindow(): void {
   const window = BrowserWindow.getAllWindows()[0];
   if (window) {
     focusWindow(window);
+    return;
   }
+
+  // A macOS app can remain alive after all windows close. Recreate the home
+  // window when a second launch reaches that orphaned single-instance process.
+  createWindow();
 }
 
 function focusWindow(window: BrowserWindow): void {

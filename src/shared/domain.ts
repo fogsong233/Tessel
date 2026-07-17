@@ -345,6 +345,7 @@ export interface AppPreferences {
   uiLanguage: UiLanguage;
   aiLanguage: AiPreferredLanguage;
   translationBackend: TranslationBackend;
+  sidebarColor: string;
   selectionColors: SelectionColorPreferences;
   experimentalCodexAgent: ExperimentalCodexAgentPreferences;
 }
@@ -548,6 +549,10 @@ export interface SavePdfGeneratedOutlineInput {
   outline: PdfGeneratedOutline;
 }
 
+export interface WindowChromeState {
+  macTrafficLightsVisible: boolean;
+}
+
 export interface SidelightApi {
   listDocuments(): Promise<PdfDocumentMeta[]>;
   listLibraryGroups(): Promise<LibraryGroup[]>;
@@ -595,6 +600,7 @@ export interface SidelightApi {
   syncDocumentMetadata(documentId: DocumentId): Promise<MetadataSyncResult>;
   getAppPreferences(): Promise<AppPreferences>;
   saveAppPreferences(config: AppPreferences): Promise<AppPreferences>;
+  getWindowChromeState(): Promise<WindowChromeState>;
   listAiModels(config: AiProviderConfig): Promise<AiModelInfo[]>;
   completeAi(request: AiCompletionRequest): Promise<AiCompletionResponse>;
   completeAiStream(input: AiStreamRequest): Promise<void>;
@@ -608,6 +614,7 @@ export interface SidelightApi {
   checkForAppUpdates(): Promise<AppUpdateState>;
   installAppUpdate(): Promise<void>;
   onAppUpdateState(listener: (state: AppUpdateState) => void): () => void;
+  onWindowChromeState(listener: (state: WindowChromeState) => void): () => void;
   onAiStreamEvent(listener: (event: AiStreamEvent) => void): () => void;
   onLibraryChanged(listener: () => void): () => void;
 }
@@ -641,6 +648,7 @@ export const defaultAppPreferences: AppPreferences = {
   uiLanguage: 'en',
   aiLanguage: 'Simplified Chinese',
   translationBackend: 'provider',
+  sidebarColor: '#f4e8ab',
   selectionColors: {
     highlight: '#d8ead4',
     underline: '#8fa4b8',

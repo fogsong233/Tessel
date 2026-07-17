@@ -33,9 +33,11 @@ import {
   ScrollMode
 } from 'pdfjs-dist/web/pdf_viewer';
 import { workerUrl } from './assets/pdfjs';
+import tesselLogoUrl from '../../assets/icons/tessel-logo.png?url';
 import {
   BookOpen,
   ArrowLeft,
+  Bookmark,
   BookmarkPlus,
   ChevronDown,
   ChevronsLeft,
@@ -132,6 +134,10 @@ interface PdfReaderProps {
   documentLoadError?: string;
   uiLanguage?: UiLanguage;
   selectionColors: SelectionColorPreferences;
+  sidebarColor?: string;
+  sidebarActiveColor?: string;
+  sidebarInk?: string;
+  sidebarMuted?: string;
   activePage: number;
   marks: PdfMark[];
   bookmarks: PdfUserBookmark[];
@@ -184,7 +190,7 @@ interface PdfReaderProps {
 
 type DockTab = 'chat' | 'translations' | 'notes' | 'search' | 'bookmarks' | 'marks';
 type DockForegroundPanel = 'chat' | 'note' | 'transient';
-type LeftTab = 'outline';
+type LeftTab = 'outline' | 'bookmarks';
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error';
 
 const dockHandleGutter = 24;
@@ -542,6 +548,10 @@ export function PdfReader({
   documentLoadError,
   uiLanguage = 'en',
   selectionColors,
+  sidebarColor,
+  sidebarActiveColor,
+  sidebarInk,
+  sidebarMuted,
   activePage,
   marks,
   bookmarks,
@@ -635,7 +645,7 @@ export function PdfReader({
   const [outlineBusy, setOutlineBusy] = useState(false);
   const [selectionPopover, setSelectionPopover] = useState<SelectionPopover>();
   const [activeMark, setActiveMark] = useState<ActiveMarkPopover>();
-  const [leftTab] = useState<LeftTab>('outline');
+  const [leftTab, setLeftTab] = useState<LeftTab>('outline');
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [dockTab, setDockTab] = useState<DockTab>('chat');
   const [dockWidth, setDockWidth] = useState<number>();
@@ -2371,10 +2381,20 @@ export function PdfReader({
   }, [handleSelectionMouseUp, source]);
 
   return (
-    <section className="reader">
+    <section
+      className="reader"
+      style={{
+        '--tessel-sidebar-color': sidebarColor,
+        '--tessel-sidebar-active-color': sidebarActiveColor,
+        '--tessel-sidebar-ink': sidebarInk,
+        '--tessel-sidebar-muted': sidebarMuted,
+        '--tessel-directory-ink': sidebarInk,
+        '--tessel-directory-muted': sidebarMuted
+      } as CSSProperties}
+    >
       <Splitter
         className={leftPanelOpen ? 'reader-splitter' : 'reader-splitter is-left-collapsed'}
-        gutterSize={7}
+        gutterSize={1}
         stateKey="sidelight-reader-main-layout-v2"
         stateStorage="local"
       >
@@ -2383,6 +2403,7 @@ export function PdfReader({
             activeDocument={meta}
             activeDocumentId={meta?.id}
             activePage={activePage}
+            bookmarks={bookmarks}
             documents={documents}
             groups={libraryGroups}
             leftTab={leftTab}
@@ -2423,7 +2444,7 @@ export function PdfReader({
             onSearchQueryChange={setSearchQuery}
             onSubmitPageJump={submitPageJump}
             onSubmitSearch={submitSearch}
-            onTabChange={() => undefined}
+            onTabChange={setLeftTab}
             onZoomIn={() => zoomViewport('in')}
             onZoomOut={() => zoomViewport('out')}
           />
@@ -2635,6 +2656,7 @@ function ReaderLeftPanel({
   activeDocument,
   activeDocumentId,
   activePage,
+  bookmarks,
   documents,
   groups,
   leftTab,
@@ -2678,6 +2700,7 @@ function ReaderLeftPanel({
   activeDocument?: PdfDocumentMeta;
   activeDocumentId?: string;
   activePage: number;
+  bookmarks: PdfUserBookmark[];
   documents: PdfDocumentMeta[];
   groups: LibraryGroup[];
   leftTab: LeftTab;
@@ -2725,7 +2748,10 @@ function ReaderLeftPanel({
     <aside className="left-panel">
       <header className="left-panel__top">
         <div className="reader-title-block">
-          <span>Tessel</span>
+          <span className="reader-title-block__brand">
+            <img src={tesselLogoUrl} alt="" />
+            Tessel
+          </span>
           <strong title={title ?? t.noPdfOpen}>{title ?? t.noPdfOpen}</strong>
           <small>
             {status === 'loading'
@@ -2747,11 +2773,6 @@ function ReaderLeftPanel({
           </button>
         </div>
       </header>
-
-      <div className="panel-breadcrumb" aria-label="Reader tools">
-        <ListTree size={14} />
-        <span>{t.outline}</span>
-      </div>
 
       <form className="panel-search" onSubmit={onSubmitSearch}>
         <Search size={15} />
@@ -2803,6 +2824,18 @@ function ReaderLeftPanel({
         </button>
       </div>
 
+      <nav className="panel-breadcrumb" aria-label="Reader tools">
+        <button className={leftTab === 'outline' ? 'is-active' : ''} type="button" onClick={() => onTabChange('outline')}>
+          <ListTree size={14} />
+          <span>{t.outline}</span>
+        </button>
+        <button className={leftTab === 'bookmarks' ? 'is-active' : ''} type="button" onClick={() => onTabChange('bookmarks')}>
+          <Bookmark size={14} />
+          <span>{t.bookmarks}</span>
+          {bookmarks.length > 0 && <small>{bookmarks.length}</small>}
+        </button>
+      </nav>
+
       <div className="left-panel__body">
         {leftTab === 'outline' && (
           <div className="outline-list">
@@ -2846,6 +2879,23 @@ function ReaderLeftPanel({
               >
                 <span>{item.title}</span>
                 {item.pageNumber && <small>{item.pageNumber}</small>}
+              </button>
+            ))}
+          </div>
+        )}
+        {leftTab === 'bookmarks' && (
+          <div className="outline-list bookmark-outline-list">
+            {bookmarks.length === 0 && <div className="outline-empty"><span className="empty-line">{t.noBookmarks}</span></div>}
+            {bookmarks.map((bookmark) => (
+              <button
+                key={bookmark.id}
+                type="button"
+                className={bookmark.pageNumber === activePage ? 'outline-item is-active' : 'outline-item'}
+                title={bookmark.label}
+                onClick={() => onJumpToPage(bookmark.pageNumber)}
+              >
+                <span>{bookmark.label}</span>
+                <small>{bookmark.pageNumber}</small>
               </button>
             ))}
           </div>

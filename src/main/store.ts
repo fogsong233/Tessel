@@ -833,6 +833,7 @@ function normalizeAppPreferences(config: AppPreferences): AppPreferences {
     uiLanguage: config.uiLanguage === 'zh-CN' ? 'zh-CN' : 'en',
     aiLanguage: normalizeAiLanguage(config.aiLanguage),
     translationBackend: config.translationBackend === 'codex' ? 'codex' : 'provider',
+    sidebarColor: normalizeSidebarColor(config.sidebarColor),
     selectionColors: normalizeSelectionColors(config.selectionColors),
     experimentalCodexAgent: {
       enabled: Boolean(config.experimentalCodexAgent?.enabled),
@@ -852,6 +853,11 @@ function normalizeAppPreferences(config: AppPreferences): AppPreferences {
         : {})
     }
   };
+}
+
+function normalizeSidebarColor(value: unknown): string {
+  const color = typeof value === 'string' ? value.trim() : '';
+  return /^#[0-9a-fA-F]{6}$/.test(color) ? color.toLowerCase() : defaultAppPreferences.sidebarColor;
 }
 
 function normalizeGeneratedOutlineItems(items: PdfGeneratedOutline['items']): PdfGeneratedOutline['items'] {
