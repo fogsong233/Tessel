@@ -212,6 +212,38 @@ test.describe('PDF reader flow', () => {
     await expect(page.locator('.chat-bubble img[alt="Professor profile"]')).toHaveAttribute('src', /^data:image\//, { timeout: 20_000 });
   });
 
+  test('previews a cited webpage when an agent says it is displaying a photo', async () => {
+    const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+      documents: Array<{ id: string }>;
+    };
+    const documentId = store.documents[0]?.id;
+    expect(documentId).toBeTruthy();
+    const now = new Date().toISOString();
+    await page.evaluate(async ({ documentId, now }) => {
+      await window.sidelight.saveConversation({
+        conversation: {
+          id: 'chat_visual_source_fixture',
+          documentId,
+          pageNumber: 1,
+          mode: 'ask',
+          agentKind: 'codex',
+          summary: { title: 'Visual source', brief: 'Public visual source fixture.', keywords: [] },
+          messages: [{
+            id: 'msg_visual_source_fixture',
+            role: 'assistant',
+            content: 'This is the public Aston Zhang photo from [Amazon Science](https://www.amazon.science/latest-news/aws-scientist-wins-iclr-outstanding-paper-award).',
+            createdAt: now
+          }],
+          createdAt: now,
+          updatedAt: now
+        }
+      });
+    }, { documentId: documentId!, now });
+
+    await page.reload();
+    await expect(page.locator('.chat-bubble img[alt="Image from linked source"]')).toHaveAttribute('src', /^data:image\//, { timeout: 20_000 });
+  });
+
   test('renders Codex output and activity in a collapsible timeline', async () => {
     await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
     const documentId = `pdf_${createHash('sha256').update(await readFile(pdfPath)).digest('hex')}`;

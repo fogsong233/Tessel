@@ -396,7 +396,9 @@ export class CodexAgent {
       history?.length ? `Conversation history:\n${JSON.stringify(history, null, 2)}` : undefined,
       '',
       'User request:',
-      input.prompt
+      input.prompt,
+      '',
+      'Tessel response requirement: when the user asks to display a web image, photo, portrait, or avatar, do not merely describe it or link to its webpage. Download a direct PNG, JPEG, WebP, GIF, or SVG image into the current workspace before saying it is displayed. Tessel attaches newly created workspace images to the response. Include the public source page as a Markdown link. If no direct image can be downloaded, state that it cannot be displayed.'
     ].filter((part): part is string => Boolean(part)).join('\n');
     const attachments = await Promise.all((input.attachments ?? []).map((attachment) => this.writeInputImage(input.streamId, attachment)));
     return [

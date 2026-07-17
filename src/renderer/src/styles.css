@@ -7345,6 +7345,19 @@ body.is-resizing-workspace-block * {
   font-size: 12px;
 }
 
+.markdown-view__visual-link-preview {
+  display: block;
+  width: fit-content;
+  max-width: min(100%, 420px);
+  margin: 10px 0;
+}
+
+.markdown-view__visual-link-preview img {
+  margin: 0;
+  max-height: 360px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+}
+
 .typing-dot {
   display: inline-flex;
   align-items: center;

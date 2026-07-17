@@ -1,4 +1,4 @@
-import { type ComponentPropsWithoutRef, type ReactElement, useEffect, useState } from 'react';
+import { type ComponentPropsWithoutRef, type ReactNode, type ReactElement, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
@@ -10,6 +10,7 @@ interface MarkdownViewProps {
 
 export function MarkdownView({ children }: MarkdownViewProps): ReactElement {
   const markdown = normalizeLatexDelimiters(normalizeLocalMarkdownLinks(cleanStoredAiError(children)));
+  const showVisualLinkPreviews = messageRequestsVisual(markdown);
 
   return (
     <div className="markdown-view">
@@ -21,32 +22,70 @@ export function MarkdownView({ children }: MarkdownViewProps): ReactElement {
         return localPath ? toFileUrl(localPath) : url;
       }}
       components={{
-        a: ({ children: linkChildren, href, ...props }) => {
-          const localPath = localPathFromMarkdownUrl(href);
-          return (
-            <a
-              {...props}
-              href={localPath ? toFileUrl(localPath) : href}
-              target="_blank"
-              rel="noreferrer"
-              onClick={(event) => {
-                if (!localPath) {
-                  return;
-                }
-                event.preventDefault();
-                void window.sidelight.openLocalPath(localPath);
-              }}
-            >
-              {linkChildren}
-            </a>
-          );
-        },
+        a: ({ children: linkChildren, href, ...props }) => (
+          <MarkdownLink href={href} showVisualPreview={showVisualLinkPreviews} {...props}>{linkChildren}</MarkdownLink>
+        ),
         img: ({ src, alt, ...props }) => <MarkdownImage src={src} alt={alt ?? ''} {...props} />
       }}
       >
         {markdown}
       </ReactMarkdown>
     </div>
+  );
+}
+
+function MarkdownLink({
+  children,
+  href,
+  showVisualPreview,
+  ...props
+}: ComponentPropsWithoutRef<'a'> & { children?: ReactNode; showVisualPreview: boolean }): ReactElement {
+  const localPath = localPathFromMarkdownUrl(href);
+  const targetUrl = localPath ? toFileUrl(localPath) : href;
+  const canPreview = Boolean(showVisualPreview && href && !localPath && /^https?:\/\//i.test(href));
+  const [previewUrl, setPreviewUrl] = useState<string>();
+
+  useEffect(() => {
+    let disposed = false;
+    setPreviewUrl(undefined);
+    if (!canPreview || !href) {
+      return () => {
+        disposed = true;
+      };
+    }
+    void window.sidelight.resolveRemoteImage(href).then((value) => {
+      if (!disposed) {
+        setPreviewUrl(value);
+      }
+    }).catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, [canPreview, href]);
+
+  return (
+    <>
+      <a
+        {...props}
+        href={targetUrl}
+        target="_blank"
+        rel="noreferrer"
+        onClick={(event) => {
+          if (!localPath) {
+            return;
+          }
+          event.preventDefault();
+          void window.sidelight.openLocalPath(localPath);
+        }}
+      >
+        {children}
+      </a>
+      {previewUrl && href ? (
+        <a className="markdown-view__visual-link-preview" href={href} target="_blank" rel="noreferrer" aria-label="Open image source">
+          <img src={previewUrl} alt="Image from linked source" loading="lazy" />
+        </a>
+      ) : null}
+    </>
   );
 }
 
@@ -123,6 +162,10 @@ function localPathFromMarkdownUrl(value: string | undefined): string | undefined
 
 function toFileUrl(path: string): string {
   return `file://${encodeURI(path).replace(/#/g, '%23')}`;
+}
+
+function messageRequestsVisual(markdown: string): boolean {
+  return /(?:\b(?:image|photo|portrait|avatar|picture)\b|图片|照片|头像|图像|这张图|这张是|上面这张)/i.test(markdown);
 }
 
 function cleanStoredAiError(markdown: string): string {
