@@ -6635,6 +6635,14 @@ body.is-resizing-workspace-block * {
   font-weight: 700;
 }
 
+.reader-settings__actions--inline {
+  justify-content: flex-start;
+  margin-top: 16px;
+  padding: 0;
+  border-top: 0;
+  background: transparent;
+}
+
 @media (max-width: 640px) {
   .reader-home__content {
     width: min(100% - 36px, 520px);

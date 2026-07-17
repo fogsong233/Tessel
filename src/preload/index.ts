@@ -9,6 +9,7 @@ import {
   ReaderAiStreamRequest,
   AiProviderConfig,
   AppPreferences,
+  AppUpdateState,
   GitHubUploadConfig,
   WebDavSyncConfig,
   PdfDocumentMeta,
@@ -77,6 +78,14 @@ const api: SidelightApi = {
   listCodexModels: () => ipcRenderer.invoke('codex:listModels'),
   steerAiStream: (request: AiStreamSteerRequest) => ipcRenderer.invoke('ai:steerStream', request),
   cancelAiStream: (streamId: string) => ipcRenderer.invoke('ai:cancelStream', streamId),
+  getAppUpdateState: (): Promise<AppUpdateState> => ipcRenderer.invoke('app:update:getState'),
+  checkForAppUpdates: (): Promise<AppUpdateState> => ipcRenderer.invoke('app:update:check'),
+  installAppUpdate: (): Promise<void> => ipcRenderer.invoke('app:update:install'),
+  onAppUpdateState: (listener: (state: AppUpdateState) => void) => {
+    const channelListener = (_event: Electron.IpcRendererEvent, payload: AppUpdateState): void => listener(payload);
+    ipcRenderer.on('app:update:state', channelListener);
+    return () => ipcRenderer.removeListener('app:update:state', channelListener);
+  },
   onAiStreamEvent: (listener: (event: AiStreamEvent) => void) => {
     const channelListener = (_event: Electron.IpcRendererEvent, payload: AiStreamEvent): void => listener(payload);
     ipcRenderer.on('ai:stream:event', channelListener);

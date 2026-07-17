@@ -22,6 +22,7 @@ export type UiLanguage = 'en' | 'zh-CN';
 export type AiPreferredLanguage = 'English' | 'Chinese' | 'Simplified Chinese';
 export type TranslationBackend = 'provider' | 'codex';
 export type TranslationStatus = 'pending' | 'completed' | 'error';
+export type AppUpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'not-available' | 'unsupported' | 'error';
 
 export const pdfRangeChunkSize = 512 * 1024;
 
@@ -348,6 +349,15 @@ export interface AppPreferences {
   experimentalCodexAgent: ExperimentalCodexAgentPreferences;
 }
 
+export interface AppUpdateState {
+  status: AppUpdateStatus;
+  currentVersion: string;
+  availableVersion?: string;
+  releaseNotes?: string;
+  downloadPercent?: number;
+  message?: string;
+}
+
 export interface ExperimentalCodexAgentPreferences {
   enabled: boolean;
   /** @deprecated Migrated to chatModel on the next settings save. */
@@ -594,6 +604,10 @@ export interface SidelightApi {
   listCodexModels(): Promise<CodexModelInfo[]>;
   steerAiStream(request: AiStreamSteerRequest): Promise<void>;
   cancelAiStream(streamId: string): Promise<void>;
+  getAppUpdateState(): Promise<AppUpdateState>;
+  checkForAppUpdates(): Promise<AppUpdateState>;
+  installAppUpdate(): Promise<void>;
+  onAppUpdateState(listener: (state: AppUpdateState) => void): () => void;
   onAiStreamEvent(listener: (event: AiStreamEvent) => void): () => void;
   onLibraryChanged(listener: () => void): () => void;
 }

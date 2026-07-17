@@ -70,15 +70,16 @@ jobs:
             artifact-path: |
               dist/*.dmg
               dist/*.zip
+              dist/latest-mac.yml
+              dist/*.blockmap
           - platform: windows
             os: windows-latest
             script: dist:win
             artifact-path: |
               dist/*.exe
               dist/*.zip
-    env:
-      CI: true
-      CSC_IDENTITY_AUTO_DISCOVERY: false
+              dist/latest.yml
+              dist/*.blockmap
 
     steps:
       - name: Checkout
@@ -87,7 +88,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.14.0
+          version: 11.1.2
           run_install: false
 
       - name: Setup Node
@@ -99,6 +100,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify macOS signing setup
+        if: matrix.platform == 'mac'
+        env:
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
+        run: |
+          if [ -z "$CSC_LINK" ]; then
+            echo "MACOS_CERTIFICATE is required for an auto-updatable macOS release. See .github/RELEASE.md." >&2
+            exit 1
+          fi
+
       - name: Set package version for this release
         shell: bash
         env:
@@ -106,6 +117,14 @@ jobs:
         run: npm pkg set version="$RELEASE_VERSION"
 
       - name: Package app
+        env:
+          CI: true
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.platform == 'windows' && 'false' || 'true' }}
+          CSC_LINK: ${{ matrix.platform == 'mac' && secrets.MACOS_CERTIFICATE || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.platform == 'mac' && secrets.MACOS_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.platform == 'mac' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_TEAM_ID || '' }}
         run: pnpm ${{ matrix.script }}
 
       - name: Upload package artifact

@@ -6,4 +6,4 @@
 - `Tessel.icns` is the macOS application icon, with 16px through 1024px Retina representations.
 - `Tessel.ico` is the Windows application icon, with 16px, 32px, 48px, 64px, 128px, and 256px representations.
 
-The renderer imports `src/renderer/src/assets/icons/tessel-logo.png`, a 1024px UI copy generated from the same master.
+The renderer imports `tessel-logo.png`, a 1024px UI copy generated from the same master.

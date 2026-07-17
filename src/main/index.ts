@@ -30,6 +30,7 @@ import { AiService } from './aiService';
 import { extractPdfPageTextRange, readPdfOutline } from './pdfTools';
 import { JsonWorkspaceStore } from './store';
 import { CodexAgent } from './codexAgent';
+import { AppUpdateService } from './appUpdater';
 
 if (process.env.SIDELIGHT_REMOTE_DEBUG_PORT) {
   app.commandLine.appendSwitch('remote-debugging-port', process.env.SIDELIGHT_REMOTE_DEBUG_PORT);
@@ -90,7 +91,7 @@ function createWindow(options: { documentId?: string } = {}): BrowserWindow {
     minHeight: isReaderWindow ? 720 : 460,
     title: isReaderWindow ? 'Tessel Reader' : 'Tessel',
     backgroundColor: '#f3f3f3',
-    icon: join(app.getAppPath(), 'build/icons/icon_256x256.png'),
+    icon: join(app.getAppPath(), 'src/assets/icons/icon_256x256.png'),
     paintWhenInitiallyHidden: true,
     show: !hideE2eWindows,
     skipTaskbar: hideE2eWindows,
@@ -131,7 +132,7 @@ function createWindow(options: { documentId?: string } = {}): BrowserWindow {
   return mainWindow;
 }
 
-function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent: CodexAgent): void {
+function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent: CodexAgent, appUpdater: AppUpdateService): void {
   const activeAiStreams = new Map<string, AbortController>();
   const openPdfPath = async (filePath: string) => {
     const result = await runStoreMutation(() => openPdfDocumentPath(store, filePath));
@@ -248,6 +249,9 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
     }
   });
   ipcMain.handle('media:resolveRemoteImage', (_event, url: string) => resolveRemoteImageDataUrl(url));
+  ipcMain.handle('app:update:getState', () => appUpdater.getState());
+  ipcMain.handle('app:update:check', () => appUpdater.check());
+  ipcMain.handle('app:update:install', () => appUpdater.install());
 
   ipcMain.handle('settings:getAiProvider', () => store.getSafeAiProvider());
   ipcMain.handle('settings:saveAiProvider', (_event, config: AiProviderConfig) => runStoreMutation(() => store.saveAiProvider(config)));
@@ -496,7 +500,13 @@ if (hasSingleInstanceLock) {
     );
     codexAgent.warmup();
 
-    registerIpc(store, aiService, codexAgent);
+    const appUpdater = new AppUpdateService((state) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        sendToRenderer(window.webContents, 'app:update:state', state);
+      }
+    });
+    registerIpc(store, aiService, codexAgent, appUpdater);
+    appUpdater.start();
     app.once('before-quit', () => {
       void codexAgent.shutdown();
     });

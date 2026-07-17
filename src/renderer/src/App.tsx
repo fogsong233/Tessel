@@ -34,6 +34,7 @@ import {
   AgentActivityEvent,
   AgentTimelineEntry,
   AppPreferences,
+  AppUpdateState,
   CodexAvailability,
   CodexConversationSettings,
   CodexModelInfo,
@@ -70,7 +71,7 @@ import { mergeNoteDocuments as mergeNotes } from '../../shared/notes';
 import { normalizeSelectionColors } from '../../shared/selectionColors';
 import { PdfReader, type PdfSelectionPayload } from './PdfReader';
 import { MarkdownView } from './MarkdownView';
-import tesselLogoUrl from './assets/icons/tessel-logo.png?url';
+import tesselLogoUrl from '../../assets/icons/tessel-logo.png?url';
 
 type TransientAidMode = Extract<AiMode, 'summarize' | 'translate'>;
 
@@ -1422,7 +1423,8 @@ function ReaderSettingsPanel({
   const [uiLanguage, setUiLanguage] = useState<UiLanguage>(preferences.uiLanguage);
   const [aiLanguage, setAiLanguage] = useState<AiPreferredLanguage>(preferences.aiLanguage);
   const [translationBackend, setTranslationBackend] = useState(preferences.translationBackend);
-  const [settingsSection, setSettingsSection] = useState<'provider' | 'codex' | 'sync' | 'language'>('provider');
+  const [settingsSection, setSettingsSection] = useState<'provider' | 'codex' | 'sync' | 'language' | 'updates'>('provider');
+  const [updateState, setUpdateState] = useState<AppUpdateState>();
   const [codexAvailability, setCodexAvailability] = useState<CodexAvailability>();
   const [codexModels, setCodexModels] = useState<CodexModelInfo[]>([]);
   const [codexEnabled, setCodexEnabled] = useState(preferences.experimentalCodexAgent.enabled);
@@ -1430,6 +1432,21 @@ function ReaderSettingsPanel({
   const [codexTranslationModel, setCodexTranslationModel] = useState(preferences.experimentalCodexAgent.translationModel ?? '');
   const [codexChatEffort, setCodexChatEffort] = useState(preferences.experimentalCodexAgent.chatReasoningEffort ?? '');
   const [codexTranslationEffort, setCodexTranslationEffort] = useState(preferences.experimentalCodexAgent.translationReasoningEffort ?? '');
+  const t = readerSettingsText(uiLanguage);
+
+  useEffect(() => {
+    let disposed = false;
+    void window.sidelight.getAppUpdateState().then((state) => {
+      if (!disposed) {
+        setUpdateState(state);
+      }
+    }).catch(() => undefined);
+    const unsubscribe = window.sidelight.onAppUpdateState((state) => setUpdateState(state));
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -1522,28 +1539,29 @@ function ReaderSettingsPanel({
     <div className="settings-overlay reader-settings-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="reader-settings" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <header className="reader-settings__header">
-          <div className="reader-settings__title"><Settings size={18} /><strong id="settings-title">Settings</strong></div>
-          <button type="button" className="icon-button" title="Close" onClick={onClose}><X size={16} /></button>
+          <div className="reader-settings__title"><Settings size={18} /><strong id="settings-title">{t.settings}</strong></div>
+          <button type="button" className="icon-button" title={t.close} onClick={onClose}><X size={16} /></button>
         </header>
         <form className="reader-settings__form" onSubmit={submit}>
           <div className="reader-settings__workspace">
-            <nav className="reader-settings__nav" aria-label="Settings sections">
-              <button className={settingsSection === 'provider' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('provider')}><Bot size={16} />Provider</button>
+            <nav className="reader-settings__nav" aria-label={t.settingsSections}>
+              <button className={settingsSection === 'provider' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('provider')}><Bot size={16} />{t.provider}</button>
               <button className={settingsSection === 'codex' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('codex')}><Sparkles size={16} />Codex</button>
-              <button className={settingsSection === 'sync' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('sync')}><Cloud size={16} />Sync</button>
-              <button className={settingsSection === 'language' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('language')}><LanguagesIcon size={16} />Language</button>
+              <button className={settingsSection === 'sync' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('sync')}><Cloud size={16} />{t.sync}</button>
+              <button className={settingsSection === 'language' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('language')}><LanguagesIcon size={16} />{t.language}</button>
+              <button className={settingsSection === 'updates' ? 'is-active' : ''} type="button" onClick={() => setSettingsSection('updates')}><RefreshCw size={16} />{t.updates}</button>
             </nav>
             <div className="reader-settings__body">
             {settingsSection === 'provider' && (
               <section className="reader-settings__section">
-              <div className="reader-settings__section-heading"><Bot size={17} /><div><strong>AI provider</strong><span>OpenAI-compatible</span></div></div>
+              <div className="reader-settings__section-heading"><Bot size={17} /><div><strong>{t.aiProvider}</strong><span>OpenAI-compatible</span></div></div>
               <div className="reader-settings__fields">
-                <label>Display name<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
-                <label>Temperature<input type="number" min="0" max="2" step="0.1" value={temperature} onChange={(event) => setTemperature(Number(event.target.value))} /></label>
-                <label className="reader-settings__wide">Base URL<input required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} /></label>
-                <label className="reader-settings__wide">API key<input type="password" value={apiKey} placeholder={provider.hasApiKey ? 'Stored. Enter a new key to replace it.' : ''} onChange={(event) => setApiKey(event.target.value)} /></label>
-                <label className="reader-settings__wide">Model
-                  <span className="reader-settings__model"><input required list="reader-model-options" value={model} onChange={(event) => setModel(event.target.value)} /><button className="quiet-button" type="button" onClick={() => void fetchModels()} disabled={loadingModels}>{loadingModels ? 'Loading...' : 'Fetch models'}</button></span>
+                <label>{t.displayName}<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
+                <label>{t.temperature}<input type="number" min="0" max="2" step="0.1" value={temperature} onChange={(event) => setTemperature(Number(event.target.value))} /></label>
+                <label className="reader-settings__wide">{t.baseUrl}<input required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} /></label>
+                <label className="reader-settings__wide">{t.apiKey}<input type="password" value={apiKey} placeholder={provider.hasApiKey ? t.storedKey : ''} onChange={(event) => setApiKey(event.target.value)} /></label>
+                <label className="reader-settings__wide">{t.model}
+                  <span className="reader-settings__model"><input required list="reader-model-options" value={model} onChange={(event) => setModel(event.target.value)} /><button className="quiet-button" type="button" onClick={() => void fetchModels()} disabled={loadingModels}>{loadingModels ? t.loading : t.fetchModels}</button></span>
                   <datalist id="reader-model-options">{models.map((item) => <option key={item.id} value={item.id}>{item.ownedBy}</option>)}</datalist>
                   {modelError && <small className="reader-settings__status is-error">{modelError}</small>}
                 </label>
@@ -1552,45 +1570,101 @@ function ReaderSettingsPanel({
             )}
             {settingsSection === 'codex' && (
               <section className="reader-settings__section">
-              <div className="reader-settings__section-heading"><Sparkles size={17} /><div><strong>Codex</strong><span>{codexAvailability?.available ? codexAvailability.version ?? 'Local CLI available' : codexAvailability?.reason ?? 'Checking local Codex CLI...'}</span></div><label className="reader-settings__switch"><input type="checkbox" checked={codexEnabled} disabled={!codexAvailability?.available} onChange={(event) => setCodexEnabled(event.target.checked)} />Enabled</label></div>
-              <div className="reader-settings__subsection"><strong>Chat</strong><div className="reader-settings__fields">
-                <label>Chat model<select value={codexChatModel} disabled={!codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexChatModel(event.target.value); setCodexChatEffort(''); }}><option value="">Codex default</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</select></label>
-                <label>Chat reasoning<select value={codexChatEffort} disabled={!codexEnabled || !codexAvailability?.available || chatEfforts.length === 0} onChange={(event) => setCodexChatEffort(event.target.value)}><option value="">Reader default (Low)</option>{chatEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort)}</option>)}</select></label>
+              <div className="reader-settings__section-heading"><Sparkles size={17} /><div><strong>Codex</strong><span>{codexAvailability?.available ? codexAvailability.version ?? t.codexAvailable : codexAvailability?.reason ?? t.codexChecking}</span></div><label className="reader-settings__switch"><input type="checkbox" checked={codexEnabled} disabled={!codexAvailability?.available} onChange={(event) => setCodexEnabled(event.target.checked)} />{t.enabled}</label></div>
+              <div className="reader-settings__subsection"><strong>{t.chat}</strong><div className="reader-settings__fields">
+                <label>{t.chatModel}<select value={codexChatModel} disabled={!codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexChatModel(event.target.value); setCodexChatEffort(''); }}><option value="">{t.codexDefault}</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</select></label>
+                <label>{t.chatReasoning}<select value={codexChatEffort} disabled={!codexEnabled || !codexAvailability?.available || chatEfforts.length === 0} onChange={(event) => setCodexChatEffort(event.target.value)}><option value="">{t.readerDefault}</option>{chatEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort, uiLanguage)}</option>)}</select></label>
               </div></div>
-              <div className="reader-settings__subsection"><strong>Translation</strong><div className="reader-settings__fields">
-                <label>Translation backend<select value={translationBackend} onChange={(event) => setTranslationBackend(event.target.value as AppPreferences['translationBackend'])}><option value="provider">AI provider</option><option value="codex" disabled={!codexEnabled || !codexAvailability?.available}>Codex</option></select></label>
-                <label>Translation model<select value={codexTranslationModel} disabled={translationBackend !== 'codex' || !codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexTranslationModel(event.target.value); setCodexTranslationEffort(''); }}><option value="">Fastest available</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</select></label>
-                <label>Translation reasoning<select value={codexTranslationEffort} disabled={translationBackend !== 'codex' || !codexEnabled || !codexAvailability?.available || translationEfforts.length === 0} onChange={(event) => setCodexTranslationEffort(event.target.value)}><option value="">Reader default (Low)</option>{translationEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort)}</option>)}</select></label>
+              <div className="reader-settings__subsection"><strong>{t.translation}</strong><div className="reader-settings__fields">
+                <label>{t.translationBackend}<select value={translationBackend} onChange={(event) => setTranslationBackend(event.target.value as AppPreferences['translationBackend'])}><option value="provider">{t.aiProvider}</option><option value="codex" disabled={!codexEnabled || !codexAvailability?.available}>Codex</option></select></label>
+                <label>{t.translationModel}<select value={codexTranslationModel} disabled={translationBackend !== 'codex' || !codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexTranslationModel(event.target.value); setCodexTranslationEffort(''); }}><option value="">{t.fastestAvailable}</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</select></label>
+                <label>{t.translationReasoning}<select value={codexTranslationEffort} disabled={translationBackend !== 'codex' || !codexEnabled || !codexAvailability?.available || translationEfforts.length === 0} onChange={(event) => setCodexTranslationEffort(event.target.value)}><option value="">{t.readerDefault}</option>{translationEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort, uiLanguage)}</option>)}</select></label>
               </div></div>
             </section>
             )}
             {settingsSection === 'sync' && (
             <section className="reader-settings__section">
-              <div className="reader-settings__section-heading"><Cloud size={17} /><div><strong>WebDAV sync</strong><span>Per-PDF metadata</span></div><label className="reader-settings__switch"><input type="checkbox" checked={syncEnabled} onChange={(event) => setSyncEnabled(event.target.checked)} />Enabled</label></div>
+              <div className="reader-settings__section-heading"><Cloud size={17} /><div><strong>{t.webDavSync}</strong><span>{t.perPdfMetadata}</span></div><label className="reader-settings__switch"><input type="checkbox" checked={syncEnabled} onChange={(event) => setSyncEnabled(event.target.checked)} />{t.enabled}</label></div>
               <div className="reader-settings__fields">
-                <label className="reader-settings__wide">Server URL<input value={webDavUrl} placeholder="https://dav.example.com/remote.php/dav/files/name" onChange={(event) => setWebDavUrl(event.target.value)} /></label>
-                <label>Folder<input value={webDavPath} placeholder="sidelight" onChange={(event) => setWebDavPath(event.target.value)} /></label>
-                <label>Username<input value={webDavUsername} onChange={(event) => setWebDavUsername(event.target.value)} /></label>
-                <label className="reader-settings__wide">Password<input type="password" value={webDavPassword} placeholder={webDavSync.hasPassword ? 'Stored. Enter a new password to replace it.' : ''} onChange={(event) => setWebDavPassword(event.target.value)} /></label>
+                <label className="reader-settings__wide">{t.serverUrl}<input value={webDavUrl} placeholder="https://dav.example.com/remote.php/dav/files/name" onChange={(event) => setWebDavUrl(event.target.value)} /></label>
+                <label>{t.folder}<input value={webDavPath} placeholder="tessel" onChange={(event) => setWebDavPath(event.target.value)} /></label>
+                <label>{t.username}<input value={webDavUsername} onChange={(event) => setWebDavUsername(event.target.value)} /></label>
+                <label className="reader-settings__wide">{t.password}<input type="password" value={webDavPassword} placeholder={webDavSync.hasPassword ? t.storedPassword : ''} onChange={(event) => setWebDavPassword(event.target.value)} /></label>
               </div>
             </section>
             )}
             {settingsSection === 'language' && (
             <section className="reader-settings__section">
-              <div className="reader-settings__section-heading"><LanguagesIcon size={17} /><div><strong>Language</strong><span>Interface and AI responses</span></div></div>
+              <div className="reader-settings__section-heading"><LanguagesIcon size={17} /><div><strong>{t.language}</strong><span>{t.languageDescription}</span></div></div>
               <div className="reader-settings__fields">
-                <label>UI language<select value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value as UiLanguage)}><option value="en">English</option><option value="zh-CN">简体中文</option></select></label>
-                <label>AI preferred language<select value={aiLanguage} onChange={(event) => setAiLanguage(event.target.value as AiPreferredLanguage)}><option value="Simplified Chinese">Simplified Chinese</option><option value="Chinese">Chinese</option><option value="English">English</option></select></label>
+                <label>{t.uiLanguage}<select value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value as UiLanguage)}><option value="en">English</option><option value="zh-CN">简体中文</option></select></label>
+                <label>{t.aiPreferredLanguage}<select value={aiLanguage} onChange={(event) => setAiLanguage(event.target.value as AiPreferredLanguage)}><option value="Simplified Chinese">简体中文</option><option value="Chinese">中文</option><option value="English">English</option></select></label>
+              </div>
+            </section>
+            )}
+            {settingsSection === 'updates' && (
+            <section className="reader-settings__section">
+              <div className="reader-settings__section-heading"><RefreshCw size={17} /><div><strong>{t.updates}</strong><span>{t.updateDescription}</span></div></div>
+              <div className="reader-settings__fields">
+                <label>{t.currentVersion}<input readOnly value={updateState?.currentVersion ?? '...'} /></label>
+                <label>{t.updateStatus}<input readOnly value={updateStatusText(updateState, t)} /></label>
+                {updateState?.availableVersion && <label>{t.availableVersion}<input readOnly value={updateState.availableVersion} /></label>}
+                {updateState?.releaseNotes && <label className="reader-settings__wide">{t.releaseNotes}<textarea readOnly rows={4} value={updateState.releaseNotes} /></label>}
+              </div>
+              <div className="reader-settings__actions reader-settings__actions--inline">
+                <button className="quiet-button" type="button" disabled={updateState?.status === 'checking' || updateState?.status === 'downloading'} onClick={() => void window.sidelight.checkForAppUpdates()}>{t.checkForUpdates}</button>
+                {updateState?.status === 'ready' && <button className="primary-button" type="button" onClick={() => void window.sidelight.installAppUpdate()}>{t.restartToUpdate}</button>}
               </div>
             </section>
             )}
             </div>
           </div>
-          <footer className="reader-settings__actions"><button className="quiet-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit">Save</button></footer>
+          <footer className="reader-settings__actions"><button className="quiet-button" type="button" onClick={onClose}>{t.cancel}</button><button className="primary-button" type="submit">{t.save}</button></footer>
         </form>
       </section>
     </div>
   );
+}
+
+function readerSettingsText(language: UiLanguage) {
+  if (language === 'zh-CN') {
+    return {
+      settings: '设置', close: '关闭', settingsSections: '设置分区', provider: '服务商', sync: '同步', language: '语言', updates: '更新',
+      aiProvider: 'AI 服务商', displayName: '显示名称', temperature: '温度', baseUrl: '基础 URL', apiKey: 'API 密钥', model: '模型', storedKey: '已保存。输入新密钥可替换。', loading: '加载中...', fetchModels: '获取模型',
+      codexAvailable: '本机 Codex CLI 可用', codexChecking: '正在检查本机 Codex CLI...', enabled: '启用', chat: '对话', chatModel: '对话模型', chatReasoning: '对话推理强度', codexDefault: 'Codex 默认', readerDefault: '阅读器默认（低）',
+      translation: '翻译', translationBackend: '翻译后端', translationModel: '翻译模型', translationReasoning: '翻译推理强度', fastestAvailable: '最快可用模型',
+      webDavSync: 'WebDAV 同步', perPdfMetadata: '按 PDF 保存元数据', serverUrl: '服务器 URL', folder: '文件夹', username: '用户名', password: '密码', storedPassword: '已保存。输入新密码可替换。',
+      languageDescription: '界面文本和 AI 回复', uiLanguage: '界面语言', aiPreferredLanguage: 'AI 首选语言',
+      updateDescription: '自动检查 GitHub Releases，并在下载完成后于重启时安装。', currentVersion: '当前版本', updateStatus: '更新状态', availableVersion: '可用版本', releaseNotes: '发行说明', checkForUpdates: '检查更新', restartToUpdate: '重启并更新', cancel: '取消', save: '保存',
+      updateUnsupported: '更新仅在已安装的正式版中可用。', updateChecking: '正在检查更新...', updateAvailable: '发现新版本，正在后台下载...', updateDownloading: (percent?: number) => `正在下载更新${percent === undefined ? '...' : `（${percent}%）`}`, updateReady: '更新已下载，重启即可安装。', updateCurrent: '已是最新版本。', updateError: '无法检查更新。'
+    };
+  }
+  return {
+    settings: 'Settings', close: 'Close', settingsSections: 'Settings sections', provider: 'Provider', sync: 'Sync', language: 'Language', updates: 'Updates',
+    aiProvider: 'AI provider', displayName: 'Display name', temperature: 'Temperature', baseUrl: 'Base URL', apiKey: 'API key', model: 'Model', storedKey: 'Stored. Enter a new key to replace it.', loading: 'Loading...', fetchModels: 'Fetch models',
+    codexAvailable: 'Local Codex CLI available', codexChecking: 'Checking local Codex CLI...', enabled: 'Enabled', chat: 'Chat', chatModel: 'Chat model', chatReasoning: 'Chat reasoning', codexDefault: 'Codex default', readerDefault: 'Reader default (Low)',
+    translation: 'Translation', translationBackend: 'Translation backend', translationModel: 'Translation model', translationReasoning: 'Translation reasoning', fastestAvailable: 'Fastest available',
+    webDavSync: 'WebDAV sync', perPdfMetadata: 'Per-PDF metadata', serverUrl: 'Server URL', folder: 'Folder', username: 'Username', password: 'Password', storedPassword: 'Stored. Enter a new password to replace it.',
+    languageDescription: 'Interface text and AI responses', uiLanguage: 'UI language', aiPreferredLanguage: 'AI preferred language',
+    updateDescription: 'Checks GitHub Releases automatically and installs after a downloaded update is restarted.', currentVersion: 'Current version', updateStatus: 'Update status', availableVersion: 'Available version', releaseNotes: 'Release notes', checkForUpdates: 'Check for updates', restartToUpdate: 'Restart to update', cancel: 'Cancel', save: 'Save',
+    updateUnsupported: 'Updates are available in installed releases only.', updateChecking: 'Checking for updates...', updateAvailable: 'A new version is downloading in the background...', updateDownloading: (percent?: number) => `Downloading update${percent === undefined ? '...' : ` (${percent}%)`}`, updateReady: 'Update downloaded. Restart to install.', updateCurrent: 'You are up to date.', updateError: 'Unable to check for updates.'
+  };
+}
+
+function updateStatusText(state: AppUpdateState | undefined, text: ReturnType<typeof readerSettingsText>): string {
+  if (!state) {
+    return text.updateChecking;
+  }
+  switch (state.status) {
+    case 'unsupported': return text.updateUnsupported;
+    case 'checking': return text.updateChecking;
+    case 'available': return text.updateAvailable;
+    case 'downloading': return text.updateDownloading(state.downloadPercent);
+    case 'ready': return text.updateReady;
+    case 'not-available': return text.updateCurrent;
+    case 'error': return text.updateError;
+    default: return text.updateChecking;
+  }
 }
 
 function appText(language: UiLanguage) {
@@ -3263,7 +3337,14 @@ function clampPageNumber(value: number, min = 1): number {
   return Math.max(min, page);
 }
 
-function reasoningEffortLabel(effort: string): string {
+function reasoningEffortLabel(effort: string, language: UiLanguage = 'en'): string {
+  if (language === 'zh-CN') {
+    const chinese = { none: '无', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最大', ultra: '极限' };
+    const label = chinese[effort as keyof typeof chinese];
+    if (label) {
+      return label;
+    }
+  }
   switch (effort) {
     case 'low': return 'Low';
     case 'medium': return 'Medium';

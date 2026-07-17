@@ -263,7 +263,7 @@ test.describe('PDF reader flow', () => {
           messages: [{
             id: 'msg_visual_source_fixture',
             role: 'assistant',
-            content: 'This is the public Aston Zhang photo from [Amazon Science](https://www.amazon.science/latest-news/aws-scientist-wins-iclr-outstanding-paper-award).',
+            content: 'This is a public professor photo from [Fudan University](https://cs.fudan.edu.cn/qxp/).',
             createdAt: now
           }],
           createdAt: now,

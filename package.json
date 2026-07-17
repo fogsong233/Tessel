@@ -5,7 +5,7 @@
   "author": "Tessel contributors",
   "description": "A focused PDF reader with persistent AI conversations and reading progress.",
   "main": "./out/main/index.js",
-  "packageManager": "pnpm@10.14.0",
+  "packageManager": "pnpm@11.1.2",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "pnpm typecheck && electron-vite build",
@@ -36,6 +36,7 @@
     "@replit/codemirror-vim": "^6.3.0",
     "@vitejs/plugin-react": "^5.0.0",
     "electron-vite": "^4.0.0",
+    "electron-updater": "^6.8.9",
     "katex": "^0.16.22",
     "lucide-react": "^0.468.0",
     "pdf-lib": "^1.17.1",
@@ -68,13 +69,21 @@
     },
     "files": [
       "out/**",
-      "build/icons/icon_256x256.png",
+      "src/assets/icons/icon_256x256.png",
       "package.json"
     ],
     "asar": true,
     "npmRebuild": false,
+    "electronUpdaterCompatibility": ">=2.16",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "fogsong233",
+        "repo": "notetaker"
+      }
+    ],
     "mac": {
-      "icon": "build/icons/Tessel.icns",
+      "icon": "src/assets/icons/Tessel.icns",
       "target": [
         "dmg",
         "zip"
@@ -82,7 +91,7 @@
       "category": "public.app-category.productivity"
     },
     "win": {
-      "icon": "build/icons/Tessel.ico",
+      "icon": "src/assets/icons/Tessel.ico",
       "target": [
         "nsis",
         "zip"
@@ -98,9 +107,6 @@
     "onlyBuiltDependencies": [
       "electron",
       "esbuild"
-    ],
-    "ignoredBuiltDependencies": [
-      "electron-winstaller"
     ]
   }
 }

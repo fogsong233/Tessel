@@ -287,12 +287,23 @@ function readerText(language: UiLanguage) {
       codexReasoning: '推理强度',
       codexPermissions: '权限',
       codexDefaultModel: 'Codex 默认模型',
-      codexDefaultEffort: '阅读器默认（Low）',
+      codexDefaultEffort: '阅读器默认（低）',
+      default: '默认',
       permissionReadOnly: '只读',
       permissionWorkspace: 'PDF 工作区',
       permissionFullAccess: '完整访问',
+      permissionReadOnlyDescription: '阅读 PDF 和搜索内容，不会修改本机文件',
+      permissionWorkspaceDescription: '只在此 PDF 的私有分析目录中工作',
+      permissionFullAccessDescription: '可访问和修改这台电脑上的任意文件',
       fullAccessWarning: '当前对话可以访问并修改本机任意文件。',
       slashCommands: '对话命令',
+      slashStatus: '显示模型、推理强度和权限',
+      slashPs: '显示此对话中的活动任务',
+      slashStop: '停止当前 Codex 对话',
+      guideActiveTurn: '引导当前 Codex 对话',
+      messageCodex: '给 Codex 发消息，或输入 / 查看命令',
+      sendGuidance: '发送引导',
+      useSettingsModel: '使用“设置”中选择的模型',
       delete: '删除',
       deleteImage: '删除图片',
       deleteMark: '删除标注',
@@ -410,11 +421,22 @@ function readerText(language: UiLanguage) {
     codexPermissions: 'Permissions',
     codexDefaultModel: 'Codex default model',
     codexDefaultEffort: 'Reader default (Low)',
+    default: 'Default',
     permissionReadOnly: 'Read only',
     permissionWorkspace: 'PDF workspace',
     permissionFullAccess: 'Full access',
+    permissionReadOnlyDescription: 'Read the PDF and search without changing local files',
+    permissionWorkspaceDescription: "Work only inside this PDF's private analysis folder",
+    permissionFullAccessDescription: 'Access and modify files anywhere on this computer',
     fullAccessWarning: 'This conversation can access and modify any local file.',
     slashCommands: 'Chat commands',
+    slashStatus: 'Show model, reasoning, and permissions',
+    slashPs: 'Show active tasks in this conversation',
+    slashStop: 'Stop the active Codex turn',
+    guideActiveTurn: 'Guide the active Codex turn',
+    messageCodex: 'Message Codex or type / for commands',
+    sendGuidance: 'Send guidance',
+    useSettingsModel: 'Use the model selected in Settings',
     delete: 'Delete',
     deleteImage: 'Delete image',
     deleteMark: 'Delete mark',
@@ -2470,6 +2492,7 @@ export function PdfReader({
                         noteEditorNote={noteEditorNote}
                         noteBusy={noteBusy}
                         pdfReadingSignal={pdfReadingSignal}
+                        uiLanguage={uiLanguage}
                         text={t}
                         pageConversationCount={pageConversationCount}
                         activeTab={activeDockTab}
@@ -2882,6 +2905,7 @@ function ReaderDock({
   noteBusy,
   pdfReadingSignal,
   pageConversationCount,
+  uiLanguage,
   text,
   activeTab,
   tab,
@@ -2929,6 +2953,7 @@ function ReaderDock({
   noteBusy: boolean;
   pdfReadingSignal: number;
   pageConversationCount: number;
+  uiLanguage: UiLanguage;
   text: ReaderText;
   activeTab?: DockTab;
   tab: DockTab;
@@ -3027,6 +3052,7 @@ function ReaderDock({
           conversation={activeConversation}
           composerPrefill={composerPrefill?.conversationId === activeConversation.id ? composerPrefill : undefined}
           pdfReadingSignal={pdfReadingSignal}
+          uiLanguage={uiLanguage}
           text={t}
           onClose={onCloseConversation}
           onPin={() => onPinConversation(activeConversation)}
@@ -4000,6 +4026,7 @@ function DockChatPanel({
   conversation,
   composerPrefill,
   pdfReadingSignal,
+  uiLanguage,
   text,
   onClose,
   onPin,
@@ -4013,6 +4040,7 @@ function DockChatPanel({
   conversation: Conversation;
   composerPrefill?: { text: string; nonce: string };
   pdfReadingSignal: number;
+  uiLanguage: UiLanguage;
   text: ReaderText;
   onClose(): void;
   onPin(): void;
@@ -4179,7 +4207,7 @@ function DockChatPanel({
     if (command === '/status') {
       setCommandNotice([
         selectedModel?.displayName ?? codexSettings.model ?? text.codexDefaultModel,
-        codexSettings.effort ? reasoningEffortLabel(codexSettings.effort) : text.codexDefaultEffort,
+        codexSettings.effort ? reasoningEffortLabel(codexSettings.effort, uiLanguage) : text.codexDefaultEffort,
         permissionLabel(permissionMode, text)
       ].join(' · '));
       return true;
@@ -4455,9 +4483,9 @@ function DockChatPanel({
             }}
             onPaste={(event) => attachFiles(event.clipboardData.files)}
             placeholder={isCodex && canStopGeneration
-              ? 'Guide the active Codex turn'
+              ? text.guideActiveTurn
               : isCodex
-                ? 'Message Codex or type / for commands'
+                ? text.messageCodex
                 : text.messageSidelight}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !isComposingKeyboardEvent(event, composingRef.current)) {
@@ -4482,8 +4510,8 @@ function DockChatPanel({
               type="submit"
               rounded
               className={`chat-send-button${canStopGeneration ? ' chat-steer-button' : ''}`}
-              title={canStopGeneration ? 'Send guidance' : text.send}
-              aria-label={canStopGeneration ? 'Send guidance' : text.send}
+              title={canStopGeneration ? text.sendGuidance : text.send}
+              aria-label={canStopGeneration ? text.sendGuidance : text.send}
               disabled={(!canStopGeneration && busy) || (!draft.trim() && attachments.length === 0)}
             >
               <ArrowUp size={17} />
@@ -4505,7 +4533,7 @@ function DockChatPanel({
                 >
                   <Cpu size={13} />
                   <span>{selectedModel?.displayName ?? codexSettings.model ?? text.codexDefaultModel}</span>
-                  <small><Gauge size={11} />{codexSettings.effort ? reasoningEffortLabel(codexSettings.effort) : text.codexDefaultEffort}</small>
+                  <small><Gauge size={11} />{codexSettings.effort ? reasoningEffortLabel(codexSettings.effort, uiLanguage) : text.codexDefaultEffort}</small>
                   <ChevronDown size={13} />
                 </button>
                 <button
@@ -4540,7 +4568,7 @@ function DockChatPanel({
                         setConfigMenu(undefined);
                       }}
                     >
-                      <span><strong>{text.codexDefaultModel}</strong><small>Use the model selected in Settings</small></span>
+                      <span><strong>{text.codexDefaultModel}</strong><small>{text.useSettingsModel}</small></span>
                       {!codexSettings.model ? <Check size={14} /> : null}
                     </button>
                     {codexModels.map((model) => (
@@ -4562,7 +4590,7 @@ function DockChatPanel({
                   </div>
                   <div className="chat-config-popover__heading chat-config-popover__heading--reasoning">
                     <span>{text.codexReasoning}</span>
-                    <small>{codexSettings.effort ? reasoningEffortLabel(codexSettings.effort) : text.codexDefaultEffort}</small>
+                    <small>{codexSettings.effort ? reasoningEffortLabel(codexSettings.effort, uiLanguage) : text.codexDefaultEffort}</small>
                   </div>
                   <div className="chat-effort-options" role="group" aria-label={text.codexReasoning}>
                     <button
@@ -4570,7 +4598,7 @@ function DockChatPanel({
                       className={!codexSettings.effort ? 'is-selected' : ''}
                       onClick={() => updateCodexSettings({ effort: undefined })}
                     >
-                      Default
+                      {text.default}
                     </button>
                     {reasoningEfforts.map((effort) => (
                       <button
@@ -4579,7 +4607,7 @@ function DockChatPanel({
                         key={effort}
                         onClick={() => updateCodexSettings({ effort })}
                       >
-                        {reasoningEffortLabel(effort)}
+                        {reasoningEffortLabel(effort, uiLanguage)}
                       </button>
                     ))}
                   </div>
@@ -4606,7 +4634,7 @@ function DockChatPanel({
                     >
                       <span>
                         <strong>{permissionLabel(permission, text)}</strong>
-                        <small>{permissionDescription(permission)}</small>
+                        <small>{permissionDescription(permission, text)}</small>
                       </span>
                       {permissionMode === permission ? <Check size={14} /> : null}
                     </button>
@@ -4625,9 +4653,9 @@ function DockChatPanel({
 function chatSlashCommands(text: ReaderText): Array<{ command: string; description: string }> {
   return [
     { command: '/permissions', description: text.codexPermissions },
-    { command: '/status', description: 'Show model, reasoning, and permissions' },
-    { command: '/ps', description: 'Show active tasks in this conversation' },
-    { command: '/stop', description: 'Stop the active Codex turn' }
+    { command: '/status', description: text.slashStatus },
+    { command: '/ps', description: text.slashPs },
+    { command: '/stop', description: text.slashStop }
   ];
 }
 
@@ -4655,17 +4683,24 @@ function permissionLabel(permission: CodexPermissionMode, text: ReaderText): str
   return text.permissionWorkspace;
 }
 
-function permissionDescription(permission: CodexPermissionMode): string {
+function permissionDescription(permission: CodexPermissionMode, text: ReaderText): string {
   if (permission === 'read-only') {
-    return 'Read the PDF and search without changing local files';
+    return text.permissionReadOnlyDescription;
   }
   if (permission === 'full-access') {
-    return 'Access and modify files anywhere on this computer';
+    return text.permissionFullAccessDescription;
   }
-  return "Work only inside this PDF's private analysis folder";
+  return text.permissionWorkspaceDescription;
 }
 
-function reasoningEffortLabel(effort: string): string {
+function reasoningEffortLabel(effort: string, language: UiLanguage = 'en'): string {
+  if (language === 'zh-CN') {
+    const chinese = { none: '无', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最大', ultra: '极限' };
+    const label = chinese[effort as keyof typeof chinese];
+    if (label) {
+      return label;
+    }
+  }
   switch (effort) {
     case 'none': return 'None';
     case 'minimal': return 'Minimal';
