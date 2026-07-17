@@ -6341,23 +6341,17 @@ body.is-resizing-workspace-block * {
 }
 
 .tessel-brand-mark {
-  display: grid;
-  place-items: center;
+  display: block;
   width: 24px;
   height: 24px;
-  color: #ffffff;
   border-radius: 5px;
-  background: #202423;
-  font-size: 12px;
-  font-weight: 790;
-  line-height: 1;
+  object-fit: contain;
 }
 
 .tessel-brand-mark--large {
   width: 46px;
   height: 46px;
   border-radius: 7px;
-  font-size: 21px;
 }
 
 .reader-settings {

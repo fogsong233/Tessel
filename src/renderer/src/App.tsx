@@ -70,6 +70,7 @@ import { mergeNoteDocuments as mergeNotes } from '../../shared/notes';
 import { normalizeSelectionColors } from '../../shared/selectionColors';
 import { PdfReader, type PdfSelectionPayload } from './PdfReader';
 import { MarkdownView } from './MarkdownView';
+import tesselLogoUrl from './assets/icons/tessel-logo.png?url';
 
 type TransientAidMode = Extract<AiMode, 'summarize' | 'translate'>;
 
@@ -1288,12 +1289,12 @@ export function App(): ReactElement {
       <main className="app-shell">
         <section className="reader-home" aria-label="PDF reader start">
           <div className="reader-home__brand">
-            <span className="tessel-brand-mark" aria-hidden="true">T</span>
+            <img className="tessel-brand-mark" src={tesselLogoUrl} alt="" />
             <strong>Tessel</strong>
           </div>
           <div className="reader-home__content">
             <div className="reader-home__identity">
-              <span className="tessel-brand-mark tessel-brand-mark--large" aria-hidden="true">T</span>
+              <img className="tessel-brand-mark tessel-brand-mark--large" src={tesselLogoUrl} alt="" />
               <div>
                 <span>PDF reader</span>
                 <h1>Tessel</h1>

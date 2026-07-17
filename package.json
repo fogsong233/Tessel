@@ -68,11 +68,13 @@
     },
     "files": [
       "out/**",
+      "build/icons/icon_256x256.png",
       "package.json"
     ],
     "asar": true,
     "npmRebuild": false,
     "mac": {
+      "icon": "build/icons/Tessel.icns",
       "target": [
         "dmg",
         "zip"
@@ -80,6 +82,7 @@
       "category": "public.app-category.productivity"
     },
     "win": {
+      "icon": "build/icons/Tessel.ico",
       "target": [
         "nsis",
         "zip"

@@ -90,6 +90,7 @@ function createWindow(options: { documentId?: string } = {}): BrowserWindow {
     minHeight: isReaderWindow ? 720 : 460,
     title: isReaderWindow ? 'Tessel Reader' : 'Tessel',
     backgroundColor: '#f3f3f3',
+    icon: join(app.getAppPath(), 'build/icons/icon_256x256.png'),
     paintWhenInitiallyHidden: true,
     show: !hideE2eWindows,
     skipTaskbar: hideE2eWindows,
