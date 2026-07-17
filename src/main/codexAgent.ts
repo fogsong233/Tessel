@@ -250,6 +250,9 @@ export class CodexAgent {
       runtimeWorkspaceRoots: [documentWorkspace],
       sandbox: codexSandboxMode(input.permissionMode),
       approvalPolicy: 'never',
+      config: {
+        web_search: 'live'
+      },
       ...(input.transient ? { ephemeral: true } : {}),
       developerInstructions: [
         'You are Tessel Codex, an experimental PDF reading agent.',
@@ -938,7 +941,12 @@ function execArgs(input: CodexStreamRequest, workspaceDirectory: string, prompt:
     '--config',
     `sandbox_mode="${sandboxMode}"`,
     '--config',
-    'approval_policy="never"'
+    'approval_policy="never"',
+    '--config',
+    'web_search="live"',
+    ...(sandboxMode === 'workspace-write'
+      ? ['--config', 'sandbox_workspace_write.network_access=true']
+      : [])
   ];
   const imageArgs = imagePaths.flatMap((imagePath) => ['--image', imagePath]);
   if (input.codexThreadId && !input.transient) {
@@ -963,6 +971,11 @@ function execArgs(input: CodexStreamRequest, workspaceDirectory: string, prompt:
     sandboxMode,
     '--config',
     'approval_policy="never"',
+    '--config',
+    'web_search="live"',
+    ...(sandboxMode === 'workspace-write'
+      ? ['--config', 'sandbox_workspace_write.network_access=true']
+      : []),
     '--cd',
     workspaceDirectory,
     ...(input.transient ? ['--ephemeral'] : []),
