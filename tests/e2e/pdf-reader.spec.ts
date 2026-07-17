@@ -89,6 +89,50 @@ test.describe('PDF reader flow', () => {
     await expect(page.locator('.workspace-block-card--conversation')).toBeVisible();
   });
 
+  test('renders image pins as borderless media with hover controls and zoom', async () => {
+    const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+      documents: Array<{ id: string }>;
+    };
+    const documentId = store.documents[0]?.id;
+    expect(documentId).toBeTruthy();
+    await page.evaluate(async (documentId) => {
+      const now = new Date().toISOString();
+      await window.sidelight.saveWorkspaceBlock({
+        block: {
+          id: 'image_pin_fixture',
+          documentId,
+          kind: 'image',
+          anchor: 'page',
+          sourceKind: 'manual',
+          contentKind: 'image',
+          pageNumber: 1,
+          title: 'Fixture image',
+          payload: {
+            name: 'fixture.png',
+            mimeType: 'image/png',
+            dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2kQAAAABJRU5ErkJggg=='
+          },
+          x: -4200,
+          y: 120,
+          width: 320,
+          height: 220,
+          createdAt: now,
+          updatedAt: now
+        }
+      });
+    }, documentId!);
+
+    await page.reload();
+    const card = page.locator('.workspace-block-card--image');
+    await expect(card).toBeVisible();
+    await expect(card).toHaveCSS('border-top-width', '0px');
+    await card.hover();
+    await expect(card.getByTitle('Copy image')).toBeVisible();
+    const zoom = card.getByLabel('Zoom image');
+    await zoom.fill('150');
+    await expect(card.locator('img')).toHaveAttribute('style', /width: 150%/);
+  });
+
   test('renders Codex output and activity in a collapsible timeline', async () => {
     await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
     const documentId = `pdf_${createHash('sha256').update(await readFile(pdfPath)).digest('hex')}`;

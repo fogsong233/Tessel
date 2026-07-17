@@ -127,7 +127,7 @@ export function normalizeWorkspaceBlock(block: WorkspaceBlock): WorkspaceBlock {
   return {
     ...block,
     contentKind: block.contentKind ?? spec.defaultContentKind,
-    x: Math.max(-2400, Math.min(3600, Math.floor(block.x))),
+    x: Math.max(-4800, Math.min(4800, Math.floor(block.x))),
     y: Math.max(0, Math.floor(block.y)),
     width: Math.max(spec.minWidth, Math.min(spec.maxWidth, Math.floor(block.width))),
     height: block.height === undefined

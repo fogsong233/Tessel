@@ -42,6 +42,7 @@ import {
   ChevronsRight,
   Check,
   Command,
+  Copy,
   Cpu,
   Gauge,
   ArrowUp,
@@ -59,6 +60,7 @@ import {
   Settings,
   ShieldCheck,
   Pin,
+  PinOff,
   Quote,
   Sparkles,
   Square,
@@ -292,6 +294,7 @@ function readerText(language: UiLanguage) {
       fullAccessWarning: '当前对话可以访问并修改本机任意文件。',
       slashCommands: '对话命令',
       delete: '删除',
+      deleteImage: '删除图片',
       deleteMark: '删除标注',
       deleteNote: '删除笔记',
       editing: '编辑中',
@@ -364,6 +367,7 @@ function readerText(language: UiLanguage) {
 	      toolReadOutline: '查看目录',
       pinToCanvas: '贴到学习空间',
       pinImageToCanvas: '贴图片到学习空间',
+      copyImage: '复制图片',
       moveBlock: '移动卡片',
       resizeBlock: '调整卡片宽度',
       unpinFromCanvas: '从学习空间移除',
@@ -378,6 +382,7 @@ function readerText(language: UiLanguage) {
       visibleNotes: '可见笔记',
       visibleOnPage: (count: number) => `${count} 条在当前页可见`,
       zoomIn: '放大',
+      zoomImage: '缩放图片',
       zoomOut: '缩小'
     };
   }
@@ -411,6 +416,7 @@ function readerText(language: UiLanguage) {
     fullAccessWarning: 'This conversation can access and modify any local file.',
     slashCommands: 'Chat commands',
     delete: 'Delete',
+    deleteImage: 'Delete image',
     deleteMark: 'Delete mark',
     deleteNote: 'Delete note',
     editing: 'Editing',
@@ -483,6 +489,7 @@ function readerText(language: UiLanguage) {
 	    toolReadOutline: 'Read outline',
     pinToCanvas: 'Pin to learning space',
     pinImageToCanvas: 'Pin image to learning space',
+    copyImage: 'Copy image',
     moveBlock: 'Move block',
     resizeBlock: 'Resize block',
     unpinFromCanvas: 'Remove from learning space',
@@ -497,6 +504,7 @@ function readerText(language: UiLanguage) {
     visibleNotes: 'Visible notes',
     visibleOnPage: (count: number) => `${count} visible on this page`,
     zoomIn: 'Zoom in',
+    zoomImage: 'Zoom image',
     zoomOut: 'Zoom out'
   };
 }
@@ -695,7 +703,7 @@ export function PdfReader({
       return Math.max(maxGutter, Math.abs(block.x) + 48);
     }, 0);
 
-    return neededGutter > 0 ? Math.max(420, neededGutter) : 0;
+    return neededGutter > 0 ? Math.max(560, neededGutter) : 0;
   }, [effectiveWorkspaceBlocks]);
   const chatPanelOpen = chatOpen && Boolean(activeConversation);
   const hasTransientAid = Boolean(transientAid);
@@ -3705,6 +3713,7 @@ function WorkspaceBlockLayer({
   onSave(block: WorkspaceBlock): void;
 }): ReactElement {
   const [drafts, setDrafts] = useState<Record<string, Partial<Pick<WorkspaceBlock, 'x' | 'y' | 'width'>>>>({});
+  const [imageZoom, setImageZoom] = useState<Record<string, number>>({});
   const visibleBlocks = blocks.filter((block) => block.anchor === 'page' && layouts[block.id]);
   const displayPlacements = new Map<string, { left: number; top: number; width: number }>();
   const placedByLane = new Map<string, Array<{ left: number; right: number; top: number; bottom: number }>>();
@@ -3774,7 +3783,7 @@ function WorkspaceBlockLayer({
     let nextY = originY;
 
     const move = (moveEvent: MouseEvent): void => {
-      nextX = clamp(originX + moveEvent.clientX - startX, -2400, 3600);
+      nextX = clamp(originX + moveEvent.clientX - startX, -4800, 4800);
       nextY = Math.max(0, originY + moveEvent.clientY - startY);
       setDrafts((current) => ({
         ...current,
@@ -3847,11 +3856,27 @@ function WorkspaceBlockLayer({
     window.addEventListener('mouseup', stop, { once: true });
   };
 
+  const copyImage = async (dataUrl: string): Promise<void> => {
+    try {
+      const response = await fetch(dataUrl);
+      const blob = await response.blob();
+      if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+        return;
+      }
+      await navigator.clipboard?.writeText(dataUrl);
+    } catch {
+      await navigator.clipboard?.writeText(dataUrl).catch(() => undefined);
+    }
+  };
+
   return (
     <div className="workspace-block-layer" aria-hidden={visibleBlocks.length === 0}>
       {visibleBlocks.map((block) => {
         const placement = displayPlacements.get(block.id);
         const imagePayload = imageBlockPayload(block);
+        const isImage = block.kind === 'image' && Boolean(imagePayload?.dataUrl);
+        const zoom = imageZoom[block.id] ?? 100;
         return (
           <article
             key={block.id}
@@ -3872,32 +3897,59 @@ function WorkspaceBlockLayer({
               aria-label={text.moveBlock}
               onMouseDown={(event) => startMove(block, event)}
             />
-            <button
-              type="button"
-              className="workspace-block-card__body"
-              onClick={() => openBlock(block)}
-            >
-              <span className="workspace-block-card__meta">
-                {workspaceBlockLabel(block, text)}
-                {block.pageNumber ? ` · p.${block.pageNumber}` : ''}
-              </span>
-              <strong>{block.title}</strong>
-              {block.kind === 'image' && imagePayload?.dataUrl && (
-                <span className="workspace-block-card__image">
-                  <img src={imagePayload.dataUrl} alt={imagePayload.name ?? block.title} />
-                </span>
-              )}
-              {block.body && <span>{block.body}</span>}
-            </button>
-            <button
-              type="button"
-              className="workspace-block-card__remove"
-              title={text.unpinFromCanvas}
-              aria-label={text.unpinFromCanvas}
-              onClick={() => onDelete(block.id)}
-            >
-              <X size={13} />
-            </button>
+            {isImage && imagePayload?.dataUrl ? (
+              <>
+                <div className="workspace-block-card__image" aria-label={imagePayload.name ?? block.title}>
+                  <img
+                    src={imagePayload.dataUrl}
+                    alt={imagePayload.name ?? block.title}
+                    style={{ width: `${zoom}%` }}
+                  />
+                </div>
+                <div className="workspace-block-card__image-actions">
+                  <button type="button" title={text.unpinFromCanvas} aria-label={text.unpinFromCanvas} onClick={() => onDelete(block.id)}><PinOff size={14} /></button>
+                  <button type="button" title={text.deleteImage} aria-label={text.deleteImage} onClick={() => onDelete(block.id)}><Trash2 size={14} /></button>
+                  <button type="button" title={text.copyImage} aria-label={text.copyImage} onClick={() => void copyImage(imagePayload.dataUrl!)}><Copy size={14} /></button>
+                </div>
+                <label className="workspace-block-card__image-zoom" title={text.zoomImage}>
+                  <Minus size={13} />
+                  <input
+                    aria-label={text.zoomImage}
+                    type="range"
+                    min="50"
+                    max="200"
+                    value={zoom}
+                    onChange={(event) => setImageZoom((current) => ({ ...current, [block.id]: Number(event.target.value) }))}
+                  />
+                  <Plus size={13} />
+                  <span>{zoom}%</span>
+                </label>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="workspace-block-card__body"
+                  onClick={() => openBlock(block)}
+                >
+                  <span className="workspace-block-card__meta">
+                    {workspaceBlockLabel(block, text)}
+                    {block.pageNumber ? ` · p.${block.pageNumber}` : ''}
+                  </span>
+                  <strong>{block.title}</strong>
+                  {block.body && <span>{block.body}</span>}
+                </button>
+                <button
+                  type="button"
+                  className="workspace-block-card__remove"
+                  title={text.unpinFromCanvas}
+                  aria-label={text.unpinFromCanvas}
+                  onClick={() => onDelete(block.id)}
+                >
+                  <X size={13} />
+                </button>
+              </>
+            )}
             <button
               type="button"
               className="workspace-block-card__resize"

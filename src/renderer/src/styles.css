@@ -1720,7 +1720,7 @@ input:disabled {
 .pdf-stage {
   --dock-lane-width: 372px;
   --dock-gap: 28px;
-  --canvas-left-gutter: clamp(28px, 4vw, 72px);
+  --canvas-left-gutter: max(180px, calc((100vw - 980px) / 2));
   --canvas-right-gutter: 112px;
   display: block;
   background: #dddddd;
@@ -7534,7 +7534,7 @@ body.is-resizing-workspace-block * {
 /* Canvas model: the dock belongs to the PDF's horizontal canvas, but stays vertically pinned. */
 .pdf-stage {
   --dock-gap: 28px;
-  --canvas-left-gutter: clamp(28px, 4vw, 72px);
+  --canvas-left-gutter: max(180px, calc((100vw - 980px) / 2));
   --canvas-right-gutter: 112px;
 }
 
@@ -8401,31 +8401,126 @@ body.is-resizing-workspace-block * {
 }
 
 .workspace-block-card--image {
-  min-height: 210px;
-}
-
-.workspace-block-card--image .workspace-block-card__body {
-  gap: 8px;
-}
-
-.workspace-block-card--image .workspace-block-card__body:hover {
+  display: block;
+  min-height: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
   background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.workspace-block-card--image:hover {
+  border-color: transparent;
+  background: transparent;
+}
+
+.workspace-block-card--image .workspace-block-card__drag {
+  left: 0;
+  right: 0;
+}
+
+.workspace-block-card--image .workspace-block-card__drag::before {
+  opacity: 0;
 }
 
 .workspace-block-card__image {
   display: block;
   min-width: 0;
-  overflow: hidden;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-tight);
-  background: var(--ui-surface-soft);
+  max-height: 520px;
+  overflow: auto;
+  background: transparent;
 }
 
 .workspace-block-card__image img {
   display: block;
-  width: 100%;
-  max-height: 260px;
+  min-width: 100%;
+  max-width: none;
+  max-height: none;
   object-fit: contain;
+}
+
+.workspace-block-card__image-actions {
+  position: absolute;
+  z-index: 4;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.workspace-block-card--image:hover .workspace-block-card__image-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.workspace-block-card__image-actions button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: #343936;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+}
+
+.workspace-block-card__image-actions button:hover {
+  color: #111714;
+  background: #ffffff;
+}
+
+.workspace-block-card__image-zoom {
+  position: absolute;
+  z-index: 4;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  color: #343936;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.workspace-block-card--image:hover .workspace-block-card__image-zoom {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.workspace-block-card__image-zoom input {
+  width: 78px;
+  accent-color: #2d5140;
+}
+
+.workspace-block-card__image-zoom span {
+  min-width: 30px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-block-card--image .workspace-block-card__resize {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.workspace-block-card--image:hover .workspace-block-card__resize {
+  opacity: 1;
 }
 
 /* Library home layout: flatter dock-like rhythm with fixed utility columns. */
