@@ -838,6 +838,9 @@ function normalizeAppPreferences(config: AppPreferences): AppPreferences {
     appearance: normalizeAppearancePreferences(config.appearance),
     experimentalCodexAgent: {
       enabled: Boolean(config.experimentalCodexAgent?.enabled),
+      ...(config.experimentalCodexAgent?.executablePath?.trim()
+        ? { executablePath: config.experimentalCodexAgent.executablePath.trim() }
+        : {}),
       ...(config.experimentalCodexAgent?.chatModel?.trim()
         ? { chatModel: config.experimentalCodexAgent.chatModel.trim() }
         : config.experimentalCodexAgent?.model?.trim()

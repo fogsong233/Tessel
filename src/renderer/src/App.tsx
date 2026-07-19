@@ -1520,6 +1520,7 @@ function ReaderSettingsPanel({
   const [codexAvailability, setCodexAvailability] = useState<CodexAvailability>();
   const [codexModels, setCodexModels] = useState<CodexModelInfo[]>([]);
   const [codexEnabled, setCodexEnabled] = useState(preferences.experimentalCodexAgent.enabled);
+  const [codexExecutablePath, setCodexExecutablePath] = useState(preferences.experimentalCodexAgent.executablePath ?? '');
   const [codexChatModel, setCodexChatModel] = useState(preferences.experimentalCodexAgent.chatModel ?? '');
   const [codexTranslationModel, setCodexTranslationModel] = useState(preferences.experimentalCodexAgent.translationModel ?? '');
   const [codexChatEffort, setCodexChatEffort] = useState(preferences.experimentalCodexAgent.chatReasoningEffort ?? '');
@@ -1558,7 +1559,7 @@ function ReaderSettingsPanel({
     let disposed = false;
     void (async () => {
       try {
-        const availability = await window.sidelight.getCodexAvailability();
+        const availability = await window.sidelight.getCodexAvailability(codexExecutablePath.trim() || undefined);
         if (disposed) {
           return;
         }
@@ -1581,7 +1582,7 @@ function ReaderSettingsPanel({
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [codexExecutablePath]);
 
   const reasoningEffortsFor = (modelId: string): string[] => {
     const selected = codexModels.find((modelInfo) => modelInfo.id === modelId);
@@ -1634,6 +1635,7 @@ function ReaderSettingsPanel({
         appearance,
         experimentalCodexAgent: {
           enabled: codexEnabled && Boolean(codexAvailability?.available),
+          ...(codexExecutablePath.trim() ? { executablePath: codexExecutablePath.trim() } : {}),
           ...(codexChatModel.trim() ? { chatModel: codexChatModel.trim() } : {}),
           ...(codexTranslationModel.trim() ? { translationModel: codexTranslationModel.trim() } : {}),
           ...(codexChatEffort.trim() ? { chatReasoningEffort: codexChatEffort.trim() } : {}),
@@ -1725,7 +1727,10 @@ function ReaderSettingsPanel({
             )}
             {settingsSection === 'codex' && (
               <section className="reader-settings__section">
-              <div className="reader-settings__section-heading"><Sparkles size={17} /><div><strong>Codex</strong><span>{codexAvailability?.available ? codexAvailability.version ?? t.codexAvailable : codexAvailability?.reason ?? t.codexChecking}</span></div><SettingsToggle label={t.enabled} checked={codexEnabled} disabled={!codexAvailability?.available} onChange={(event) => setCodexEnabled(event.target.checked)} /></div>
+              <div className="reader-settings__section-heading"><Sparkles size={17} /><div><strong>Codex</strong><span>{codexAvailability?.available ? codexAvailability.version ?? t.codexAvailable : codexAvailability?.reason ?? t.codexChecking}</span></div><SettingsToggle label={t.enabled} title={codexAvailability?.available ? undefined : codexAvailability?.reason ?? t.codexChecking} checked={codexEnabled} disabled={!codexAvailability?.available} onChange={(event) => setCodexEnabled(event.target.checked)} /></div>
+              <div className="reader-settings__fields">
+                <label className="reader-settings__wide">{t.codexExecutablePath}<input value={codexExecutablePath} placeholder={t.codexExecutablePathHint} spellCheck={false} onChange={(event) => setCodexExecutablePath(event.target.value)} /></label>
+              </div>
               <div className="reader-settings__subsection"><strong>{t.chat}</strong><div className="reader-settings__fields">
                 <label>{t.chatModel}<SettingsSelect value={codexChatModel} disabled={!codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexChatModel(event.target.value); setCodexChatEffort(''); }}><option value="">{t.codexDefault}</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</SettingsSelect></label>
                 <label>{t.chatReasoning}<SettingsSelect value={codexChatEffort} disabled={!codexEnabled || !codexAvailability?.available || chatEfforts.length === 0} onChange={(event) => setCodexChatEffort(event.target.value)}><option value="">{t.readerDefault}</option>{chatEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabel(effort, uiLanguage)}</option>)}</SettingsSelect></label>
@@ -1853,7 +1858,7 @@ function readerSettingsText(language: UiLanguage) {
     return {
       settings: '设置', close: '关闭', settingsSections: '设置分区', provider: '服务商', sync: '同步', appearance: '外观', language: '语言', updates: '更新', backToApp: '返回应用', searchSettings: '搜索设置...', configuration: '配置', noSettingsFound: '没有匹配的设置', reset: '恢复默认', sidebarColor: '边栏颜色', appearanceDescription: '统一目录、标注、对话与阅读排版。', annotationColors: '标注与对话颜色', annotationColorsDescription: '用于高亮、划线、引用及阅读工作区的视觉提示。', highlightColor: '高亮', underlineColor: '划线', chatColor: '对话', noteColor: '笔记', summaryColor: '总结', translateColor: '翻译', typography: '排版', typographyDescription: '分别调整界面、Agent 回复与代码的字体和字号。', uiFont: '界面字体', uiFontSize: '界面字号', agentFont: 'Agent 字体', agentFontSize: 'Agent 字号', codeFont: '代码字体', codeFontSize: '代码字号', fontSystem: '系统无衬线', fontRounded: '圆体', fontSerif: '阅读衬线', fontMono: '等宽',
       aiProvider: 'AI 服务商', displayName: '显示名称', temperature: '温度', baseUrl: '基础 URL', apiKey: 'API 密钥', model: '模型', storedKey: '已保存。输入新密钥可替换。', loading: '加载中...', fetchModels: '获取模型',
-      codexAvailable: '本机 Codex CLI 可用', codexChecking: '正在检查本机 Codex CLI...', enabled: '启用', chat: '对话', chatModel: '对话模型', chatReasoning: '对话推理强度', codexDefault: 'Codex 默认', readerDefault: '阅读器默认（低）',
+      codexAvailable: '本机 Codex CLI 可用', codexChecking: '正在检查本机 Codex CLI...', codexExecutablePath: 'Codex 可执行文件路径（可选）', codexExecutablePathHint: '留空自动发现；例如 /opt/homebrew/bin/codex 或 C:\\...\\codex.cmd', enabled: '启用', chat: '对话', chatModel: '对话模型', chatReasoning: '对话推理强度', codexDefault: 'Codex 默认', readerDefault: '阅读器默认（低）',
       translation: '翻译', translationBackend: '翻译后端', translationModel: '翻译模型', translationReasoning: '翻译推理强度', fastestAvailable: '最快可用模型',
       webDavSync: 'WebDAV 同步', perPdfMetadata: '按 PDF 保存元数据', serverUrl: '服务器 URL', folder: '文件夹', username: '用户名', password: '密码', storedPassword: '已保存。输入新密码可替换。',
       languageDescription: '界面文本和 AI 回复', uiLanguage: '界面语言', aiPreferredLanguage: 'AI 首选语言',
@@ -1864,7 +1869,7 @@ function readerSettingsText(language: UiLanguage) {
   return {
     settings: 'Settings', close: 'Close', settingsSections: 'Settings sections', provider: 'Provider', sync: 'Sync', appearance: 'Appearance', language: 'Language', updates: 'Updates', backToApp: 'Back to app', searchSettings: 'Search settings...', configuration: 'Configuration', noSettingsFound: 'No settings found', reset: 'Reset', sidebarColor: 'Sidebar color', appearanceDescription: 'Unifies the directory, annotations, chat, and reading typography.', annotationColors: 'Annotation and chat colors', annotationColorsDescription: 'Used for highlights, underlines, quotes, and reading workspace cues.', highlightColor: 'Highlight', underlineColor: 'Underline', chatColor: 'Chat', noteColor: 'Note', summaryColor: 'Summary', translateColor: 'Translation', typography: 'Typography', typographyDescription: 'Tune interface, Agent response, and code typography independently.', uiFont: 'Interface font', uiFontSize: 'Interface size', agentFont: 'Agent font', agentFontSize: 'Agent size', codeFont: 'Code font', codeFontSize: 'Code size', fontSystem: 'System sans', fontRounded: 'Rounded', fontSerif: 'Reading serif', fontMono: 'Monospace',
     aiProvider: 'AI provider', displayName: 'Display name', temperature: 'Temperature', baseUrl: 'Base URL', apiKey: 'API key', model: 'Model', storedKey: 'Stored. Enter a new key to replace it.', loading: 'Loading...', fetchModels: 'Fetch models',
-    codexAvailable: 'Local Codex CLI available', codexChecking: 'Checking local Codex CLI...', enabled: 'Enabled', chat: 'Chat', chatModel: 'Chat model', chatReasoning: 'Chat reasoning', codexDefault: 'Codex default', readerDefault: 'Reader default (Low)',
+    codexAvailable: 'Local Codex CLI available', codexChecking: 'Checking local Codex CLI...', codexExecutablePath: 'Codex executable path (optional)', codexExecutablePathHint: 'Leave blank to auto-detect, e.g. /opt/homebrew/bin/codex or C:\\...\\codex.cmd', enabled: 'Enabled', chat: 'Chat', chatModel: 'Chat model', chatReasoning: 'Chat reasoning', codexDefault: 'Codex default', readerDefault: 'Reader default (Low)',
     translation: 'Translation', translationBackend: 'Translation backend', translationModel: 'Translation model', translationReasoning: 'Translation reasoning', fastestAvailable: 'Fastest available',
     webDavSync: 'WebDAV sync', perPdfMetadata: 'Per-PDF metadata', serverUrl: 'Server URL', folder: 'Folder', username: 'Username', password: 'Password', storedPassword: 'Stored. Enter a new password to replace it.',
     languageDescription: 'Interface text and AI responses', uiLanguage: 'UI language', aiPreferredLanguage: 'AI preferred language',

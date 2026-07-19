@@ -373,6 +373,7 @@ export interface AppUpdateState {
 
 export interface ExperimentalCodexAgentPreferences {
   enabled: boolean;
+  executablePath?: string;
   /** @deprecated Migrated to chatModel on the next settings save. */
   model?: string;
   chatModel?: string;
@@ -618,7 +619,7 @@ export interface SidelightApi {
   completeAiStream(input: AiStreamRequest): Promise<void>;
   completeReaderAiStream(input: ReaderAiStreamRequest): Promise<void>;
   completeCodexStream(input: CodexStreamRequest): Promise<void>;
-  getCodexAvailability(): Promise<CodexAvailability>;
+  getCodexAvailability(executablePath?: string): Promise<CodexAvailability>;
   listCodexModels(): Promise<CodexModelInfo[]>;
   steerAiStream(request: AiStreamSteerRequest): Promise<void>;
   cancelAiStream(streamId: string): Promise<void>;

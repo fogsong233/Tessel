@@ -273,10 +273,17 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
   ipcMain.handle('settings:getWebDavSync', () => store.getSafeWebDavSync());
   ipcMain.handle('settings:saveWebDavSync', (_event, config) => runStoreMutation(() => store.saveWebDavSync(config)));
   ipcMain.handle('settings:getAppPreferences', () => store.getAppPreferences());
-  ipcMain.handle('settings:saveAppPreferences', (_event, config: AppPreferences) => runStoreMutation(() => store.saveAppPreferences(config)));
+  ipcMain.handle('settings:saveAppPreferences', async (_event, config: AppPreferences) => {
+    const preferences = await runStoreMutation(() => store.saveAppPreferences(config));
+    codexAgent.resetConfiguration();
+    return preferences;
+  });
   ipcMain.handle('window:getChromeState', (event) => windowChromeState(BrowserWindow.fromWebContents(event.sender)));
   ipcMain.handle('sync:documentMetadata', (_event, documentId: string) => runStoreMutation(() => store.syncDocumentMetadata(documentId)));
-  ipcMain.handle('codex:availability', () => CodexAgent.availability());
+  ipcMain.handle('codex:availability', async (_event, executablePath?: string) => {
+    const preferences = await store.getAppPreferences();
+    return CodexAgent.availability(executablePath ?? preferences.experimentalCodexAgent.executablePath);
+  });
   ipcMain.handle('codex:listModels', () => codexAgent.listModels());
   ipcMain.handle('ai:listModels', async (_event, config: AiProviderConfig) => {
     const stored = await store.getAiProviderWithSecret();
@@ -512,7 +519,8 @@ if (hasSingleInstanceLock) {
         };
       },
       join(app.getPath('userData'), 'codex-inputs'),
-      join(app.getPath('userData'), 'codex-workspaces')
+      join(app.getPath('userData'), 'codex-workspaces'),
+      async () => (await store.getAppPreferences()).experimentalCodexAgent.executablePath
     );
     codexAgent.warmup();
 

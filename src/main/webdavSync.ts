@@ -24,7 +24,7 @@ export async function syncPdfSessionToWebDav(input: WebDavSessionSyncInput): Pro
   const remote = await getRemoteSnapshot(target, input.config);
   const merged = mergePdfSessionSnapshots(remote, input.local);
 
-  await ensureCollection(webDavCollectionUrl(input.config), input.config);
+  await ensureCollection(input.config);
   const response = await fetch(target, {
     method: 'PUT',
     headers: {
@@ -111,17 +111,22 @@ async function getRemoteSnapshot(url: string, config: WebDavSyncConfig): Promise
   }
 }
 
-async function ensureCollection(url: string, config: WebDavSyncConfig): Promise<void> {
-  const response = await fetch(url, { method: 'MKCOL', headers: webDavHeaders(config) });
-  // Existing collections commonly return 405; both outcomes are valid.
-  if (response.ok || response.status === 405 || response.status === 301 || response.status === 302) {
-    return;
+async function ensureCollection(config: WebDavSyncConfig): Promise<void> {
+  const base = config.baseUrl.trim().replace(/\/+$/, '');
+  const path = config.basePath.trim().replace(/^\/+|\/+$/g, '');
+  const segments = [...path.split('/').filter(Boolean), 'pdf-sessions'];
+  let collectionUrl = base;
+
+  for (const segment of segments) {
+    collectionUrl = `${collectionUrl.replace(/\/+$/, '')}/${encodeURIComponent(segment)}/`;
+    const response = await fetch(collectionUrl, { method: 'MKCOL', headers: webDavHeaders(config) });
+    // Existing collections commonly return 405. A successful MKCOL creates the
+    // missing level; a 409 means a parent collection still could not be created.
+    if (response.ok || response.status === 405 || response.status === 301 || response.status === 302) {
+      continue;
+    }
+    throw new Error(`WebDAV session directory is unavailable (${response.status} ${response.statusText}).`);
   }
-  // Many managed WebDAV endpoints create the final collection lazily on PUT.
-  if (response.status === 409) {
-    return;
-  }
-  throw new Error(`WebDAV session directory is unavailable (${response.status} ${response.statusText}).`);
 }
 
 function webDavCollectionUrl(config: WebDavSyncConfig): string {

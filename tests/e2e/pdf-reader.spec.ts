@@ -548,6 +548,23 @@ test.describe('PDF reader flow', () => {
     }).toBe('codex');
   });
 
+  test('uses and persists an explicit Codex executable path', async () => {
+    await page.getByTitle('Settings').click();
+    const settings = page.locator('.reader-settings');
+    await settings.getByRole('button', { name: 'Codex' }).click();
+    await settings.getByLabel('Codex executable path (optional)').fill(join(runDir, 'bin', 'codex'));
+    await expect(settings.getByLabel('Enabled')).toBeEnabled();
+    await settings.getByLabel('Enabled').check();
+    await settings.getByRole('button', { name: 'Save' }).click();
+
+    await expect.poll(async () => {
+      const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+        appPreferences?: { experimentalCodexAgent?: { executablePath?: string } };
+      };
+      return store.appPreferences?.experimentalCodexAgent?.executablePath;
+    }).toBe(join(runDir, 'bin', 'codex'));
+  });
+
   test('persists reader appearance and keeps the chat composer at a two-line height', async () => {
     await page.getByTitle('Settings').click();
     const settings = page.locator('.reader-settings');

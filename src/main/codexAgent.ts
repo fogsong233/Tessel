@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { extname, join, relative, resolve } from 'node:path';
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { promisify } from 'node:util';
+import { delimiter, extname, join, relative, resolve } from 'node:path';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import {
   AgentActivityEvent,
   AiDocumentToolContext,
@@ -80,6 +80,67 @@ class ExecSteerCheckpointError extends Error {
   }
 }
 
+function codexExecutable(configuredPath?: string): string {
+  if (configuredPath?.trim()) {
+    return configuredPath.trim();
+  }
+  const fromPath = (process.env.PATH ?? '')
+    .split(delimiter)
+    .filter(Boolean)
+    .map((directory) => join(directory, 'codex'))
+    .find((candidate) => existsSync(candidate));
+  if (fromPath) {
+    return fromPath;
+  }
+
+  // Finder launches do not inherit Homebrew's PATH. Fall back to the standard
+  // installation locations while retaining PATH precedence for custom installs.
+  const fallback = [
+    process.env.TESSEL_CODEX_PATH,
+    '/opt/homebrew/bin/codex',
+    '/usr/local/bin/codex',
+    join(homedir(), '.local/bin/codex'),
+    join(homedir(), '.npm-global/bin/codex')
+  ].find((candidate): candidate is string => typeof candidate === 'string' && existsSync(candidate));
+  return fallback ?? 'codex';
+}
+
+function spawnCodex(executable: string, args: string[], stdio: ['pipe' | 'ignore', 'pipe', 'pipe']): ChildProcessWithoutNullStreams {
+  return spawn(executable, args, {
+    stdio,
+    // npm installs a .cmd launcher on Windows; shell is required for it.
+    shell: process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(executable)
+  }) as ChildProcessWithoutNullStreams;
+}
+
+function runCodex(executable: string, args: string[], timeout = 4_000): Promise<{ stdout: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawnCodex(executable, args, ['ignore', 'pipe', 'pipe']);
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error('Codex command timed out.'));
+    }, timeout);
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => { stdout += chunk; });
+    child.stderr.on('data', (chunk: string) => { stderr += chunk; });
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve({ stdout });
+      } else {
+        reject(new Error(stderr.trim() || `Codex exited with code ${code ?? 'unknown'}.`));
+      }
+    });
+  });
+}
+
 /**
  * Experimental adapter for Codex app-server. The protocol is isolated here so
  * renderer code only sees normalized final-message and activity events.
@@ -104,19 +165,24 @@ export class CodexAgent {
   constructor(
     private readonly resolvePdf: (documentId: string) => Promise<PdfRuntime>,
     private readonly inputDirectory: string,
-    private readonly workspaceDirectory: string
+    private readonly workspaceDirectory: string,
+    private readonly configuredExecutablePath: () => Promise<string | undefined> = async () => undefined
   ) {}
 
-  static async availability(): Promise<{ available: boolean; version?: string; reason?: string }> {
+  static async availability(configuredPath?: string): Promise<{ available: boolean; version?: string; reason?: string }> {
     try {
-      const { stdout } = await promisify(execFile)('codex', ['--version'], { timeout: 4_000 });
+      const executable = codexExecutable(configuredPath);
+      const { stdout } = await runCodex(executable, ['--version']);
       const version = stdout.trim();
       if (!version) {
         return { available: false, reason: 'Codex did not report a version.' };
       }
-      await promisify(execFile)('codex', ['login', 'status'], { timeout: 4_000 });
+      await runCodex(executable, ['login', 'status']);
       return { available: true, version };
     } catch {
+      if (configuredPath?.trim()) {
+        return { available: false, reason: 'The configured Codex executable path could not be started. Check the path and sign-in state.' };
+      }
       return { available: false, reason: 'Codex CLI is missing or not signed in. Install and sign in to Codex before enabling this experiment.' };
     }
   }
@@ -136,6 +202,13 @@ export class CodexAgent {
   warmup(): void {
     void this.initialTransport();
     void this.listModels();
+  }
+
+  resetConfiguration(): void {
+    this.modelListPromise = undefined;
+    this.preferredTransport = undefined;
+    this.transportDetectionPromise = undefined;
+    void this.shutdown();
   }
 
   private async loadModels(): Promise<CodexModelInfo[]> {
@@ -233,7 +306,7 @@ export class CodexAgent {
 
   private async initialTransport(): Promise<'app-server' | 'exec'> {
     if (!this.transportDetectionPromise) {
-      this.transportDetectionPromise = promisify(execFile)('codex', ['login', 'status'], { timeout: 4_000 })
+      this.transportDetectionPromise = this.executable().then((executable) => runCodex(executable, ['login', 'status']))
         .then(({ stdout }) => /api key/i.test(stdout) ? 'exec' : 'app-server')
         .catch(() => 'app-server');
     }
@@ -559,7 +632,7 @@ export class CodexAgent {
       .filter((item) => item.type === 'localImage' && typeof item.path === 'string')
       .map((item) => item.path as string);
     const args = execArgs(input, workspaceDirectory, prompt, imagePaths);
-    const child = spawn('codex', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawnCodex(await this.executable(), args, ['pipe', 'pipe', 'pipe']);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
 
@@ -771,9 +844,7 @@ export class CodexAgent {
   }
 
   private async start(): Promise<void> {
-    const child = spawn('codex', ['app-server', '--stdio'], {
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
+    const child = spawnCodex(await this.executable(), ['app-server', '--stdio'], ['pipe', 'pipe', 'pipe']);
     this.child = child;
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
@@ -1030,6 +1101,10 @@ export class CodexAgent {
     this.child = undefined;
     this.initializePromise = undefined;
     this.threadContexts.clear();
+  }
+
+  private async executable(): Promise<string> {
+    return codexExecutable(await this.configuredExecutablePath());
   }
 }
 
