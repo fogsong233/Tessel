@@ -1,29 +1,20 @@
 import { type ComponentPropsWithoutRef, type CSSProperties, type FormEvent, type ReactElement, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft,
   BookOpen,
   Bot,
-  Check,
   ChevronDown,
-  Clock3,
+  ChevronRight,
   Cloud,
-  FileText,
+  Database,
   FolderOpen,
-  Github,
   Languages as LanguagesIcon,
-  LayoutGrid,
-  LayoutList,
-  Library,
-  MessageCircle,
+  Maximize2,
+  Minimize2,
   Palette,
-  Plus,
   RefreshCw,
   Search,
   Settings,
-  SlidersHorizontal,
   Sparkles,
-  Tags,
-  UploadCloud,
   X
 } from 'lucide-react';
 import {
@@ -32,6 +23,7 @@ import {
   AiMode,
   AiDocumentToolContext,
   AiPreferredLanguage,
+  AiStreamEvent,
   AiToolCallEvent,
   AgentActivityEvent,
   AgentTimelineEntry,
@@ -55,25 +47,28 @@ import {
   PdfReadingState,
   PdfSourceDescriptor,
   PdfUserBookmark,
+  RecentDocumentInfo,
   SelectionColorRole,
-  GitHubUploadConfig,
-  LibraryGroup,
   SafeAiProviderConfig,
-  SafeGitHubUploadConfig,
   SafeWebDavSyncConfig,
+  StoredDocumentInfo,
   WebDavSyncConfig,
   TextAnchor,
   TranslationEntry,
   ReaderAiStreamRequest,
   UiLanguage,
-  WorkspaceBlock,
-  WorkspaceSyncResult
+  WindowChromeState,
+  WorkspaceStorageOverview,
+  WorkspaceBlock
 } from '../../shared/domain';
 import { createId } from '../../shared/ids';
 import { mergeNoteDocuments as mergeNotes } from '../../shared/notes';
 import { normalizeSelectionColors } from '../../shared/selectionColors';
-import { PdfReader, type PdfSelectionPayload } from './PdfReader';
-import { MarkdownView } from './MarkdownView';
+import {
+  PdfReader,
+  type OutlineGenerationProgress,
+  type PdfSelectionPayload
+} from './PdfReader';
 import tesselLogoUrl from '../../assets/icons/tessel-logo.png?url';
 
 type TransientAidMode = Extract<AiMode, 'summarize' | 'translate'>;
@@ -132,9 +127,9 @@ function fontStack(font: AppearanceFont): string {
 }
 
 export function App(): ReactElement {
-  const readerDocumentId = useMemo(() => new URLSearchParams(window.location.search).get('documentId') ?? undefined, []);
-  const [documents, setDocuments] = useState<PdfDocumentMeta[]>([]);
-  const [libraryGroups, setLibraryGroups] = useState<LibraryGroup[]>([]);
+  const route = useMemo(() => new URLSearchParams(window.location.search), []);
+  const readerDocumentId = route.get('documentId') ?? undefined;
+  const settingsWindow = route.get('view') === 'settings';
   const [activeDocument, setActiveDocument] = useState<PdfDocumentMeta>();
   const [pdfSource, setPdfSource] = useState<PdfSourceDescriptor>();
   const [currentPage, setCurrentPage] = useState(1);
@@ -147,17 +142,22 @@ export function App(): ReactElement {
   const [workspaceBlocks, setWorkspaceBlocks] = useState<WorkspaceBlock[]>([]);
   const [generatedOutline, setGeneratedOutline] = useState<PdfGeneratedOutline | null>(null);
   const [aiProvider, setAiProvider] = useState<SafeAiProviderConfig>();
-  const [githubUpload, setGitHubUpload] = useState<SafeGitHubUploadConfig>();
   const [webDavSync, setWebDavSync] = useState<SafeWebDavSyncConfig>();
   const [appPreferences, setAppPreferences] = useState<AppPreferences>(defaultAppPreferences);
   const [transientAid, setTransientAid] = useState<TransientAidState>();
   const [panelOpen, setPanelOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [macTrafficLightsVisible, setMacTrafficLightsVisible] = useState(false);
+  const [windowChrome, setWindowChrome] = useState<WindowChromeState>({
+    macTrafficLightsVisible: false,
+    customControls: false,
+    maximized: false
+  });
   const [busy, setBusy] = useState(false);
   const [noteBusy, setNoteBusy] = useState(false);
   const [outlineGenerationBusy, setOutlineGenerationBusy] = useState(false);
   const [outlineGenerationError, setOutlineGenerationError] = useState<string>();
+  const [outlineGenerationProgress, setOutlineGenerationProgress] = useState<OutlineGenerationProgress>();
+  const [recentDocuments, setRecentDocuments] = useState<RecentDocumentInfo[]>([]);
+  const [recentDocumentsError, setRecentDocumentsError] = useState<string>();
   const [readerLoadPending, setReaderLoadPending] = useState(false);
   const [readerLoadError, setReaderLoadError] = useState<string>();
   const [activeStream, setActiveStream] = useState<{ streamId: string; conversationId?: string }>();
@@ -192,25 +192,56 @@ export function App(): ReactElement {
     '--tessel-summary-color': appPreferences.selectionColors.summary,
     '--tessel-translate-color': appPreferences.selectionColors.translate
   } as CSSProperties), [appPreferences.appearance, appPreferences.selectionColors, resolvedSidebarActiveColor, resolvedSidebarColor, resolvedSidebarTheme.ink, resolvedSidebarTheme.muted]);
-  const appShellClass = macTrafficLightsVisible ? 'app-shell has-mac-traffic-lights' : 'app-shell';
+  const appShellClass = [
+    'app-shell',
+    windowChrome.macTrafficLightsVisible ? 'has-mac-traffic-lights' : '',
+    windowChrome.customControls ? 'has-custom-window-controls' : ''
+  ].filter(Boolean).join(' ');
 
   useEffect(() => {
     void refreshSettings();
   }, []);
 
   useEffect(() => {
+    if (readerDocumentId || settingsWindow) {
+      return;
+    }
+    let disposed = false;
+    void window.sidelight.listRecentDocuments(5).then((documents) => {
+      if (!disposed) {
+        setRecentDocuments(documents);
+      }
+    }).catch(() => {
+      if (!disposed) {
+        setRecentDocumentsError(appPreferences.uiLanguage === 'zh-CN' ? '无法读取最近浏览。' : 'Could not load recent documents.');
+      }
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [readerDocumentId, settingsWindow]);
+
+  useEffect(() => {
     let disposed = false;
     void window.sidelight.getWindowChromeState().then((state) => {
       if (!disposed) {
-        setMacTrafficLightsVisible(state.macTrafficLightsVisible);
+        setWindowChrome(state);
       }
     }).catch(() => undefined);
-    const unsubscribe = window.sidelight.onWindowChromeState((state) => setMacTrafficLightsVisible(state.macTrafficLightsVisible));
+    const unsubscribe = window.sidelight.onWindowChromeState(setWindowChrome);
     return () => {
       disposed = true;
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => window.sidelight.onSettingsChanged(() => {
+    void refreshSettings();
+  }), []);
+
+  useEffect(() => {
+    document.title = settingsWindow ? 'Tessel Settings' : activeDocument?.title ? `${activeDocument.title} — Tessel` : 'Tessel';
+  }, [activeDocument?.title, settingsWindow]);
 
   useEffect(() => {
     if (!readerDocumentId || loadedReaderDocumentRef.current === readerDocumentId) {
@@ -227,15 +258,6 @@ export function App(): ReactElement {
     () => conversations.find((conversation) => conversation.id === activeConversationId),
     [activeConversationId, conversations]
   );
-
-  async function refreshLibrary(): Promise<void> {
-    const [loadedDocuments, loadedGroups] = await Promise.all([
-      window.sidelight.listDocuments(),
-      window.sidelight.listLibraryGroups()
-    ]);
-    setDocuments(loadedDocuments);
-    setLibraryGroups(loadedGroups);
-  }
 
   async function refreshSettings(): Promise<void> {
     const [provider, sync, preferences] = await Promise.all([
@@ -258,42 +280,16 @@ export function App(): ReactElement {
     }
   }
 
-  async function openDocumentWindow(documentId: string): Promise<void> {
-    await window.sidelight.openDocumentWindow(documentId);
-    await refreshLibrary();
-  }
-
-  async function addActiveDocumentToLibrary(): Promise<void> {
-    if (!activeDocument) {
+  async function openRecentDocument(documentId: string): Promise<void> {
+    setRecentDocumentsError(undefined);
+    const opened = await window.sidelight.openStoredDocument(documentId);
+    if (opened) {
+      await window.sidelight.closeWindow();
       return;
     }
-
-    const saved = await window.sidelight.addDocumentToLibrary(activeDocument.id);
-    setActiveDocument(saved);
-    setDocuments((current) => [
-      saved,
-      ...current.filter((document) => document.id !== saved.id)
-    ]);
-    await window.sidelight.syncWorkspace();
-  }
-
-  async function saveLibraryGroup(group: LibraryGroup): Promise<void> {
-    const saved = await window.sidelight.saveLibraryGroup({ group });
-    setLibraryGroups((current) => [
-      saved,
-      ...current.filter((candidate) => candidate.id !== saved.id)
-    ].sort((a, b) => a.name.localeCompare(b.name)));
-    await window.sidelight.syncWorkspace();
-  }
-
-  async function saveDocumentMeta(document: PdfDocumentMeta): Promise<void> {
-    const saved = await window.sidelight.updateDocument(document);
-    setDocuments((current) => [
-      saved,
-      ...current.filter((candidate) => candidate.id !== saved.id)
-    ]);
-    setActiveDocument((current) => current?.id === saved.id ? saved : current);
-    await window.sidelight.syncWorkspace();
+    setRecentDocumentsError(appPreferences.uiLanguage === 'zh-CN'
+      ? '原 PDF 文件已移动或不可访问。你可以通过“打开 PDF”重新定位。'
+      : 'The PDF was moved or is unavailable. Use Open PDF to locate it again.');
   }
 
   async function loadDocumentIntoCurrentWindow(documentId: string): Promise<void> {
@@ -1053,37 +1049,6 @@ export function App(): ReactElement {
     setMarks((current) => current.filter((mark) => mark.id !== markId));
   }
 
-  async function saveSettings(
-    aiConfig: AiProviderConfig,
-    uploadConfig: GitHubUploadConfig,
-    preferencesConfig: AppPreferences,
-    options: { close?: boolean } = {}
-  ): Promise<void> {
-    const savedProvider = await window.sidelight.saveAiProvider(aiConfig);
-    const savedUpload = await window.sidelight.saveGitHubUpload(uploadConfig);
-    const savedPreferences = await window.sidelight.saveAppPreferences(preferencesConfig);
-    setAiProvider(savedProvider);
-    setGitHubUpload(savedUpload);
-    setAppPreferences(savedPreferences);
-    if (options.close !== false) {
-      setSettingsOpen(false);
-    }
-  }
-
-  async function runGitHubWorkspaceAction(
-    mode: WorkspaceSyncResult['mode'],
-    aiConfig: AiProviderConfig,
-    uploadConfig: GitHubUploadConfig,
-    preferencesConfig: AppPreferences
-  ): Promise<WorkspaceSyncResult> {
-    await saveSettings(aiConfig, uploadConfig, preferencesConfig, { close: false });
-    const result = mode === 'sync'
-      ? await window.sidelight.syncWorkspace()
-      : await window.sidelight.uploadWorkspace();
-    await refreshSettings();
-    return result;
-  }
-
   async function saveReaderSettings(
     aiConfig: AiProviderConfig,
     syncConfig: WebDavSyncConfig,
@@ -1097,10 +1062,12 @@ export function App(): ReactElement {
     setAiProvider(provider);
     setWebDavSync(sync);
     setAppPreferences(preferences);
-    setSettingsOpen(false);
     if (activeDocument && sync.enabled) {
       await window.sidelight.syncDocumentMetadata(activeDocument.id).catch(() => undefined);
       await loadDocumentIntoCurrentWindow(activeDocument.id);
+    }
+    if (settingsWindow) {
+      void window.sidelight.closeWindow();
     }
   }
 
@@ -1144,7 +1111,10 @@ export function App(): ReactElement {
     setWorkspaceBlocks((current) => current.filter((block) => block.id !== blockId));
   }
 
-  async function completeReaderAi(input: Omit<ReaderAiStreamRequest, 'streamId'>): Promise<string> {
+  async function completeReaderAi(
+    input: Omit<ReaderAiStreamRequest, 'streamId'>,
+    onStreamEvent?: (event: AiStreamEvent) => void
+  ): Promise<string> {
     const streamId = createId('stream');
     return new Promise((resolve, reject) => {
       let content = '';
@@ -1165,6 +1135,7 @@ export function App(): ReactElement {
         if (event.streamId !== streamId) {
           return;
         }
+        onStreamEvent?.(event);
         if (event.delta) {
           content += event.delta;
         }
@@ -1281,8 +1252,10 @@ export function App(): ReactElement {
 
     setOutlineGenerationBusy(true);
     setOutlineGenerationError(undefined);
+    setOutlineGenerationProgress({ phase: 'preparing', percent: 8 });
 
     try {
+      let receivedCharacters = 0;
       const content = await completeReaderAi({
         task: 'outline',
         documentId: activeDocument.id,
@@ -1302,12 +1275,51 @@ export function App(): ReactElement {
           toolContext: enrichedToolContext,
           preferredLanguage: appPreferences.aiLanguage
         }
+      }, (event) => {
+        if (event.activity?.id === 'outline:samples') {
+          setOutlineGenerationProgress({
+            phase: 'reading',
+            percent: event.activity.status === 'completed' ? 52 : 28,
+            detail: event.activity.detail
+          });
+          return;
+        }
+        if (event.activity?.id === 'transport:exec') {
+          setOutlineGenerationProgress({ phase: 'connecting', percent: 18 });
+          return;
+        }
+        if (event.activity?.id.startsWith('session:')) {
+          setOutlineGenerationProgress({
+            phase: event.activity.status === 'completed' ? 'generating' : 'connecting',
+            percent: event.activity.status === 'completed' ? 62 : 22
+          });
+          return;
+        }
+        if (event.activity) {
+          setOutlineGenerationProgress((current) => ({
+            phase: 'generating',
+            percent: Math.max(current?.percent ?? 0, 66),
+            detail: event.activity?.label
+          }));
+        }
+        if (event.delta) {
+          receivedCharacters += event.delta.length;
+          setOutlineGenerationProgress({
+            phase: 'generating',
+            percent: Math.min(88, 70 + Math.floor(receivedCharacters / 180))
+          });
+        }
+        if (event.done && !event.error) {
+          setOutlineGenerationProgress({ phase: 'validating', percent: 90 });
+        }
       });
+      setOutlineGenerationProgress({ phase: 'validating', percent: 92 });
       const items = parseGeneratedOutlineItems(content, Math.max(1, totalPages));
       if (items.length === 0) {
         throw new Error('The AI response did not contain a usable outline JSON array.');
       }
 
+      setOutlineGenerationProgress({ phase: 'saving', percent: 96 });
       const now = new Date().toISOString();
       const saved = await window.sidelight.saveGeneratedPdfOutline({
         outline: {
@@ -1319,8 +1331,10 @@ export function App(): ReactElement {
         }
       });
       setGeneratedOutline(saved);
+      setOutlineGenerationProgress({ phase: 'complete', percent: 100 });
     } catch (error) {
       setOutlineGenerationError(presentableAiError(error));
+      setOutlineGenerationProgress(undefined);
     } finally {
       setOutlineGenerationBusy(false);
     }
@@ -1359,55 +1373,88 @@ export function App(): ReactElement {
       updatedAt: new Date().toISOString()
     };
     setActiveDocument((current) => current?.id === documentId ? { ...current, readingState: nextState } : current);
-    setDocuments((current) =>
-      current.map((document) =>
-        document.id === documentId ? { ...document, readingState: nextState, lastOpenedAt: nextState.updatedAt } : document
-      )
-    );
     void window.sidelight.saveReadingState(nextState);
   }
 
-  if (!readerDocumentId) {
+  if (settingsWindow) {
     return (
       <main className={appShellClass} style={appShellStyle}>
+        <WindowChrome state={windowChrome} title="Settings" onStateChange={setWindowChrome} />
+        <div className="settings-window">
+          {aiProvider && webDavSync ? (
+            <ReaderSettingsPanel
+              provider={aiProvider}
+              webDavSync={webDavSync}
+              preferences={appPreferences}
+              onClose={() => void window.sidelight.closeWindow()}
+              onSave={(aiConfig, syncConfig, preferencesConfig) =>
+                void saveReaderSettings(aiConfig, syncConfig, preferencesConfig)}
+            />
+          ) : (
+            <section className="settings-window__loading" aria-label="Loading settings">
+              <img src={tesselLogoUrl} alt="" />
+              <span>Loading settings...</span>
+            </section>
+          )}
+        </div>
+      </main>
+    );
+  }
+
+  if (!readerDocumentId) {
+    const homeText = readerHomeText(appPreferences.uiLanguage);
+    return (
+      <main className={appShellClass} style={appShellStyle}>
+        <WindowChrome state={windowChrome} title="Tessel" onStateChange={setWindowChrome} />
         <section className="reader-home" aria-label="PDF reader start">
           <div className="reader-home__brand">
             <img className="tessel-brand-mark" src={tesselLogoUrl} alt="" />
             <strong>Tessel</strong>
           </div>
-          <div className="reader-home__content">
+          <div className={recentDocuments.length > 0 ? 'reader-home__content reader-home__content--with-history' : 'reader-home__content'}>
             <div className="reader-home__identity">
               <img className="tessel-brand-mark tessel-brand-mark--large" src={tesselLogoUrl} alt="" />
               <div>
-                <span>PDF reader</span>
+                <span>{homeText.pdfReader}</span>
                 <h1>Tessel</h1>
               </div>
             </div>
             <div className="reader-home__actions">
-              <button className="primary-button reader-home__open" type="button" onClick={() => void openPdf()}><FolderOpen size={17} />Open PDF</button>
-              <button className="quiet-button reader-home__settings" type="button" onClick={() => setSettingsOpen(true)}><Settings size={17} />Settings</button>
+              <button className="primary-button reader-home__open" type="button" onClick={() => void openPdf()}><FolderOpen size={17} />{homeText.openPdf}</button>
+              <button className="quiet-button reader-home__settings" type="button" onClick={() => void window.sidelight.openSettings()}><Settings size={17} />{homeText.settings}</button>
             </div>
+            {recentDocuments.length > 0 && (
+              <section className="reader-home__recent" aria-label={homeText.recentDocuments}>
+                <header><span>{homeText.recentDocuments}</span><small>{homeText.bookCount(recentDocuments.length)}</small></header>
+                <div className="reader-home__recent-list">
+                  {recentDocuments.map(({ document, fileAvailable }) => (
+                    <button
+                      key={document.id}
+                      className={!fileAvailable ? 'is-unavailable' : ''}
+                      type="button"
+                      title={document.filePath}
+                      onClick={() => void openRecentDocument(document.id)}
+                    >
+                      <BookOpen size={17} />
+                      <span><strong>{document.title}</strong><small>{homeText.recentMeta(document)}</small></span>
+                      {!fileAvailable && <em>{homeText.missing}</em>}
+                      <ChevronRight size={15} />
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+            {recentDocumentsError && <p className="reader-home__error" role="status">{recentDocumentsError}</p>}
           </div>
         </section>
-        {settingsOpen && aiProvider && webDavSync && (
-          <ReaderSettingsPanel
-            provider={aiProvider}
-            webDavSync={webDavSync}
-            preferences={appPreferences}
-            onClose={() => setSettingsOpen(false)}
-            onSave={(aiConfig, syncConfig, preferencesConfig) =>
-              void saveReaderSettings(aiConfig, syncConfig, preferencesConfig)}
-          />
-        )}
       </main>
     );
   }
 
   return (
     <main className={appShellClass} style={appShellStyle}>
+      <WindowChrome state={windowChrome} title={activeDocument?.title ?? 'Tessel Reader'} onStateChange={setWindowChrome} />
       <PdfReader
-        documents={[]}
-        libraryGroups={[]}
         source={pdfSource}
         meta={activeDocument}
         documentLoadPending={readerLoadPending}
@@ -1434,9 +1481,7 @@ export function App(): ReactElement {
         transientAid={transientAid}
         composerPrefill={quotedDraft}
         onOpenPdf={openPdf}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onLoadDocument={() => undefined}
-        onAddToLibrary={() => undefined}
+        onOpenSettings={() => void window.sidelight.openSettings()}
         onPageChange={updateCurrentPage}
         onCreateMark={(kind, selection, colorRole) => void saveMark(kind, selection, colorRole)}
         onSelectionAction={(mode, selection) => void startAnchoredAction(mode, selection)}
@@ -1457,6 +1502,7 @@ export function App(): ReactElement {
         noteBusy={noteBusy}
         outlineGenerationBusy={outlineGenerationBusy}
         outlineGenerationError={outlineGenerationError}
+        outlineGenerationProgress={outlineGenerationProgress}
         onSaveWorkspaceBlock={saveWorkspaceBlock}
         onDeleteWorkspaceBlock={(blockId) => void deleteWorkspaceBlock(blockId)}
         onSaveNote={saveNote}
@@ -1466,21 +1512,46 @@ export function App(): ReactElement {
         onGenerateOutline={(toolContext) => void generatePdfOutline(toolContext)}
       />
 
-      {settingsOpen && aiProvider && webDavSync && (
-        <ReaderSettingsPanel
-          provider={aiProvider}
-          webDavSync={webDavSync}
-          preferences={appPreferences}
-          onClose={() => setSettingsOpen(false)}
-          onSave={(aiConfig, syncConfig, preferencesConfig) =>
-            void saveReaderSettings(aiConfig, syncConfig, preferencesConfig)}
-        />
-      )}
     </main>
   );
 }
 
-type ReaderSettingsSection = 'provider' | 'codex' | 'sync' | 'appearance' | 'language' | 'updates';
+function WindowChrome({
+  state,
+  title,
+  onStateChange
+}: {
+  state: WindowChromeState;
+  title: string;
+  onStateChange(state: WindowChromeState): void;
+}): ReactElement | null {
+  if (!state.customControls) {
+    return null;
+  }
+  return (
+    <header className="window-chrome">
+      <div className="window-chrome__identity">
+        <img src={tesselLogoUrl} alt="" />
+        <span>{title}</span>
+      </div>
+      <div className="window-chrome__controls">
+        <button
+          type="button"
+          aria-label={state.maximized ? 'Restore window' : 'Maximize window'}
+          title={state.maximized ? 'Restore' : 'Maximize'}
+          onClick={() => void window.sidelight.toggleWindowMaximize().then(onStateChange)}
+        >
+          {state.maximized ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+        </button>
+        <button className="window-chrome__close" type="button" aria-label="Close window" title="Close" onClick={() => void window.sidelight.closeWindow()}>
+          <X size={16} />
+        </button>
+      </div>
+    </header>
+  );
+}
+
+type ReaderSettingsSection = 'provider' | 'codex' | 'sync' | 'storage' | 'appearance' | 'language' | 'updates';
 
 function ReaderSettingsPanel({
   provider,
@@ -1517,6 +1588,9 @@ function ReaderSettingsPanel({
   const [settingsSection, setSettingsSection] = useState<ReaderSettingsSection>('provider');
   const [settingsQuery, setSettingsQuery] = useState('');
   const [updateState, setUpdateState] = useState<AppUpdateState>();
+  const [storageOverview, setStorageOverview] = useState<WorkspaceStorageOverview>();
+  const [storageLoading, setStorageLoading] = useState(false);
+  const [storageError, setStorageError] = useState<string>();
   const [codexAvailability, setCodexAvailability] = useState<CodexAvailability>();
   const [codexModels, setCodexModels] = useState<CodexModelInfo[]>([]);
   const [codexEnabled, setCodexEnabled] = useState(preferences.experimentalCodexAgent.enabled);
@@ -1531,6 +1605,7 @@ function ReaderSettingsPanel({
     { id: 'provider', label: t.provider, icon: Bot },
     { id: 'codex', label: 'Codex', icon: Sparkles },
     { id: 'sync', label: t.sync, icon: Cloud },
+    { id: 'storage', label: t.storage, icon: Database },
     { id: 'appearance', label: t.appearance, icon: Palette },
     { id: 'language', label: t.language, icon: LanguagesIcon },
     { id: 'updates', label: t.updates, icon: RefreshCw }
@@ -1584,6 +1659,24 @@ function ReaderSettingsPanel({
     };
   }, [codexExecutablePath]);
 
+  const refreshStorageOverview = async (): Promise<void> => {
+    setStorageLoading(true);
+    setStorageError(undefined);
+    try {
+      setStorageOverview(await window.sidelight.getStorageOverview());
+    } catch (error) {
+      setStorageError(presentableAiError(error));
+    } finally {
+      setStorageLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (settingsSection === 'storage' && !storageOverview && !storageLoading) {
+      void refreshStorageOverview();
+    }
+  }, [settingsSection]);
+
   const reasoningEffortsFor = (modelId: string): string[] => {
     const selected = codexModels.find((modelInfo) => modelInfo.id === modelId);
     if (selected?.supportedReasoningEfforts.length) {
@@ -1593,6 +1686,7 @@ function ReaderSettingsPanel({
   };
   const chatEfforts = reasoningEffortsFor(codexChatModel);
   const translationEfforts = reasoningEffortsFor(codexTranslationModel);
+  const codexDetectedLabel = uiLanguage === 'zh-CN' ? '已自动发现原生可执行文件' : 'Native executable auto-detected';
 
   const fetchModels = async (): Promise<void> => {
     setLoadingModels(true);
@@ -1646,11 +1740,8 @@ function ReaderSettingsPanel({
   };
 
   return (
-    <div className="settings-overlay reader-settings-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section
-        className="reader-settings"
-        role="dialog"
-        aria-modal="true"
+        className="reader-settings reader-settings--window"
         aria-labelledby="settings-title"
         style={{
           '--tessel-sidebar-color': resolvedSettingsSidebarTheme.color,
@@ -1665,13 +1756,9 @@ function ReaderSettingsPanel({
           <div className="reader-settings__workspace">
             <aside className="reader-settings__sidebar">
               <header className="reader-settings__sidebar-header">
-                <button type="button" className="reader-settings__back" onClick={onClose}>
-                  <ArrowLeft size={16} />
-                  <span>{t.backToApp}</span>
-                </button>
                 <div className="reader-settings__brand">
                   <img src={tesselLogoUrl} alt="" />
-                  <strong>Tessel</strong>
+                  <span><strong>Tessel</strong><small>{t.settings}</small></span>
                 </div>
               </header>
               <label className="reader-settings__search">
@@ -1727,9 +1814,9 @@ function ReaderSettingsPanel({
             )}
             {settingsSection === 'codex' && (
               <section className="reader-settings__section">
-              <div className="reader-settings__section-heading"><Sparkles size={17} /><div><strong>Codex</strong><span>{codexAvailability?.available ? codexAvailability.version ?? t.codexAvailable : codexAvailability?.reason ?? t.codexChecking}</span></div><SettingsToggle label={t.enabled} title={codexAvailability?.available ? undefined : codexAvailability?.reason ?? t.codexChecking} checked={codexEnabled} disabled={!codexAvailability?.available} onChange={(event) => setCodexEnabled(event.target.checked)} /></div>
+              <div className="reader-settings__section-heading"><Sparkles size={17} /><div><strong>Codex</strong><span title={codexAvailability?.executablePath}>{codexAvailability?.available ? `${codexAvailability.version ?? t.codexAvailable}${codexAvailability.executablePath ? ` · ${codexDetectedLabel}` : ''}` : codexAvailability?.reason ?? t.codexChecking}</span></div><SettingsToggle label={t.enabled} title={codexAvailability?.available ? undefined : codexAvailability?.reason ?? t.codexChecking} checked={codexEnabled} disabled={!codexAvailability?.available} onChange={(event) => setCodexEnabled(event.target.checked)} /></div>
               <div className="reader-settings__fields">
-                <label className="reader-settings__wide">{t.codexExecutablePath}<input value={codexExecutablePath} placeholder={t.codexExecutablePathHint} spellCheck={false} onChange={(event) => setCodexExecutablePath(event.target.value)} /></label>
+                <label className="reader-settings__wide">{t.codexExecutablePath}<span className="reader-settings__codex-path"><input value={codexExecutablePath} placeholder={t.codexExecutablePathHint} spellCheck={false} onChange={(event) => setCodexExecutablePath(event.target.value)} />{!codexExecutablePath.trim() && codexAvailability?.executablePath && <small title={codexAvailability.executablePath}>{codexDetectedLabel}: {codexAvailability.executablePath}</small>}</span></label>
               </div>
               <div className="reader-settings__subsection"><strong>{t.chat}</strong><div className="reader-settings__fields">
                 <label>{t.chatModel}<SettingsSelect value={codexChatModel} disabled={!codexEnabled || !codexAvailability?.available} onChange={(event) => { setCodexChatModel(event.target.value); setCodexChatEffort(''); }}><option value="">{t.codexDefault}</option>{codexModels.map((modelInfo) => <option key={modelInfo.id} value={modelInfo.id}>{modelInfo.displayName}</option>)}</SettingsSelect></label>
@@ -1760,6 +1847,70 @@ function ReaderSettingsPanel({
                 <label>{t.uiLanguage}<SettingsSelect value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value as UiLanguage)}><option value="en">English</option><option value="zh-CN">简体中文</option></SettingsSelect></label>
                 <label>{t.aiPreferredLanguage}<SettingsSelect value={aiLanguage} onChange={(event) => setAiLanguage(event.target.value as AiPreferredLanguage)}><option value="Simplified Chinese">简体中文</option><option value="Chinese">中文</option><option value="English">English</option></SettingsSelect></label>
               </div>
+            </section>
+            )}
+            {settingsSection === 'storage' && (
+            <section className="reader-settings__section reader-settings__storage">
+              <div className="reader-settings__section-heading">
+                <Database size={17} />
+                <div><strong>{t.storageOverview}</strong><span>{t.storageDescription}</span></div>
+                <button className="quiet-button reader-settings__storage-refresh" type="button" disabled={storageLoading} onClick={() => void refreshStorageOverview()}>{storageLoading ? t.loading : t.refresh}</button>
+              </div>
+              {storageError && <span className="reader-settings__status is-error">{storageError}</span>}
+              {storageOverview && (
+                <>
+                  <div className="reader-settings__storage-summary">
+                    <div><span>{t.books}</span><strong>{storageOverview.documents.length}</strong></div>
+                    <div><span>{t.pdfStorage}</span><strong>{formatBytes(storageOverview.documents.reduce((total, item) => total + (item.document.fingerprint?.byteSize ?? 0), 0))}</strong></div>
+                    <div><span>{t.metadataStorage}</span><strong>{formatBytes(storageOverview.metadataBytes)}</strong></div>
+                  </div>
+                  <div className="reader-settings__storage-path"><span>{t.metadataLocation}</span><code title={storageOverview.metadataPath}>{storageOverview.metadataPath}</code></div>
+                  {storageOverview.documents.length === 0 ? (
+                    <div className="reader-settings__storage-empty"><BookOpen size={22} /><span>{t.noStoredBooks}</span></div>
+                  ) : (
+                    <div className="reader-settings__book-list">
+                      {storageOverview.documents.map((item) => {
+                        const document = item.document;
+                        const messageCount = item.conversations.reduce((total, conversation) => total + conversation.messageCount, 0);
+                        const contentCount = item.conversations.length + item.translations.length + item.notes.length + item.marks.length + item.bookmarks.length + item.workspaceBlocks.length + (item.generatedOutline?.itemCount ?? 0);
+                        return (
+                          <details className="reader-settings__book" key={document.id}>
+                            <summary>
+                              <BookOpen size={18} />
+                              <span><strong>{document.title}</strong><small>{document.fileName} · {formatDateTime(document.lastOpenedAt, uiLanguage)}</small></span>
+                              <em>{contentCount} {t.items}</em>
+                              <ChevronDown size={16} />
+                            </summary>
+                            <div className="reader-settings__book-detail">
+                              <dl>
+                                <div><dt>{t.fileStatus}</dt><dd className={item.fileAvailable ? '' : 'is-missing'}>{item.fileAvailable ? t.available : t.missing}</dd></div>
+                                <div><dt>{t.fileSize}</dt><dd>{formatBytes(document.fingerprint?.byteSize ?? 0)}</dd></div>
+                                <div><dt>{t.pages}</dt><dd>{document.pageCount ?? '—'}</dd></div>
+                                <div><dt>{t.lastReadPage}</dt><dd>{document.readingState?.lastPage ?? '—'}</dd></div>
+                                <div><dt>{t.addedAt}</dt><dd>{formatDateTime(document.createdAt, uiLanguage)}</dd></div>
+                                <div><dt>{t.lastOpened}</dt><dd>{formatDateTime(document.lastOpenedAt, uiLanguage)}</dd></div>
+                                <div className="is-wide"><dt>{t.filePath}</dt><dd title={document.filePath}>{document.filePath}</dd></div>
+                                <div className="is-wide"><dt>SHA-256</dt><dd title={document.sha256}>{document.sha256}</dd></div>
+                              </dl>
+                              <div className="reader-settings__content-counts" aria-label={t.storedContent}>
+                                <span>{t.conversations}<strong>{item.conversations.length}</strong></span>
+                                <span>{t.messages}<strong>{messageCount}</strong></span>
+                                <span>{t.translations}<strong>{item.translations.length}</strong></span>
+                                <span>{t.notes}<strong>{item.notes.length}</strong></span>
+                                <span>{t.marks}<strong>{item.marks.length}</strong></span>
+                                <span>{t.bookmarks}<strong>{item.bookmarks.length}</strong></span>
+                                <span>{t.canvasItems}<strong>{item.workspaceBlocks.length}</strong></span>
+                                <span>{t.outlineItems}<strong>{item.generatedOutline?.itemCount ?? 0}</strong></span>
+                              </div>
+                              <StoredContentPreview item={item} language={uiLanguage} labels={t} />
+                            </div>
+                          </details>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
             </section>
             )}
             {settingsSection === 'appearance' && (
@@ -1830,7 +1981,6 @@ function ReaderSettingsPanel({
           </div>
         </form>
       </section>
-    </div>
   );
 }
 
@@ -1853,25 +2003,138 @@ function SettingsToggle({ label, ...props }: ComponentPropsWithoutRef<'input'> &
   );
 }
 
+function StoredContentPreview({
+  item,
+  language,
+  labels
+}: {
+  item: StoredDocumentInfo;
+  language: UiLanguage;
+  labels: ReturnType<typeof readerSettingsText>;
+}): ReactElement | null {
+  const groups = [
+    {
+      label: labels.conversations,
+      entries: item.conversations.map((conversation) => `${pagePrefix(conversation.pageNumber, language)}${conversation.title} · ${conversation.messageCount} ${labels.messages.toLocaleLowerCase()}`)
+    },
+    {
+      label: labels.translations,
+      entries: item.translations.map((translation) => `${pagePrefix(translation.pageNumber, language)}${compactStorageText(translation.quote)} → ${compactStorageText(translation.content)}`)
+    },
+    {
+      label: labels.notes,
+      entries: item.notes.map((note) => `${pageRangeLabel(note.pageStart, note.pageEnd, language)}${note.title}${note.source === 'ai' ? ' · AI' : ''}`)
+    },
+    {
+      label: labels.marks,
+      entries: item.marks.map((mark) => `${pagePrefix(mark.pageNumber, language)}${mark.kind === 'highlight' ? labels.highlight : labels.underline}: ${compactStorageText(mark.quote)}`)
+    },
+    {
+      label: labels.bookmarks,
+      entries: item.bookmarks.map((bookmark) => `${pagePrefix(bookmark.pageNumber, language)}${bookmark.label}`)
+    },
+    {
+      label: labels.canvasItems,
+      entries: item.workspaceBlocks.map((block) => `${pagePrefix(block.pageNumber, language)}${block.title} · ${block.kind}`)
+    }
+  ].filter((group) => group.entries.length > 0);
+  if (groups.length === 0) {
+    return <p className="reader-settings__book-no-content">{labels.noBookContent}</p>;
+  }
+  return (
+    <div className="reader-settings__content-preview">
+      {groups.map((group) => (
+        <section key={group.label}>
+          <strong>{group.label}</strong>
+          <ul>{group.entries.map((entry, index) => <li key={`${group.label}-${index}`}>{entry}</li>)}</ul>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function compactStorageText(value: string, maxLength = 120): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length > maxLength ? `${compact.slice(0, maxLength - 1)}…` : compact;
+}
+
+function pagePrefix(pageNumber: number | undefined, language: UiLanguage): string {
+  if (!pageNumber) {
+    return '';
+  }
+  return language === 'zh-CN' ? `第 ${pageNumber} 页 · ` : `p.${pageNumber} · `;
+}
+
+function pageRangeLabel(pageStart: number, pageEnd: number, language: UiLanguage): string {
+  const range = pageStart === pageEnd ? String(pageStart) : `${pageStart}–${pageEnd}`;
+  return language === 'zh-CN' ? `第 ${range} 页 · ` : `p.${range} · `;
+}
+
+function formatDateTime(value: string, language: UiLanguage): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat(language === 'zh-CN' ? 'zh-CN' : 'en', {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  }).format(date);
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '0 B';
+  }
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const unitIndex = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const amount = bytes / (1024 ** unitIndex);
+  return `${amount >= 10 || unitIndex === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function readerHomeText(language: UiLanguage) {
+  if (language === 'zh-CN') {
+    return {
+      pdfReader: 'PDF 阅读器',
+      openPdf: '打开 PDF',
+      settings: '设置',
+      recentDocuments: '最近浏览',
+      bookCount: (count: number) => `${count} 本`,
+      missing: '文件已移动',
+      recentMeta: (document: PdfDocumentMeta) => `${document.readingState?.lastPage ? `第 ${document.readingState.lastPage} 页 · ` : ''}${formatDateTime(document.lastOpenedAt, language)}`
+    };
+  }
+  return {
+    pdfReader: 'PDF reader',
+    openPdf: 'Open PDF',
+    settings: 'Settings',
+    recentDocuments: 'Recently viewed',
+    bookCount: (count: number) => `${count} ${count === 1 ? 'book' : 'books'}`,
+    missing: 'File moved',
+    recentMeta: (document: PdfDocumentMeta) => `${document.readingState?.lastPage ? `Page ${document.readingState.lastPage} · ` : ''}${formatDateTime(document.lastOpenedAt, language)}`
+  };
+}
+
 function readerSettingsText(language: UiLanguage) {
   if (language === 'zh-CN') {
     return {
-      settings: '设置', close: '关闭', settingsSections: '设置分区', provider: '服务商', sync: '同步', appearance: '外观', language: '语言', updates: '更新', backToApp: '返回应用', searchSettings: '搜索设置...', configuration: '配置', noSettingsFound: '没有匹配的设置', reset: '恢复默认', sidebarColor: '边栏颜色', appearanceDescription: '统一目录、标注、对话与阅读排版。', annotationColors: '标注与对话颜色', annotationColorsDescription: '用于高亮、划线、引用及阅读工作区的视觉提示。', highlightColor: '高亮', underlineColor: '划线', chatColor: '对话', noteColor: '笔记', summaryColor: '总结', translateColor: '翻译', typography: '排版', typographyDescription: '分别调整界面、Agent 回复与代码的字体和字号。', uiFont: '界面字体', uiFontSize: '界面字号', agentFont: 'Agent 字体', agentFontSize: 'Agent 字号', codeFont: '代码字体', codeFontSize: '代码字号', fontSystem: '系统无衬线', fontRounded: '圆体', fontSerif: '阅读衬线', fontMono: '等宽',
+      settings: '设置', close: '关闭', settingsSections: '设置分区', provider: '服务商', sync: '同步', storage: '存储', appearance: '外观', language: '语言', updates: '更新', backToApp: '返回应用', searchSettings: '搜索设置...', configuration: '配置', noSettingsFound: '没有匹配的设置', reset: '恢复默认', sidebarColor: '边栏颜色', appearanceDescription: '统一目录、标注、对话与阅读排版。', annotationColors: '标注与对话颜色', annotationColorsDescription: '用于高亮、划线、引用及阅读工作区的视觉提示。', highlightColor: '高亮', underlineColor: '划线', chatColor: '对话', noteColor: '笔记', summaryColor: '总结', translateColor: '翻译', typography: '排版', typographyDescription: '分别调整界面、Agent 回复与代码的字体和字号。', uiFont: '界面字体', uiFontSize: '界面字号', agentFont: 'Agent 字体', agentFontSize: 'Agent 字号', codeFont: '代码字体', codeFontSize: '代码字号', fontSystem: '系统无衬线', fontRounded: '圆体', fontSerif: '阅读衬线', fontMono: '等宽',
       aiProvider: 'AI 服务商', displayName: '显示名称', temperature: '温度', baseUrl: '基础 URL', apiKey: 'API 密钥', model: '模型', storedKey: '已保存。输入新密钥可替换。', loading: '加载中...', fetchModels: '获取模型',
       codexAvailable: '本机 Codex CLI 可用', codexChecking: '正在检查本机 Codex CLI...', codexExecutablePath: 'Codex 可执行文件路径（可选）', codexExecutablePathHint: '留空自动发现；例如 /opt/homebrew/bin/codex 或 C:\\...\\codex.cmd', enabled: '启用', chat: '对话', chatModel: '对话模型', chatReasoning: '对话推理强度', codexDefault: 'Codex 默认', readerDefault: '阅读器默认（低）',
       translation: '翻译', translationBackend: '翻译后端', translationModel: '翻译模型', translationReasoning: '翻译推理强度', fastestAvailable: '最快可用模型',
       webDavSync: 'WebDAV 同步', perPdfMetadata: '按 PDF 保存元数据', serverUrl: '服务器 URL', folder: '文件夹', username: '用户名', password: '密码', storedPassword: '已保存。输入新密码可替换。',
+      storageOverview: '本地存储概览', storageDescription: '查看本机保存的书籍、阅读状态和衍生内容；不会展示密钥。', refresh: '刷新', books: '书籍', pdfStorage: 'PDF 文件', metadataStorage: 'Tessel 元数据', metadataLocation: '元数据位置', noStoredBooks: '还没有保存的书籍。打开 PDF 后会显示在这里。', items: '项内容', fileStatus: '文件状态', available: '可访问', missing: '文件已移动或不可访问', fileSize: '文件大小', pages: '总页数', lastReadPage: '上次阅读页', addedAt: '加入时间', lastOpened: '最近打开', filePath: '文件路径', storedContent: '已保存内容', conversations: '对话', messages: '消息', translations: '翻译', notes: '笔记', marks: '标注', bookmarks: '书签', canvasItems: '画布内容', outlineItems: 'AI 目录项', noBookContent: '这本书目前只有文件与阅读记录。', highlight: '高亮', underline: '划线',
       languageDescription: '界面文本和 AI 回复', uiLanguage: '界面语言', aiPreferredLanguage: 'AI 首选语言',
       updateDescription: '自动检查 GitHub Releases；下载和安装均由你确认。未签名 macOS 版使用手动更新。', currentVersion: '当前版本', updateStatus: '更新状态', availableVersion: '可用版本', releaseNotes: '发行说明', checkForUpdates: '检查更新', downloadUpdate: '下载更新', later: '稍后', openDownloads: '前往下载页', restartToUpdate: '重启并更新', cancel: '取消', save: '保存',
       updateUnsupported: '更新仅在已安装的正式版中可用。', updateManualMac: '当前未签名 macOS 版本请下载新安装包更新。', updateChecking: '正在检查更新...', updateAvailable: '发现新版本，等待下载确认。', updateDownloading: (percent?: number) => `正在下载更新${percent === undefined ? '...' : `（${percent}%）`}`, updateReady: '更新已下载，重启即可安装。', updateCurrent: '已是最新版本。', updateError: '无法检查更新。'
     };
   }
   return {
-    settings: 'Settings', close: 'Close', settingsSections: 'Settings sections', provider: 'Provider', sync: 'Sync', appearance: 'Appearance', language: 'Language', updates: 'Updates', backToApp: 'Back to app', searchSettings: 'Search settings...', configuration: 'Configuration', noSettingsFound: 'No settings found', reset: 'Reset', sidebarColor: 'Sidebar color', appearanceDescription: 'Unifies the directory, annotations, chat, and reading typography.', annotationColors: 'Annotation and chat colors', annotationColorsDescription: 'Used for highlights, underlines, quotes, and reading workspace cues.', highlightColor: 'Highlight', underlineColor: 'Underline', chatColor: 'Chat', noteColor: 'Note', summaryColor: 'Summary', translateColor: 'Translation', typography: 'Typography', typographyDescription: 'Tune interface, Agent response, and code typography independently.', uiFont: 'Interface font', uiFontSize: 'Interface size', agentFont: 'Agent font', agentFontSize: 'Agent size', codeFont: 'Code font', codeFontSize: 'Code size', fontSystem: 'System sans', fontRounded: 'Rounded', fontSerif: 'Reading serif', fontMono: 'Monospace',
+    settings: 'Settings', close: 'Close', settingsSections: 'Settings sections', provider: 'Provider', sync: 'Sync', storage: 'Storage', appearance: 'Appearance', language: 'Language', updates: 'Updates', backToApp: 'Back to app', searchSettings: 'Search settings...', configuration: 'Configuration', noSettingsFound: 'No settings found', reset: 'Reset', sidebarColor: 'Sidebar color', appearanceDescription: 'Unifies the directory, annotations, chat, and reading typography.', annotationColors: 'Annotation and chat colors', annotationColorsDescription: 'Used for highlights, underlines, quotes, and reading workspace cues.', highlightColor: 'Highlight', underlineColor: 'Underline', chatColor: 'Chat', noteColor: 'Note', summaryColor: 'Summary', translateColor: 'Translation', typography: 'Typography', typographyDescription: 'Tune interface, Agent response, and code typography independently.', uiFont: 'Interface font', uiFontSize: 'Interface size', agentFont: 'Agent font', agentFontSize: 'Agent size', codeFont: 'Code font', codeFontSize: 'Code size', fontSystem: 'System sans', fontRounded: 'Rounded', fontSerif: 'Reading serif', fontMono: 'Monospace',
     aiProvider: 'AI provider', displayName: 'Display name', temperature: 'Temperature', baseUrl: 'Base URL', apiKey: 'API key', model: 'Model', storedKey: 'Stored. Enter a new key to replace it.', loading: 'Loading...', fetchModels: 'Fetch models',
     codexAvailable: 'Local Codex CLI available', codexChecking: 'Checking local Codex CLI...', codexExecutablePath: 'Codex executable path (optional)', codexExecutablePathHint: 'Leave blank to auto-detect, e.g. /opt/homebrew/bin/codex or C:\\...\\codex.cmd', enabled: 'Enabled', chat: 'Chat', chatModel: 'Chat model', chatReasoning: 'Chat reasoning', codexDefault: 'Codex default', readerDefault: 'Reader default (Low)',
     translation: 'Translation', translationBackend: 'Translation backend', translationModel: 'Translation model', translationReasoning: 'Translation reasoning', fastestAvailable: 'Fastest available',
     webDavSync: 'WebDAV sync', perPdfMetadata: 'Per-PDF metadata', serverUrl: 'Server URL', folder: 'Folder', username: 'Username', password: 'Password', storedPassword: 'Stored. Enter a new password to replace it.',
+    storageOverview: 'Local storage overview', storageDescription: 'Inspect locally stored books, reading state, and derived content. Secrets are never shown.', refresh: 'Refresh', books: 'Books', pdfStorage: 'PDF files', metadataStorage: 'Tessel metadata', metadataLocation: 'Metadata location', noStoredBooks: 'No books are stored yet. Open a PDF and it will appear here.', items: 'items', fileStatus: 'File status', available: 'Available', missing: 'Moved or unavailable', fileSize: 'File size', pages: 'Pages', lastReadPage: 'Last read page', addedAt: 'Added', lastOpened: 'Last opened', filePath: 'File path', storedContent: 'Stored content', conversations: 'Conversations', messages: 'Messages', translations: 'Translations', notes: 'Notes', marks: 'Annotations', bookmarks: 'Bookmarks', canvasItems: 'Canvas items', outlineItems: 'AI outline items', noBookContent: 'This book currently contains only its file and reading record.', highlight: 'Highlight', underline: 'Underline',
     languageDescription: 'Interface text and AI responses', uiLanguage: 'UI language', aiPreferredLanguage: 'AI preferred language',
     updateDescription: 'Checks GitHub Releases automatically; downloading and installing require your confirmation. Unsigned macOS builds update manually.', currentVersion: 'Current version', updateStatus: 'Update status', availableVersion: 'Available version', releaseNotes: 'Release notes', checkForUpdates: 'Check for updates', downloadUpdate: 'Download update', later: 'Later', openDownloads: 'Open downloads', restartToUpdate: 'Restart to update', cancel: 'Cancel', save: 'Save',
     updateUnsupported: 'Updates are available in installed releases only.', updateManualMac: 'This unsigned macOS build is updated by downloading a new installer.', updateChecking: 'Checking for updates...', updateAvailable: 'A new version is available. Choose whether to download it.', updateDownloading: (percent?: number) => `Downloading update${percent === undefined ? '...' : ` (${percent}%)`}`, updateReady: 'Update downloaded. Restart to install.', updateCurrent: 'You are up to date.', updateError: 'Unable to check for updates.'
@@ -1892,1210 +2155,6 @@ function updateStatusText(state: AppUpdateState | undefined, text: ReturnType<ty
     case 'error': return state.message ? `${text.updateError} ${state.message}` : text.updateError;
     default: return text.updateChecking;
   }
-}
-
-function appText(language: UiLanguage) {
-  if (language === 'zh-CN') {
-    return {
-      aiPreferredLanguage: 'AI 首选语言',
-      aiProvider: 'AI Provider',
-      aiReady: 'AI 已就绪',
-      annotationColorsHelp: '为高亮、下划线、对话和笔记选区设置低饱和颜色。',
-      appearance: '外观',
-      apiKey: 'API key',
-      baseUrl: 'Base URL',
-      branch: 'Branch',
-      cancel: '取消',
-      chatColor: '对话选区',
-      availableModels: '可选模型',
-      chooseModel: '选择模型',
-      close: '关闭',
-      enabled: '启用',
-      fetchModels: '获取 models',
-      githubUpload: 'GitHub 上传',
-      githubManualHelp: '启动时会自动同步；这里也可以手动同步或直接上传当前本地快照。',
-      githubSyncNow: '同步',
-      githubSyncing: '同步中...',
-      githubUploadNow: '上传',
-      githubUploading: '上传中...',
-      group: '分组',
-      groups: '分组',
-      cloudHeld: '云端持有',
-      createGroup: '创建分组',
-      groupFilters: '分组筛选',
-      holdInCloud: '持有这个组',
-      newGroup: '新分组',
-      noGroup: '未分组',
-      noGroupsYet: '还没有分组',
-      quickOpen: '临时打开',
-      keyStored: 'Key 已保存',
-      language: '语言',
-      languageHelp: '分别控制界面文案和 AI 输出语言',
-      languageMuted: 'UI 语言只影响按钮和界面文案；AI 首选语言会影响提示词、翻译目标和生成内容。',
-      allDocuments: '全部文档',
-      clearFilter: '清除筛选',
-      latestFile: '最近文件',
-      lastOpened: '上次打开',
-      library: '资料库',
-      libraryEmptyCopy: '每个 PDF 会在独立阅读窗口中打开，并保留对话、笔记和标注。',
-      librarySections: '资料库分区',
-      listView: '列表',
-      loadingModels: '获取中...',
-      localDraftMode: '本地草稿模式',
-      localFirstLibraryData: '本地优先的资料库数据',
-      highlightColor: '高亮',
-      model: 'Model',
-      name: '名称',
-      noteColor: '笔记选区',
-      noModelsFound: '没有获取到模型。',
-      noMatchingCopy: '换一个标题、文件名或标签试试。',
-      noMatchingPdfs: '没有匹配的 PDF',
-      noRecentFiles: '还没有最近打开的 PDF',
-      noTagsYet: '还没有标签',
-      noProviderLoaded: 'Provider 未加载',
-      openAiCompatible: 'OpenAI-compatible chat completions',
-      openFirstPdf: '打开第一个 PDF',
-      openPdf: '打开 PDF',
-      owner: 'Owner',
-      pageProgress: '阅读进度',
-      path: 'Path',
-      pdfLibrary: 'PDF 资料库',
-      pdfReadingWorkspace: 'PDF 阅读工作台',
-      recent: '最近',
-      recentDocuments: '最近文档',
-      repo: 'Repo',
-      repositoryTarget: '仓库目标',
-      save: '保存',
-      searchPdfsOrTags: '搜索 PDF 或标签',
-      showing: '当前显示',
-      settings: '设置',
-      settingsSections: '设置分区',
-      storedKeyPlaceholder: '已保存。输入新 key 可替换。',
-      storedTokenPlaceholder: '已保存。输入新 token 可替换。',
-      tags: '标签',
-      tagFilters: '标签筛选',
-      taggedDocuments: '已打标签',
-      temperature: 'Temperature',
-      title: '标题',
-      token: 'Token',
-      tokenStored: 'Token 已保存',
-      summaryColor: '总结选区',
-      translateColor: '翻译选区',
-      uiLanguage: 'UI 语言',
-      underlineColor: '下划线',
-      untagged: '无标签',
-      coverView: '封面',
-      viewMode: '显示方式',
-      workspace: '工作区',
-      workspaceMuted: 'PDF 元数据、笔记、标注和对话会留在本地工作区，直到你开启上传。'
-    };
-  }
-
-  return {
-    aiPreferredLanguage: 'AI preferred language',
-    aiProvider: 'AI Provider',
-    aiReady: 'AI ready',
-    annotationColorsHelp: 'Use muted colors for highlights, underlines, chats, and note selections.',
-    appearance: 'Appearance',
-    apiKey: 'API key',
-    baseUrl: 'Base URL',
-    branch: 'Branch',
-    cancel: 'Cancel',
-    chatColor: 'Chat selection',
-    availableModels: 'Available models',
-    chooseModel: 'Choose a model',
-    close: 'Close',
-    enabled: 'Enabled',
-    fetchModels: 'Fetch models',
-    githubUpload: 'GitHub Upload',
-    githubManualHelp: 'Sidelight syncs on launch; you can also sync now or upload the current local snapshot.',
-    githubSyncNow: 'Sync now',
-    githubSyncing: 'Syncing...',
-    githubUploadNow: 'Upload now',
-    githubUploading: 'Uploading...',
-    group: 'Group',
-    groups: 'Groups',
-    cloudHeld: 'Cloud held',
-    createGroup: 'Create group',
-    groupFilters: 'Group filters',
-    holdInCloud: 'Hold this group',
-    newGroup: 'New group',
-    noGroup: 'No group',
-    noGroupsYet: 'No groups yet',
-    quickOpen: 'Temporary open',
-    keyStored: 'Key stored',
-    language: 'Language',
-    languageHelp: 'Control interface text and AI output separately',
-    languageMuted: 'UI language changes buttons and interface text. AI preferred language changes prompts, translation targets, and generated content.',
-    allDocuments: 'All documents',
-    clearFilter: 'Clear filter',
-    latestFile: 'Latest file',
-    lastOpened: 'Last opened',
-    library: 'Library',
-    libraryEmptyCopy: 'Each PDF opens in its own reading window with persistent chats and notes.',
-    librarySections: 'Library sections',
-    listView: 'List view',
-    loadingModels: 'Loading...',
-    localDraftMode: 'Local draft mode',
-    localFirstLibraryData: 'Local-first library data',
-    highlightColor: 'Highlight',
-    model: 'Model',
-    name: 'Name',
-    noteColor: 'Note selection',
-    noModelsFound: 'No models were returned.',
-    noMatchingCopy: 'Try a different title, file name, or tag.',
-    noMatchingPdfs: 'No matching PDFs',
-    noRecentFiles: 'No recently opened PDFs yet',
-    noTagsYet: 'No tags yet',
-    noProviderLoaded: 'No provider loaded',
-    openAiCompatible: 'OpenAI-compatible chat completions',
-    openFirstPdf: 'Open your first PDF',
-      openPdf: 'Open PDF',
-    owner: 'Owner',
-    pageProgress: 'Reading progress',
-    path: 'Path',
-    pdfLibrary: 'PDF library',
-    pdfReadingWorkspace: 'PDF reading workspace',
-    recent: 'Recent',
-    recentDocuments: 'Recent documents',
-    repo: 'Repo',
-    repositoryTarget: 'Repository target',
-    save: 'Save',
-    searchPdfsOrTags: 'Search PDFs or tags',
-    showing: 'Showing',
-    settings: 'Settings',
-    settingsSections: 'Settings sections',
-    storedKeyPlaceholder: 'Stored. Enter a new key to replace it.',
-    storedTokenPlaceholder: 'Stored. Enter a new token to replace it.',
-    tags: 'Tags',
-    tagFilters: 'Tag filters',
-    taggedDocuments: 'Tagged',
-    temperature: 'Temperature',
-    title: 'Title',
-    token: 'Token',
-    tokenStored: 'Token stored',
-    summaryColor: 'Summary selection',
-    translateColor: 'Translate selection',
-    uiLanguage: 'UI language',
-    underlineColor: 'Underline',
-    untagged: 'untagged',
-    coverView: 'Cover grid',
-    viewMode: 'View mode',
-    workspace: 'Workspace',
-    workspaceMuted: 'PDF metadata, notes, highlights, and chats stay in the local workspace until upload is enabled.'
-  };
-}
-
-function LibraryHome({
-  documents,
-  groups,
-  provider,
-  uiLanguage,
-  onOpenPdf,
-  onOpenDocument,
-  onSaveGroup,
-  onSaveDocument,
-  onOpenSettings
-}: {
-  documents: PdfDocumentMeta[];
-  groups: LibraryGroup[];
-  provider?: SafeAiProviderConfig;
-  uiLanguage: UiLanguage;
-  onOpenPdf(): void;
-  onOpenDocument(documentId: string): void;
-  onSaveGroup(group: LibraryGroup): void;
-  onSaveDocument(document: PdfDocumentMeta): void;
-  onOpenSettings(): void;
-}): ReactElement {
-  const ungroupedGroupId = '__ungrouped__';
-  const [query, setQuery] = useState('');
-  const [scope, setScope] = useState<'library' | 'recent' | 'tags' | 'groups'>('library');
-  const [activeTag, setActiveTag] = useState<string>();
-  const [activeGroupId, setActiveGroupId] = useState<string>();
-  const [newGroupName, setNewGroupName] = useState('');
-  const [viewMode, setViewMode] = useState<'list' | 'covers'>(() =>
-    window.localStorage.getItem('sidelight.libraryViewMode') === 'covers' ? 'covers' : 'list'
-  );
-  const t = appText(uiLanguage);
-  const sortedDocuments = useMemo(
-    () => [...documents].sort((a, b) => new Date(b.lastOpenedAt).getTime() - new Date(a.lastOpenedAt).getTime()),
-    [documents]
-  );
-  const visibleDocuments = useMemo(() => {
-    const scopedDocuments = activeGroupId === ungroupedGroupId
-      ? sortedDocuments.filter((document) => (document.groupIds ?? []).length === 0)
-      : activeGroupId
-      ? sortedDocuments.filter((document) => (document.groupIds ?? []).includes(activeGroupId))
-      : activeTag
-      ? sortedDocuments.filter((document) => document.tags.includes(activeTag))
-      : scope === 'recent'
-        ? sortedDocuments.slice(0, 12)
-        : sortedDocuments;
-    const needle = query.trim().toLowerCase();
-    if (!needle) {
-      return scopedDocuments;
-    }
-
-    return scopedDocuments.filter((document) =>
-      [document.title, document.fileName, ...document.tags]
-        .join('\n')
-        .toLowerCase()
-        .includes(needle)
-    );
-  }, [activeGroupId, activeTag, query, scope, sortedDocuments]);
-  const allTags = useMemo(
-    () => Array.from(new Set(documents.flatMap((document) => document.tags))).sort((a, b) => a.localeCompare(b)),
-    [documents]
-  );
-  const taggedCount = useMemo(() => documents.filter((document) => document.tags.length > 0).length, [documents]);
-  const latestDocument = sortedDocuments[0];
-
-  const ungroupedCount = useMemo(() => documents.filter((document) => (document.groupIds ?? []).length === 0).length, [documents]);
-  const activeGroup = groups.find((group) => group.id === activeGroupId);
-  const heldGroupCount = useMemo(() => groups.filter((group) => group.cloudHeld).length, [groups]);
-  const toolbarEyebrow =
-    scope === 'groups' ? t.groupFilters : activeTag ? t.tagFilters : scope === 'recent' ? t.recentDocuments : t.workspace;
-  const toolbarTitle =
-    activeGroup?.name ?? (activeGroupId === ungroupedGroupId ? t.noGroup : activeTag ?? (scope === 'recent' ? t.recentDocuments : scope === 'groups' ? t.groups : t.library));
-  const overviewButtonClass = (isActive: boolean): string => isActive ? 'library-stat is-active' : 'library-stat';
-
-  useEffect(() => {
-    window.localStorage.setItem('sidelight.libraryViewMode', viewMode);
-  }, [viewMode]);
-
-  const selectScope = (nextScope: 'library' | 'recent' | 'tags' | 'groups'): void => {
-    setScope(nextScope);
-    if (nextScope !== 'groups') {
-      setActiveGroupId(undefined);
-    } else if (!activeGroupId && groups[0]) {
-      setActiveGroupId(groups[0].id);
-    }
-    if (nextScope !== 'tags') {
-      setActiveTag(undefined);
-    } else if (!activeTag && allTags[0]) {
-      setActiveTag(allTags[0]);
-    }
-  };
-
-  const createGroup = (): void => {
-    const name = newGroupName.trim();
-    if (!name) {
-      return;
-    }
-
-    const now = new Date().toISOString();
-    const group: LibraryGroup = {
-      id: createId('group'),
-      name,
-      cloudHeld: false,
-      createdAt: now,
-      updatedAt: now
-    };
-    setNewGroupName('');
-    setScope('groups');
-    setActiveGroupId(group.id);
-    onSaveGroup(group);
-  };
-
-  const assignDocumentToGroup = (document: PdfDocumentMeta, groupId: string): void => {
-    onSaveDocument({
-      ...document,
-      inLibrary: true,
-      groupIds: groupId ? [groupId] : [],
-      updatedAt: new Date().toISOString()
-    });
-  };
-
-  return (
-    <section className="library-home">
-      <aside className="library-home__sidebar">
-        <header>
-          <div className="library-home__brand">
-            <Library size={22} />
-            <div>
-              <strong>Sidelight</strong>
-              <span>{t.pdfReadingWorkspace}</span>
-            </div>
-          </div>
-          <button className="icon-button" type="button" title={t.settings} onClick={onOpenSettings}>
-            <Settings size={16} />
-          </button>
-        </header>
-
-        <nav className="library-home__nav" aria-label={t.librarySections}>
-          <button
-            type="button"
-            className={scope === 'library' && !activeTag ? 'is-active' : ''}
-            aria-pressed={scope === 'library' && !activeTag}
-            onClick={() => selectScope('library')}
-          >
-            <BookOpen size={16} />
-            <span>{t.library}</span>
-            <strong>{documents.length}</strong>
-          </button>
-          <button
-            type="button"
-            className={scope === 'recent' ? 'is-active' : ''}
-            aria-pressed={scope === 'recent'}
-            onClick={() => selectScope('recent')}
-          >
-            <Clock3 size={16} />
-            <span>{t.recent}</span>
-            <strong>{Math.min(documents.length, 12)}</strong>
-          </button>
-          <button
-            type="button"
-            className={scope === 'tags' || activeTag ? 'is-active' : ''}
-            aria-pressed={scope === 'tags' || Boolean(activeTag)}
-            onClick={() => selectScope('tags')}
-          >
-            <Tags size={16} />
-            <span>{t.tags}</span>
-            <strong>{allTags.length}</strong>
-          </button>
-          <button
-            type="button"
-            className={scope === 'groups' ? 'is-active' : ''}
-            aria-pressed={scope === 'groups'}
-            onClick={() => selectScope('groups')}
-          >
-            <Cloud size={16} />
-            <span>{t.groups}</span>
-            <strong>{groups.length}</strong>
-          </button>
-        </nav>
-
-        <form className="library-home__new-group" onSubmit={(event) => {
-          event.preventDefault();
-          createGroup();
-        }}>
-          <label htmlFor="library-new-group">{t.newGroup}</label>
-          <span>
-            <input
-              id="library-new-group"
-              value={newGroupName}
-              placeholder={t.newGroup}
-              onChange={(event) => setNewGroupName(event.target.value)}
-            />
-            <button type="submit" title={t.createGroup} disabled={!newGroupName.trim()}>
-              <Plus size={15} />
-            </button>
-          </span>
-        </form>
-
-        <div className="library-home__provider">
-          <Bot size={17} />
-          <div>
-            <span>{provider?.hasApiKey ? t.aiReady : t.localDraftMode}</span>
-            <strong>{provider?.model ?? t.noProviderLoaded}</strong>
-          </div>
-        </div>
-      </aside>
-
-      <section className="library-home__main">
-        <header className="library-toolbar">
-          <div>
-            <span>{toolbarEyebrow}</span>
-            <h1>{toolbarTitle}</h1>
-          </div>
-          <div className="library-toolbar__actions">
-            <div className="library-view-toggle" role="group" aria-label={t.viewMode}>
-              <button
-                type="button"
-                className={viewMode === 'list' ? 'is-active' : ''}
-                aria-pressed={viewMode === 'list'}
-                title={t.listView}
-                onClick={() => setViewMode('list')}
-              >
-                <LayoutList size={15} />
-                {t.listView}
-              </button>
-              <button
-                type="button"
-                className={viewMode === 'covers' ? 'is-active' : ''}
-                aria-pressed={viewMode === 'covers'}
-                title={t.coverView}
-                onClick={() => setViewMode('covers')}
-              >
-                <LayoutGrid size={15} />
-                {t.coverView}
-              </button>
-            </div>
-            <label className="library-search">
-              <Search size={16} />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={t.searchPdfsOrTags}
-              />
-            </label>
-            <button className="primary-button" type="button" onClick={onOpenPdf}>
-              <FolderOpen size={16} />
-              {t.openPdf}
-            </button>
-          </div>
-        </header>
-
-        <section className="library-overview" aria-label={t.showing}>
-          <button
-            className={overviewButtonClass(scope === 'library' && !activeTag && !activeGroupId)}
-            type="button"
-            onClick={() => selectScope('library')}
-          >
-            <span>{t.allDocuments}</span>
-            <strong>{documents.length}</strong>
-            <small>{t.pdfLibrary}</small>
-          </button>
-          <button
-            className={overviewButtonClass(scope === 'recent')}
-            type="button"
-            onClick={() => selectScope('recent')}
-          >
-            <span>{t.recentDocuments}</span>
-            <strong>{Math.min(documents.length, 12)}</strong>
-            <small>{latestDocument?.title ?? t.noRecentFiles}</small>
-          </button>
-          <button
-            className={overviewButtonClass(scope === 'tags' || Boolean(activeTag))}
-            type="button"
-            onClick={() => selectScope('tags')}
-          >
-            <span>{t.taggedDocuments}</span>
-            <strong>{taggedCount}</strong>
-            <small>{allTags.length ? `${allTags.length} ${t.tags}` : t.noTagsYet}</small>
-          </button>
-          <button
-            className={overviewButtonClass(scope === 'groups' || Boolean(activeGroupId))}
-            type="button"
-            onClick={() => selectScope('groups')}
-          >
-            <span>{t.groups}</span>
-            <strong>{groups.length}</strong>
-            <small>{heldGroupCount ? `${heldGroupCount} ${t.cloudHeld}` : t.noGroupsYet}</small>
-          </button>
-        </section>
-
-        <div className="library-filterbar" aria-label={scope === 'groups' ? t.groupFilters : t.tagFilters}>
-          {scope === 'groups' ? (
-            <>
-              <span>{t.groupFilters}</span>
-              <button
-                type="button"
-                className={!activeGroupId ? 'is-active' : ''}
-                onClick={() => {
-                  setActiveGroupId(undefined);
-                  setActiveTag(undefined);
-                }}
-              >
-                {t.allDocuments}
-              </button>
-              <button
-                type="button"
-                className={activeGroupId === ungroupedGroupId ? 'is-active' : ''}
-                onClick={() => {
-                  setActiveGroupId(ungroupedGroupId);
-                  setActiveTag(undefined);
-                }}
-              >
-                {t.noGroup}
-                <small>{ungroupedCount}</small>
-              </button>
-              {groups.length === 0 && <em>{t.noGroupsYet}</em>}
-              {groups.map((group) => (
-                <button
-                  key={group.id}
-                  type="button"
-                  className={activeGroupId === group.id ? 'is-active' : ''}
-                  onClick={() => {
-                    setActiveGroupId(group.id);
-                    setActiveTag(undefined);
-                  }}
-                >
-                  {group.cloudHeld && <Cloud size={13} />}
-                  {group.name}
-                </button>
-              ))}
-              {activeGroup && (
-                <button
-                  type="button"
-                  className={activeGroup.cloudHeld ? 'library-filterbar__hold is-active' : 'library-filterbar__hold'}
-                  aria-pressed={activeGroup.cloudHeld}
-                  onClick={() => onSaveGroup({ ...activeGroup, cloudHeld: !activeGroup.cloudHeld })}
-                >
-                  <Cloud size={13} />
-                  {activeGroup.cloudHeld ? t.cloudHeld : t.holdInCloud}
-                </button>
-              )}
-            </>
-          ) : (
-            <>
-              <span>{t.tagFilters}</span>
-              <button
-                type="button"
-                className={!activeTag ? 'is-active' : ''}
-                onClick={() => {
-                  setActiveTag(undefined);
-                  setScope('library');
-                }}
-              >
-                {t.allDocuments}
-              </button>
-              {allTags.length === 0 && <em>{t.noTagsYet}</em>}
-              {allTags.map((tag) => (
-            <button
-              key={tag}
-              type="button"
-              className={activeTag === tag ? 'is-active' : ''}
-              onClick={() => {
-                setActiveTag(tag);
-                setScope('tags');
-              }}
-            >
-              {tag}
-            </button>
-              ))}
-            </>
-          )}
-        </div>
-
-        <div
-          className={viewMode === 'list' ? 'library-table' : 'library-table library-table--covers'}
-          role={viewMode === 'list' ? 'table' : 'list'}
-          aria-label={t.pdfLibrary}
-        >
-          {viewMode === 'list' && (
-            <div className="library-table__head" role="row">
-              <span>{t.title}</span>
-              <span>{t.group}</span>
-              <span>{t.pageProgress}</span>
-            </div>
-          )}
-
-          {visibleDocuments.length === 0 ? (
-            <section className="library-empty">
-              <FileText size={38} strokeWidth={1.5} />
-              <h2>{documents.length === 0 ? t.openFirstPdf : t.noMatchingPdfs}</h2>
-              <p>
-                {documents.length === 0
-                  ? t.libraryEmptyCopy
-                  : t.noMatchingCopy}
-              </p>
-              {documents.length === 0 && (
-                <button className="primary-button" type="button" onClick={onOpenPdf}>
-                  <FolderOpen size={16} />
-                  {t.openPdf}
-                </button>
-              )}
-            </section>
-          ) : viewMode === 'list' ? (
-            <div className="library-table__body">
-              {visibleDocuments.map((document) => {
-                const selectedGroupId = (document.groupIds ?? [])[0] ?? '';
-                return (
-                  <div key={document.id} className="library-row" role="row">
-                    <button
-                      className="library-row__open"
-                      type="button"
-                      onClick={() => onOpenDocument(document.id)}
-                    >
-                      <span className="library-row__title">
-                        <BookOpen size={17} />
-                        <span>
-                          <strong>{document.title}</strong>
-                          <small>{document.fileName}</small>
-                          <small className="library-row__progress-label">{readingProgressText(document, uiLanguage)}</small>
-                        </span>
-                      </span>
-                    </button>
-                    <span className="library-row__groups">
-                      <select
-                        aria-label={`${t.group}: ${document.title}`}
-                        value={selectedGroupId}
-                        onChange={(event) => assignDocumentToGroup(document, event.target.value)}
-                      >
-                        <option value="">{t.noGroup}</option>
-                        {groups.map((group) => (
-                          <option key={group.id} value={group.id}>
-                            {group.name}
-                          </option>
-                        ))}
-                      </select>
-                      <span className="library-row__tags">
-                        {document.tags.length
-                          ? document.tags.map((tag) => <small key={tag}>{tag}</small>)
-                          : <small>{t.untagged}</small>}
-                      </span>
-                    </span>
-                    <span className="library-row__status">
-                      <span>{readingProgressText(document, uiLanguage)}</span>
-                      <small>{formatLibraryDate(document.readingState?.updatedAt ?? document.lastOpenedAt)}</small>
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="library-cover-grid">
-              {visibleDocuments.map((document) => {
-                const selectedGroupId = (document.groupIds ?? [])[0] ?? '';
-                return (
-                  <article key={document.id} className="library-cover-card" role="listitem">
-                    <button
-                      className="library-cover-card__open"
-                      type="button"
-                      onClick={() => onOpenDocument(document.id)}
-                    >
-                      <span className="library-cover-card__cover" aria-hidden="true">
-                        <span>PDF</span>
-                        <BookOpen size={24} />
-                        <strong>{document.title}</strong>
-                      </span>
-                      <span className="library-cover-card__title">
-                        <strong>{document.title}</strong>
-                        <small>{document.fileName}</small>
-                      </span>
-                      <span className="library-cover-card__progress">
-                        <span>{readingProgressText(document, uiLanguage)}</span>
-                        <small>{formatLibraryDate(document.readingState?.updatedAt ?? document.lastOpenedAt)}</small>
-                      </span>
-                    </button>
-                    <div className="library-cover-card__meta">
-                      <select
-                        aria-label={`${t.group}: ${document.title}`}
-                        value={selectedGroupId}
-                        onChange={(event) => assignDocumentToGroup(document, event.target.value)}
-                      >
-                        <option value="">{t.noGroup}</option>
-                        {groups.map((group) => (
-                          <option key={group.id} value={group.id}>
-                            {group.name}
-                          </option>
-                        ))}
-                      </select>
-                      <span className="library-cover-card__tags">
-                        {document.tags.length
-                          ? document.tags.map((tag) => <small key={tag}>{tag}</small>)
-                          : <small>{t.untagged}</small>}
-                      </span>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </section>
-    </section>
-  );
-}
-
-function FloatingSettingsPanel({
-  provider,
-  githubUpload,
-  preferences,
-  onClose,
-  onGitHubAction,
-  onSave
-}: {
-  provider: SafeAiProviderConfig;
-  githubUpload: SafeGitHubUploadConfig;
-  preferences: AppPreferences;
-  onClose(): void;
-  onGitHubAction(
-    mode: WorkspaceSyncResult['mode'],
-    aiConfig: AiProviderConfig,
-    uploadConfig: GitHubUploadConfig,
-    preferencesConfig: AppPreferences
-  ): Promise<WorkspaceSyncResult>;
-  onSave(aiConfig: AiProviderConfig, uploadConfig: GitHubUploadConfig, preferencesConfig: AppPreferences): void;
-}): ReactElement {
-  const [displayName, setDisplayName] = useState(provider.displayName);
-  const [baseUrl, setBaseUrl] = useState(provider.baseUrl);
-  const [model, setModel] = useState(provider.model);
-  const [temperature, setTemperature] = useState(provider.temperature);
-  const [apiKey, setApiKey] = useState('');
-  const [uploadEnabled, setUploadEnabled] = useState(githubUpload.enabled);
-  const [owner, setOwner] = useState(githubUpload.owner);
-  const [repo, setRepo] = useState(githubUpload.repo);
-  const [branch, setBranch] = useState(githubUpload.branch);
-  const [basePath, setBasePath] = useState(githubUpload.basePath);
-  const [token, setToken] = useState('');
-  const [uiLanguage, setUiLanguage] = useState<UiLanguage>(preferences.uiLanguage);
-  const [aiLanguage, setAiLanguage] = useState<AiPreferredLanguage>(preferences.aiLanguage);
-  const [selectionColors, setSelectionColors] = useState(normalizeSelectionColors(preferences.selectionColors));
-  const [modelOptions, setModelOptions] = useState<AiModelInfo[]>([]);
-  const [modelLoading, setModelLoading] = useState(false);
-  const [modelError, setModelError] = useState<string>();
-  const [githubAction, setGithubAction] = useState<WorkspaceSyncResult['mode']>();
-  const [githubStatus, setGithubStatus] = useState<string>();
-  const [githubError, setGithubError] = useState<string>();
-  const t = appText(uiLanguage);
-
-  const currentAiConfig = (): AiProviderConfig => ({
-    displayName: displayName.trim() || 'OpenAI-compatible',
-    baseUrl: baseUrl.trim(),
-    model: model.trim(),
-    temperature,
-    apiKey: apiKey.trim() || undefined
-  });
-
-  const currentUploadConfig = (): GitHubUploadConfig => ({
-    enabled: uploadEnabled,
-    owner,
-    repo,
-    branch,
-    basePath,
-    token: token.trim() || undefined
-  });
-
-  const currentPreferences = (): AppPreferences => ({
-    uiLanguage,
-    aiLanguage,
-    translationBackend: preferences.translationBackend,
-    sidebarColor: preferences.sidebarColor ?? defaultAppPreferences.sidebarColor,
-    selectionColors: normalizeSelectionColors(selectionColors),
-    appearance: preferences.appearance ?? defaultAppPreferences.appearance,
-    experimentalCodexAgent: preferences.experimentalCodexAgent
-  });
-
-  const fetchModels = async (): Promise<void> => {
-    setModelLoading(true);
-    setModelError(undefined);
-
-    try {
-      const models = await window.sidelight.listAiModels({
-        displayName: displayName.trim() || 'OpenAI-compatible',
-        baseUrl: baseUrl.trim(),
-        model: model.trim() || provider.model,
-        temperature,
-        apiKey: apiKey.trim() || undefined
-      });
-      setModelOptions(models);
-      if (!model.trim() && models[0]) {
-        setModel(models[0].id);
-      }
-      if (models.length === 0) {
-        setModelError(t.noModelsFound);
-      }
-    } catch (error) {
-      setModelOptions([]);
-      setModelError(presentableAiError(error));
-    } finally {
-      setModelLoading(false);
-    }
-  };
-
-  const submit = (event: FormEvent): void => {
-    event.preventDefault();
-    onSave(currentAiConfig(), currentUploadConfig(), currentPreferences());
-  };
-
-  const runGithubAction = async (mode: WorkspaceSyncResult['mode']): Promise<void> => {
-    setGithubAction(mode);
-    setGithubStatus(undefined);
-    setGithubError(undefined);
-    try {
-      const result = await onGitHubAction(mode, currentAiConfig(), currentUploadConfig(), currentPreferences());
-      setGithubStatus(result.message);
-    } catch (error) {
-      setGithubError(presentableAiError(error));
-    } finally {
-      setGithubAction(undefined);
-    }
-  };
-
-  const updateSelectionColor = (role: SelectionColorRole, color: string): void => {
-    setSelectionColors((current) => normalizeSelectionColors({
-      ...current,
-      [role]: color
-    }));
-  };
-  const canRunGithubAction = uploadEnabled &&
-    owner.trim().length > 0 &&
-    repo.trim().length > 0 &&
-    (token.trim().length > 0 || githubUpload.hasToken);
-
-  return (
-    <div className="settings-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="floating-settings" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-        <header>
-          <div>
-            <span>{provider.hasApiKey ? t.keyStored : t.localDraftMode}</span>
-            <strong id="settings-title">{t.settings}</strong>
-          </div>
-          <button className="icon-button" type="button" title={t.close} onClick={onClose}>
-            <X size={15} />
-          </button>
-        </header>
-
-        <form className="settings-form" onSubmit={submit}>
-          <nav className="settings-nav" aria-label={t.settingsSections}>
-            <a href="#settings-ai">
-              <Bot size={15} />
-              {t.aiProvider}
-            </a>
-            <a href="#settings-language">
-              <LanguagesIcon />
-              {t.language}
-            </a>
-            <a href="#settings-appearance">
-              <Palette size={15} />
-              {t.appearance}
-            </a>
-            <a href="#settings-github">
-              <Github size={15} />
-              {t.githubUpload}
-            </a>
-            <a href="#settings-workspace">
-              <SlidersHorizontal size={15} />
-              {t.workspace}
-            </a>
-          </nav>
-
-          <div className="settings-sections">
-            <section className="settings-section" id="settings-ai">
-              <div className="settings-section__heading">
-                <Bot size={17} />
-                <div>
-                  <strong>{t.aiProvider}</strong>
-                  <span>{t.openAiCompatible}</span>
-                </div>
-              </div>
-              <div className="settings-grid">
-                <label>
-                  {t.name}
-                  <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
-                </label>
-                <label className="settings-model-field">
-                  {t.model}
-                  <span className="settings-model-control">
-                    <input
-                      value={model}
-                      list="settings-model-options"
-                      onChange={(event) => setModel(event.target.value)}
-                    />
-                    <button
-                      className="quiet-button settings-model-fetch"
-                      type="button"
-                      disabled={!baseUrl.trim() || modelLoading}
-                      onClick={() => void fetchModels()}
-                    >
-                      <RefreshCw size={14} />
-                      {modelLoading ? t.loadingModels : t.fetchModels}
-                    </button>
-                  </span>
-                  <datalist id="settings-model-options">
-                    {modelOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.ownedBy ?? option.id}
-                      </option>
-                    ))}
-                  </datalist>
-                  {modelOptions.length > 0 && (
-                    <select
-                      aria-label={t.availableModels}
-                      value={modelOptions.some((option) => option.id === model) ? model : ''}
-                      onChange={(event) => setModel(event.target.value)}
-                    >
-                      <option value="" disabled>{t.chooseModel}</option>
-                      {modelOptions.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.id}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  {modelError && <small className="settings-field-status">{modelError}</small>}
-                </label>
-                <label className="settings-field--wide">
-                  {t.baseUrl}
-                  <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
-                </label>
-                <label className="settings-field--wide">
-                  {t.apiKey}
-                  <input
-                    value={apiKey}
-                    type="password"
-                    onChange={(event) => setApiKey(event.target.value)}
-                    placeholder={provider.hasApiKey ? t.storedKeyPlaceholder : 'sk-...'}
-                  />
-                </label>
-                <label>
-                  {t.temperature}
-                  <input
-                    value={temperature}
-                    type="number"
-                    min="0"
-                    max="2"
-                    step="0.1"
-                    onChange={(event) => setTemperature(Number(event.target.value))}
-                  />
-                </label>
-              </div>
-            </section>
-
-            <section className="settings-section" id="settings-language">
-              <div className="settings-section__heading">
-                <SlidersHorizontal size={17} />
-                <div>
-                  <strong>{t.language}</strong>
-                  <span>{t.languageHelp}</span>
-                </div>
-              </div>
-              <div className="settings-grid">
-                <label>
-                  {t.uiLanguage}
-                  <select value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value as UiLanguage)}>
-                    <option value="en">English</option>
-                    <option value="zh-CN">简体中文</option>
-                  </select>
-                </label>
-                <label>
-                  {t.aiPreferredLanguage}
-                  <select
-                    value={aiLanguage}
-                    onChange={(event) => setAiLanguage(event.target.value as AiPreferredLanguage)}
-                  >
-                    <option value="English">English</option>
-                    <option value="Chinese">中文</option>
-                    <option value="Simplified Chinese">简体中文</option>
-                  </select>
-                </label>
-              </div>
-              <div className="settings-muted-row">
-                {t.languageMuted}
-              </div>
-            </section>
-
-            <section className="settings-section" id="settings-appearance">
-              <div className="settings-section__heading">
-                <Palette size={17} />
-                <div>
-                  <strong>{t.appearance}</strong>
-                  <span>{t.annotationColorsHelp}</span>
-                </div>
-              </div>
-              <div className="settings-color-grid">
-                <SelectionColorField
-                  label={t.highlightColor}
-                  value={selectionColors.highlight}
-                  onChange={(color) => updateSelectionColor('highlight', color)}
-                />
-                <SelectionColorField
-                  label={t.underlineColor}
-                  value={selectionColors.underline}
-                  onChange={(color) => updateSelectionColor('underline', color)}
-                />
-                <SelectionColorField
-                  label={t.chatColor}
-                  value={selectionColors.chat}
-                  onChange={(color) => updateSelectionColor('chat', color)}
-                />
-                <SelectionColorField
-                  label={t.noteColor}
-                  value={selectionColors.note}
-                  onChange={(color) => updateSelectionColor('note', color)}
-                />
-                <SelectionColorField
-                  label={t.summaryColor}
-                  value={selectionColors.summary}
-                  onChange={(color) => updateSelectionColor('summary', color)}
-                />
-                <SelectionColorField
-                  label={t.translateColor}
-                  value={selectionColors.translate}
-                  onChange={(color) => updateSelectionColor('translate', color)}
-                />
-              </div>
-            </section>
-
-            <section className="settings-section" id="settings-github">
-              <div className="settings-section__heading">
-                <Github size={17} />
-                <div>
-                  <strong>{t.githubUpload}</strong>
-                  <span>{githubUpload.hasToken ? t.tokenStored : t.repositoryTarget}</span>
-                </div>
-                <label className="settings-switch">
-                  <input
-                    type="checkbox"
-                    checked={uploadEnabled}
-                    onChange={(event) => setUploadEnabled(event.target.checked)}
-                  />
-                  {t.enabled}
-                </label>
-              </div>
-              <div className="settings-grid">
-                <label>
-                  {t.owner}
-                  <input value={owner} onChange={(event) => setOwner(event.target.value)} placeholder="octocat" />
-                </label>
-                <label>
-                  {t.repo}
-                  <input value={repo} onChange={(event) => setRepo(event.target.value)} placeholder="notebook" />
-                </label>
-                <label>
-                  {t.branch}
-                  <input value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="main" />
-                </label>
-                <label>
-                  {t.path}
-                  <input value={basePath} onChange={(event) => setBasePath(event.target.value)} placeholder="sidelight" />
-                </label>
-                <label className="settings-field--wide">
-                  {t.token}
-                  <input
-                    value={token}
-                    type="password"
-                    onChange={(event) => setToken(event.target.value)}
-                    placeholder={githubUpload.hasToken ? t.storedTokenPlaceholder : 'github_pat_...'}
-                  />
-                </label>
-              </div>
-              <div className="settings-github-actions">
-                <button
-                  className="quiet-button"
-                  type="button"
-                  disabled={!canRunGithubAction || Boolean(githubAction)}
-                  onClick={() => void runGithubAction('sync')}
-                >
-                  <RefreshCw size={14} />
-                  {githubAction === 'sync' ? t.githubSyncing : t.githubSyncNow}
-                </button>
-                <button
-                  className="quiet-button"
-                  type="button"
-                  disabled={!canRunGithubAction || Boolean(githubAction)}
-                  onClick={() => void runGithubAction('upload')}
-                >
-                  <UploadCloud size={14} />
-                  {githubAction === 'upload' ? t.githubUploading : t.githubUploadNow}
-                </button>
-                <small className={githubError ? 'settings-field-status is-error' : 'settings-field-status'}>
-                  {githubError ?? githubStatus ?? t.githubManualHelp}
-                </small>
-              </div>
-            </section>
-
-            <section className="settings-section" id="settings-workspace">
-              <div className="settings-section__heading">
-                <SlidersHorizontal size={17} />
-                <div>
-                  <strong>{t.workspace}</strong>
-                  <span>{t.localFirstLibraryData}</span>
-                </div>
-              </div>
-              <div className="settings-muted-row">
-                {t.workspaceMuted}
-              </div>
-            </section>
-          </div>
-
-          <footer className="settings-actions">
-            <button className="quiet-button" type="button" onClick={onClose}>
-              {t.cancel}
-            </button>
-            <button className="primary-button" type="submit" disabled={!baseUrl.trim() || !model.trim()}>
-              <Check size={15} />
-              {t.save}
-            </button>
-          </footer>
-        </form>
-      </section>
-    </div>
-  );
-}
-
-function SelectionColorField({
-  label,
-  value,
-  onChange
-}: {
-  label: string;
-  value: string;
-  onChange(color: string): void;
-}): ReactElement {
-  return (
-    <label className="settings-color-field">
-      <span>{label}</span>
-      <input
-        type="color"
-        aria-label={label}
-        value={value}
-        onInput={(event) => onChange(event.currentTarget.value)}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </label>
-  );
-}
-
-function FloatingChatPanel({
-  conversation,
-  busy,
-  onClose,
-  onSend
-}: {
-  conversation: Conversation;
-  busy: boolean;
-  onClose(): void;
-  onSend(prompt: string): void;
-}): ReactElement {
-  const [draft, setDraft] = useState('');
-
-  const submit = (event: FormEvent): void => {
-    event.preventDefault();
-    const prompt = draft.trim();
-    if (!prompt || busy) {
-      return;
-    }
-
-    setDraft('');
-    onSend(prompt);
-  };
-
-  return (
-    <section className="floating-chat">
-      <header>
-        <div>
-          <span>p.{conversation.pageNumber ?? '-'}</span>
-          <strong>{conversation.summary.title}</strong>
-        </div>
-        <button className="icon-button" type="button" title="Close" onClick={onClose}>
-          <X size={15} />
-        </button>
-      </header>
-
-      {conversation.anchor && <blockquote>{conversation.anchor.quote}</blockquote>}
-
-      <div className="floating-chat__messages">
-        {conversation.messages.length === 0 && (
-          <div className="floating-chat__empty">
-            <MessageCircle size={22} />
-            <span>{conversation.anchor ? 'Ask anything about the selected passage.' : 'Ask anything about this page.'}</span>
-          </div>
-        )}
-        {conversation.messages.map((message) => (
-          <article key={message.id} className={`message message--${message.role}`}>
-            <div className="message__role">{message.role === 'assistant' ? 'Sidelight' : 'You'}</div>
-            <MarkdownView>{message.content}</MarkdownView>
-          </article>
-        ))}
-      </div>
-
-      <form className="composer" onSubmit={submit}>
-        <textarea
-          rows={3}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          placeholder={conversation.anchor ? 'Ask about this selection...' : 'Ask about this page...'}
-        />
-        <button className="primary-button" type="submit" disabled={busy || !draft.trim()}>
-          <Check size={15} />
-          Send
-        </button>
-      </form>
-    </section>
-  );
 }
 
 function promptForMode(mode: AiMode, language: AiPreferredLanguage = 'Simplified Chinese'): string {
@@ -3639,30 +2698,6 @@ function stripHtmlForError(value: string): string {
 function limitErrorText(text: string): string {
   const normalized = text.replace(/\s+/g, ' ').trim();
   return normalized.length > 240 ? `${normalized.slice(0, 237)}...` : normalized;
-}
-
-function formatLibraryDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return '-';
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(date);
-}
-
-function readingProgressText(document: PdfDocumentMeta, language: UiLanguage): string {
-  const page = Math.max(1, Math.floor(document.readingState?.lastPage ?? 1));
-  const pageCount = document.pageCount ? Math.max(1, Math.floor(document.pageCount)) : undefined;
-  if (language === 'zh-CN') {
-    return pageCount ? `读到第 ${page} / ${pageCount} 页` : `读到第 ${page} 页`;
-  }
-
-  return pageCount ? `Page ${page} of ${pageCount}` : `Page ${page}`;
 }
 
 function extractKeywords(text: string): string[] {

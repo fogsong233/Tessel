@@ -83,7 +83,6 @@ import {
   CodexConversationSettings,
   CodexModelInfo,
   CodexPermissionMode,
-  LibraryGroup,
   NoteDocument,
   PdfGeneratedOutline,
   PdfDocumentMeta,
@@ -115,6 +114,21 @@ export interface PdfSelectionPayload {
   pageNumber: number;
 }
 
+export type OutlineGenerationPhase =
+  | 'preparing'
+  | 'connecting'
+  | 'reading'
+  | 'generating'
+  | 'validating'
+  | 'saving'
+  | 'complete';
+
+export interface OutlineGenerationProgress {
+  phase: OutlineGenerationPhase;
+  percent: number;
+  detail?: string;
+}
+
 export interface ReaderTransientAid {
   id: string;
   mode: Extract<AiMode, 'summarize' | 'translate'>;
@@ -126,8 +140,6 @@ export interface ReaderTransientAid {
 }
 
 interface PdfReaderProps {
-  documents: PdfDocumentMeta[];
-  libraryGroups: LibraryGroup[];
   source?: PdfSourceDescriptor;
   meta?: PdfDocumentMeta;
   documentLoadPending?: boolean;
@@ -156,10 +168,9 @@ interface PdfReaderProps {
   noteBusy: boolean;
   outlineGenerationBusy: boolean;
   outlineGenerationError?: string;
+  outlineGenerationProgress?: OutlineGenerationProgress;
   onOpenPdf(): void;
   onOpenSettings(): void;
-  onLoadDocument(documentId: string): void;
-  onAddToLibrary(): void;
   onPageChange(pageNumber: number): void;
   onCreateMark(kind: PdfMarkKind, selection: PdfSelectionPayload, colorRole?: SelectionColorRole): void;
   onSelectionAction(mode: AiMode, selection: PdfSelectionPayload): void;
@@ -273,7 +284,6 @@ function readerText(language: UiLanguage) {
   if (language === 'zh-CN') {
     return {
       addBookmark: '添加书签',
-      addToLibrary: '加入资料库',
       aiDraft: 'AI 草稿',
       aiNote: 'AI 笔记',
       askAboutPage: '询问这个页面。',
@@ -323,14 +333,19 @@ function readerText(language: UiLanguage) {
       generateFromSources: '从 PDF、标注和对话生成',
       generating: '生成中...',
       generatingOutline: '正在分析 PDF...',
+      outlineProgressPreparing: '正在准备 PDF 上下文',
+      outlineProgressConnecting: '正在启动 AI',
+      outlineProgressReading: '正在抽取并阅读代表性页面',
+      outlineProgressGenerating: '正在组织目录结构',
+      outlineProgressValidating: '正在校验页码与层级',
+      outlineProgressSaving: '正在保存目录',
+      outlineProgressComplete: '目录已完成',
       highlight: '高亮',
       highlights: '高亮',
       hideSidebar: '隐藏侧边栏',
       image: '图片',
-      library: '资料库',
       loadingPdf: '正在加载 PDF',
       localPdfWorkspace: '本地 PDF 工作区',
-      transientPdf: '临时打开，尚未加入资料库',
       manual: '手动',
       messageSidelight: '给 Tessel 发消息',
       newPageChat: '新建页面对话',
@@ -343,7 +358,6 @@ function readerText(language: UiLanguage) {
       noSearchResults: '没有匹配结果。',
       noOutline: '这个 PDF 没有目录。',
 	      noPdfOpen: '未打开 PDF',
-	      noPdfs: '资料库里还没有 PDF。',
 	      noBookmarks: '还没有页面书签。',
 	      notes: '笔记',
 	      notePreview: '预览',
@@ -406,7 +420,6 @@ function readerText(language: UiLanguage) {
 
   return {
     addBookmark: 'Add bookmark',
-    addToLibrary: 'Add to library',
     aiDraft: 'AI draft',
     aiNote: 'AI note',
     askAboutPage: 'Ask about this page.',
@@ -456,14 +469,19 @@ function readerText(language: UiLanguage) {
       generateFromSources: 'Generate from PDF, highlights, and chats',
       generating: 'Generating...',
       generatingOutline: 'Analyzing PDF...',
+      outlineProgressPreparing: 'Preparing PDF context',
+      outlineProgressConnecting: 'Starting AI',
+      outlineProgressReading: 'Reading representative pages',
+      outlineProgressGenerating: 'Structuring the outline',
+      outlineProgressValidating: 'Validating pages and levels',
+      outlineProgressSaving: 'Saving the outline',
+      outlineProgressComplete: 'Outline complete',
     highlight: 'Highlight',
     highlights: 'Highlights',
     hideSidebar: 'Hide sidebar',
     image: 'Image',
-    library: 'Library',
     loadingPdf: 'Loading PDF',
     localPdfWorkspace: 'Local PDF workspace',
-    transientPdf: 'Opened temporarily, not in library',
     manual: 'Manual',
     messageSidelight: 'Message Tessel',
     newPageChat: 'New page chat',
@@ -476,7 +494,6 @@ function readerText(language: UiLanguage) {
       noSearchResults: 'No matching results.',
       noOutline: 'No outline in this PDF.',
 	    noPdfOpen: 'No PDF open',
-	    noPdfs: 'No PDFs in the library yet.',
 	    noBookmarks: 'No page bookmarks yet.',
 	    notes: 'Notes',
 	    notePreview: 'Preview',
@@ -539,9 +556,19 @@ function readerText(language: UiLanguage) {
 
 type ReaderText = ReturnType<typeof readerText>;
 
+function outlineProgressLabel(phase: OutlineGenerationPhase, text: ReaderText): string {
+  switch (phase) {
+    case 'preparing': return text.outlineProgressPreparing;
+    case 'connecting': return text.outlineProgressConnecting;
+    case 'reading': return text.outlineProgressReading;
+    case 'generating': return text.outlineProgressGenerating;
+    case 'validating': return text.outlineProgressValidating;
+    case 'saving': return text.outlineProgressSaving;
+    case 'complete': return text.outlineProgressComplete;
+  }
+}
+
 export function PdfReader({
-  documents,
-  libraryGroups,
   source,
   meta,
   documentLoadPending = false,
@@ -570,10 +597,9 @@ export function PdfReader({
   noteBusy,
   outlineGenerationBusy,
   outlineGenerationError,
+  outlineGenerationProgress,
   onOpenPdf,
   onOpenSettings,
-  onLoadDocument,
-  onAddToLibrary,
   onPageChange,
   onCreateMark,
   onSelectionAction,
@@ -657,7 +683,10 @@ export function PdfReader({
   const [optimisticWorkspaceBlocks, setOptimisticWorkspaceBlocks] = useState<WorkspaceBlock[]>([]);
   const [pdfReadingSignal, setPdfReadingSignal] = useState(0);
   const [canvasDragMode, setCanvasDragMode] = useState(false);
+  const [spacePanMode, setSpacePanMode] = useState(false);
   const [linkHistory, setLinkHistory] = useState<PdfNavigationHistoryEntry[]>([]);
+  const spacePanActiveRef = useRef(false);
+  const canvasDragEnabled = canvasDragMode || spacePanMode;
 
   const effectiveWorkspaceBlocks = useMemo(() => {
     const byId = new Map<string, WorkspaceBlock>();
@@ -1759,6 +1788,62 @@ export function PdfReader({
   }, [applyZoomAtAnchor, status]);
 
   useEffect(() => {
+    const releaseSpacePan = (): void => {
+      if (!spacePanActiveRef.current) {
+        return;
+      }
+      spacePanActiveRef.current = false;
+      setSpacePanMode(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (
+        event.code !== 'Space' ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
+        shouldIgnoreSpacePan(event.target) ||
+        !containerRef.current ||
+        status !== 'ready'
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (!spacePanActiveRef.current) {
+        spacePanActiveRef.current = true;
+        setSpacePanMode(true);
+      }
+      containerRef.current.focus({ preventScroll: true });
+    };
+    const handleKeyUp = (event: KeyboardEvent): void => {
+      if (event.code !== 'Space' || !spacePanActiveRef.current) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      releaseSpacePan();
+    };
+    const handleVisibilityChange = (): void => {
+      if (document.visibilityState !== 'visible') {
+        releaseSpacePan();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('keyup', handleKeyUp, true);
+    window.addEventListener('blur', releaseSpacePan);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('keyup', handleKeyUp, true);
+      window.removeEventListener('blur', releaseSpacePan);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      releaseSpacePan();
+    };
+  }, [source, status]);
+
+  useEffect(() => {
     const container = containerRef.current;
     if (!container) {
       return;
@@ -1894,9 +1979,11 @@ export function PdfReader({
       linkService,
       findController,
       removePageBorders: true,
-      // Do not cap page rasterization at 16 MP: that cap made vector source
-      // PDFs look blurry after zooming. PDF.js will re-render at the real zoom.
-      maxCanvasPixels: 0
+      // `-1` disables PDF.js' canvas-area restriction. Vector page operators
+      // are therefore re-rendered at the actual zoom/device-pixel ratio instead
+      // of stretching a low-resolution canvas. The text and annotation layers
+      // remain managed by PDFViewer, preserving selection and mark coordinates.
+      maxCanvasPixels: -1
     });
 
     linkService.setViewer(pdfViewer);
@@ -2301,7 +2388,7 @@ export function PdfReader({
       event.currentTarget.focus({ preventScroll: true });
     }
 
-    if (!canvasDragMode || event.button !== 0 || shouldIgnoreCanvasDragMode(event.target)) {
+    if (!canvasDragEnabled || event.button !== 0 || shouldIgnoreCanvasDragMode(event.target)) {
       return;
     }
 
@@ -2359,7 +2446,7 @@ export function PdfReader({
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', stopDrag);
     window.addEventListener('pointercancel', stopDrag);
-  }, [canvasDragMode]);
+  }, [canvasDragEnabled]);
 
   useEffect(() => {
     const viewport = containerRef.current;
@@ -2400,18 +2487,16 @@ export function PdfReader({
       >
         <SplitterPanel className="reader-left-panel" size={20} minSize={16}>
           <ReaderLeftPanel
-            activeDocument={meta}
             activeDocumentId={meta?.id}
             activePage={activePage}
             bookmarks={bookmarks}
-            documents={documents}
-            groups={libraryGroups}
             leftTab={leftTab}
             loadProgress={loadProgress}
             outline={displayOutline}
             outlineBusy={outlineBusy}
             outlineGenerationBusy={outlineGenerationBusy}
             outlineGenerationError={outlineGenerationError}
+            outlineGenerationProgress={outlineGenerationProgress}
             outlineIsGenerated={outlineIsGenerated}
             pageDraft={pageDraft}
             scale={scale}
@@ -2421,7 +2506,6 @@ export function PdfReader({
             title={meta?.title}
             totalPages={totalPages}
             onAddBookmark={() => onAddBookmark(activePage)}
-            onAddToLibrary={onAddToLibrary}
             onFindNext={() => executeSearch(true)}
             onFindPrevious={() => executeSearch(true, true)}
             onFitWidth={() => {
@@ -2435,7 +2519,6 @@ export function PdfReader({
             onHistoryBack={goBackFromPdfLink}
             onGenerateOutline={() => onGenerateOutline(buildDocumentToolContext())}
             onCollapse={() => setLeftPanelOpen(false)}
-            onLoadDocument={onLoadDocument}
             onOpenPdf={onOpenPdf}
             onOpenSettings={onOpenSettings}
             onPageDraftBlur={blurPageDraft}
@@ -2473,7 +2556,7 @@ export function PdfReader({
             {meta && source ? (
               <>
                 <div
-                  className={canvasDragMode ? 'pdf-viewport is-canvas-drag-mode' : 'pdf-viewport'}
+                  className={canvasDragEnabled ? 'pdf-viewport is-canvas-drag-mode' : 'pdf-viewport'}
                   ref={containerRef}
                   onDoubleClick={enterCanvasDragMode}
                   onWheel={(event) => notePdfReadingIntent(event.target)}
@@ -2653,18 +2736,16 @@ export function PdfReader({
 }
 
 function ReaderLeftPanel({
-  activeDocument,
   activeDocumentId,
   activePage,
   bookmarks,
-  documents,
-  groups,
   leftTab,
   loadProgress,
   outline,
   outlineBusy,
   outlineGenerationBusy,
   outlineGenerationError,
+  outlineGenerationProgress,
   outlineIsGenerated,
   pageDraft,
   scale,
@@ -2674,7 +2755,6 @@ function ReaderLeftPanel({
   title,
   totalPages,
   onAddBookmark,
-  onAddToLibrary,
   onFindNext,
   onFindPrevious,
   onFitWidth,
@@ -2684,7 +2764,6 @@ function ReaderLeftPanel({
   onHistoryBack,
   onGenerateOutline,
   onCollapse,
-  onLoadDocument,
   onOpenPdf,
   onOpenSettings,
   onPageDraftBlur,
@@ -2697,18 +2776,16 @@ function ReaderLeftPanel({
   onZoomIn,
   onZoomOut
 }: {
-  activeDocument?: PdfDocumentMeta;
   activeDocumentId?: string;
   activePage: number;
   bookmarks: PdfUserBookmark[];
-  documents: PdfDocumentMeta[];
-  groups: LibraryGroup[];
   leftTab: LeftTab;
   loadProgress: number;
   outline: PdfOutlineItem[];
   outlineBusy: boolean;
   outlineGenerationBusy: boolean;
   outlineGenerationError?: string;
+  outlineGenerationProgress?: OutlineGenerationProgress;
   outlineIsGenerated: boolean;
   pageDraft: string;
   scale: number;
@@ -2718,7 +2795,6 @@ function ReaderLeftPanel({
   title?: string;
   totalPages: number;
   onAddBookmark(): void;
-  onAddToLibrary(): void;
   onFindNext(): void;
   onFindPrevious(): void;
   onFitWidth(): void;
@@ -2728,7 +2804,6 @@ function ReaderLeftPanel({
   onHistoryBack(): void;
   onGenerateOutline(): void;
   onCollapse(): void;
-  onLoadDocument(documentId: string): void;
   onOpenPdf(): void;
   onOpenSettings(): void;
   onPageDraftBlur(): void;
@@ -2852,6 +2927,25 @@ function ReaderLeftPanel({
                     <Sparkles size={14} />
                     {outlineGenerationBusy ? t.generatingOutline : t.generateAiOutline}
                   </button>
+                )}
+                {outlineGenerationBusy && outlineGenerationProgress && (
+                  <div
+                    className="outline-generation-progress"
+                    role="progressbar"
+                    aria-label={outlineProgressLabel(outlineGenerationProgress.phase, t)}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(outlineGenerationProgress.percent)}
+                  >
+                    <div className="outline-generation-progress__status">
+                      <span>{outlineProgressLabel(outlineGenerationProgress.phase, t)}</span>
+                      <strong>{Math.round(outlineGenerationProgress.percent)}%</strong>
+                    </div>
+                    <div className="outline-generation-progress__track" aria-hidden="true">
+                      <span style={{ width: `${Math.max(0, Math.min(100, outlineGenerationProgress.percent))}%` }} />
+                    </div>
+                    {outlineGenerationProgress.detail && <small>{outlineGenerationProgress.detail}</small>}
+                  </div>
                 )}
                 {outlineGenerationError && <span className="outline-error">{outlineGenerationError}</span>}
               </div>
@@ -5826,6 +5920,14 @@ function shouldIgnoreCanvasFocus(target: EventTarget | null): boolean {
       'input, textarea, select, button, a, [contenteditable="true"], .reader-dock-lane, .workspace-block-layer, .settings-overlay, .floating-settings'
     )
   );
+}
+
+function shouldIgnoreSpacePan(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return Boolean(target.closest('input, textarea, select, button, [contenteditable="true"]'));
 }
 
 function shouldIgnoreCanvasDragMode(target: EventTarget | null): boolean {

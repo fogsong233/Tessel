@@ -1,6 +1,6 @@
 import { app, safeStorage } from 'electron';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
   AiProviderConfig,
@@ -9,10 +9,7 @@ import {
   TranslationEntry,
   defaultAppPreferences,
   defaultAiProvider,
-  defaultGitHubUpload,
   defaultWebDavSync,
-  GitHubUploadConfig,
-  LibraryGroup,
   NoteDocument,
   PdfGeneratedOutline,
   PdfMark,
@@ -20,18 +17,19 @@ import {
   PdfReadingState,
   PdfUserBookmark,
   SafeAiProviderConfig,
-  SafeGitHubUploadConfig,
   SafeWebDavSyncConfig,
+  RecentDocumentInfo,
+  StoredDocumentInfo,
+  WorkspaceStorageOverview,
   MetadataSyncResult,
   WebDavSyncConfig,
-  WorkspaceSyncResult,
   WorkspaceBlock
 } from '../shared/domain';
 import {
   documentHashAlgorithm,
   documentIdForFingerprint,
   identifyLocalDocument,
-  normalizeLibraryDocument,
+  normalizeDocumentMeta,
   titleFromFileName
 } from './documentIdentity';
 import { normalizeWorkspaceBlock } from '../shared/workspacePins';
@@ -45,11 +43,6 @@ interface PersistedAiProviderConfig extends Omit<AiProviderConfig, 'apiKey'> {
   encryption?: 'safeStorage' | 'plain';
 }
 
-interface PersistedGitHubUploadConfig extends Omit<GitHubUploadConfig, 'token'> {
-  encryptedToken?: string;
-  encryption?: 'safeStorage' | 'plain';
-}
-
 interface PersistedWebDavSyncConfig extends Omit<WebDavSyncConfig, 'password'> {
   encryptedPassword?: string;
   encryption?: 'safeStorage' | 'plain';
@@ -57,7 +50,6 @@ interface PersistedWebDavSyncConfig extends Omit<WebDavSyncConfig, 'password'> {
 
 interface StoreFile {
   documents: PdfDocumentMeta[];
-  libraryGroups: LibraryGroup[];
   conversations: Conversation[];
   translations: TranslationEntry[];
   notes: NoteDocument[];
@@ -67,14 +59,12 @@ interface StoreFile {
   bookmarks: PdfUserBookmark[];
   readingStates: PdfReadingState[];
   aiProvider: PersistedAiProviderConfig;
-  githubUpload: PersistedGitHubUploadConfig;
   webDavSync: PersistedWebDavSyncConfig;
   appPreferences: AppPreferences;
 }
 
 const emptyStore = (): StoreFile => ({
   documents: [],
-  libraryGroups: [],
   conversations: [],
   translations: [],
   notes: [],
@@ -89,13 +79,6 @@ const emptyStore = (): StoreFile => ({
     model: defaultAiProvider.model,
     temperature: defaultAiProvider.temperature
   },
-  githubUpload: {
-    enabled: defaultGitHubUpload.enabled,
-    owner: defaultGitHubUpload.owner,
-    repo: defaultGitHubUpload.repo,
-    branch: defaultGitHubUpload.branch,
-    basePath: defaultGitHubUpload.basePath
-  },
   webDavSync: {
     enabled: defaultWebDavSync.enabled,
     baseUrl: defaultWebDavSync.baseUrl,
@@ -107,54 +90,12 @@ const emptyStore = (): StoreFile => ({
 
 export class JsonWorkspaceStore {
   private readonly storePath: string;
-  private readonly metadataSyncQueues = new Map<string, Promise<void>>();
 
   constructor() {
     this.storePath = join(app.getPath('userData'), 'workspace', 'library.json');
   }
 
-  async listDocuments(): Promise<PdfDocumentMeta[]> {
-    const store = await this.read();
-    return store.documents
-      .filter((document) => document.inLibrary !== false)
-      .map((document) => withReadingState(document, store.readingStates))
-      .sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
-  }
-
-  async listLibraryGroups(): Promise<LibraryGroup[]> {
-    const store = await this.read();
-    return store.libraryGroups.sort((a, b) => a.name.localeCompare(b.name));
-  }
-
-  async saveLibraryGroup(group: LibraryGroup): Promise<LibraryGroup> {
-    const store = await this.read();
-    const now = new Date().toISOString();
-    const normalized: LibraryGroup = {
-      ...group,
-      name: group.name.trim() || 'Untitled group',
-      cloudHeld: Boolean(group.cloudHeld),
-      createdAt: group.createdAt || now,
-      updatedAt: now
-    };
-    store.libraryGroups = [
-      normalized,
-      ...store.libraryGroups.filter((candidate) => candidate.id !== normalized.id)
-    ];
-    await this.write(store);
-    return normalized;
-  }
-
-  async deleteLibraryGroup(groupId: string): Promise<void> {
-    const store = await this.read();
-    store.libraryGroups = store.libraryGroups.filter((group) => group.id !== groupId);
-    store.documents = store.documents.map((document) => ({
-      ...document,
-      groupIds: (document.groupIds ?? []).filter((candidate) => candidate !== groupId)
-    }));
-    await this.write(store);
-  }
-
-  async upsertDocumentFromPdf(filePath: string, options: { addToLibrary?: boolean } = {}): Promise<PdfDocumentMeta> {
+  async upsertDocumentFromPdf(filePath: string): Promise<PdfDocumentMeta> {
     const store = await this.read();
     const now = new Date().toISOString();
     const identity = await identifyLocalDocument(filePath, 'pdf');
@@ -183,10 +124,10 @@ export class JsonWorkspaceStore {
       fingerprint: identity.fingerprint,
       sha256,
       hashAlgorithm: identity.fingerprint.algorithm,
-      inLibrary: options.addToLibrary ? true : persisted?.inLibrary ?? true,
-      groupIds: [],
+      inLibrary: persisted?.inLibrary ?? true,
+      groupIds: persisted?.groupIds ?? [],
       pageCount: persisted?.pageCount,
-      tags: [],
+      tags: persisted?.tags ?? [],
       createdAt: persisted?.createdAt ?? now,
       updatedAt: now,
       lastOpenedAt: now
@@ -204,34 +145,11 @@ export class JsonWorkspaceStore {
     return refreshed ?? withReadingState(nextDocument, store.readingStates);
   }
 
-  async addDocumentToLibrary(documentId: string): Promise<PdfDocumentMeta> {
-    const store = await this.read();
-    const document = store.documents.find((candidate) => candidate.id === documentId);
-    if (!document) {
-      throw new Error('PDF not found');
-    }
-
-    const now = new Date().toISOString();
-    const nextDocument: PdfDocumentMeta = {
-      ...document,
-      inLibrary: true,
-      groupIds: document.groupIds ?? [],
-      updatedAt: now,
-      lastOpenedAt: now
-    };
-    store.documents = [
-      nextDocument,
-      ...store.documents.filter((candidate) => candidate.id !== documentId)
-    ];
-    await this.write(store);
-    return withReadingState(nextDocument, store.readingStates);
-  }
-
   async updateDocument(document: PdfDocumentMeta): Promise<PdfDocumentMeta> {
     const store = await this.read();
     const { readingState: _readingState, ...documentToPersist } = document;
     const existing = store.documents.find((candidate) => candidate.id === document.id);
-    const normalized = normalizeLibraryDocument({
+    const normalized = normalizeDocumentMeta({
       ...documentToPersist,
       format: documentToPersist.format ?? existing?.format ?? 'pdf',
       source: documentToPersist.source ?? existing?.source,
@@ -253,6 +171,89 @@ export class JsonWorkspaceStore {
     const store = await this.read();
     const document = store.documents.find((candidate) => candidate.id === documentId);
     return document ? withReadingState(document, store.readingStates) : undefined;
+  }
+
+  async listRecentDocuments(limit = 6): Promise<RecentDocumentInfo[]> {
+    const store = await this.read();
+    const documents = [...store.documents]
+      .sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt))
+      .slice(0, Math.max(0, Math.min(20, Math.floor(limit))));
+    return Promise.all(documents.map(async (document) => ({
+      document: withReadingState(document, store.readingStates),
+      fileAvailable: await localFileAvailable(document.filePath)
+    })));
+  }
+
+  async getStorageOverview(): Promise<WorkspaceStorageOverview> {
+    const store = await this.read();
+    const documents = await Promise.all([...store.documents]
+      .sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt))
+      .map(async (document): Promise<StoredDocumentInfo> => {
+        const generatedOutline = store.generatedOutlines.find((item) => item.documentId === document.id);
+        return {
+          document: withReadingState(document, store.readingStates),
+          fileAvailable: await localFileAvailable(document.filePath),
+          conversations: store.conversations
+            .filter((item) => item.documentId === document.id)
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+            .map((item) => ({
+              id: item.id,
+              title: item.summary.title,
+              pageNumber: item.pageNumber ?? item.anchor?.pageNumber,
+              messageCount: item.messages.length,
+              updatedAt: item.updatedAt
+            })),
+          translations: store.translations
+            .filter((item) => item.documentId === document.id)
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+            .map((item) => ({
+              id: item.id,
+              pageNumber: item.pageNumber,
+              quote: item.quote,
+              content: item.content,
+              status: item.status,
+              updatedAt: item.updatedAt
+            })),
+          notes: store.notes
+            .filter((item) => item.documentId === document.id)
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+            .map((item) => ({
+              id: item.id,
+              title: item.title,
+              pageStart: item.pageStart,
+              pageEnd: item.pageEnd,
+              source: item.source,
+              updatedAt: item.updatedAt
+            })),
+          marks: store.marks
+            .filter((item) => item.documentId === document.id)
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+          bookmarks: store.bookmarks
+            .filter((item) => item.documentId === document.id)
+            .sort((a, b) => a.pageNumber - b.pageNumber),
+          workspaceBlocks: store.workspaceBlocks
+            .filter((item) => item.documentId === document.id)
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+            .map((item) => ({
+              id: item.id,
+              kind: item.kind,
+              title: item.title,
+              pageNumber: item.pageNumber,
+              updatedAt: item.updatedAt
+            })),
+          generatedOutline: generatedOutline
+            ? {
+                itemCount: generatedOutline.items.length,
+                updatedAt: generatedOutline.updatedAt
+              }
+            : undefined
+        };
+      }));
+    return {
+      metadataPath: this.storePath,
+      metadataBytes: Buffer.byteLength(`${JSON.stringify(store, null, 2)}\n`, 'utf8'),
+      documents
+    };
   }
 
   async listConversations(documentId: string): Promise<Conversation[]> {
@@ -347,7 +348,6 @@ export class JsonWorkspaceStore {
       ...store.readingStates.filter((candidate) => candidate.documentId !== state.documentId)
     ];
     await this.write(store);
-    this.queueDocumentMetadataSync(state.documentId);
     return state;
   }
 
@@ -358,7 +358,6 @@ export class JsonWorkspaceStore {
       ...store.conversations.filter((candidate) => candidate.id !== conversation.id)
     ];
     await this.write(store);
-    this.queueDocumentMetadataSync(conversation.documentId);
     return conversation;
   }
 
@@ -380,18 +379,15 @@ export class JsonWorkspaceStore {
       ...others.filter((candidate) => candidate.documentId !== translation.documentId)
     ];
     await this.write(store);
-    this.queueDocumentMetadataSync(translation.documentId);
     return translation;
   }
 
-  async deleteTranslation(translationId: string): Promise<void> {
+  async deleteTranslation(translationId: string): Promise<string | undefined> {
     const store = await this.read();
     const translation = store.translations.find((candidate) => candidate.id === translationId);
     store.translations = store.translations.filter((candidate) => candidate.id !== translationId);
     await this.write(store);
-    if (translation) {
-      this.queueDocumentMetadataSync(translation.documentId);
-    }
+    return translation?.documentId;
   }
 
   async listNotes(documentId: string): Promise<NoteDocument[]> {
@@ -517,39 +513,6 @@ export class JsonWorkspaceStore {
     return this.getSafeAiProvider();
   }
 
-  async getSafeGitHubUpload(): Promise<SafeGitHubUploadConfig> {
-    const store = await this.read();
-    return {
-      enabled: store.githubUpload.enabled,
-      owner: store.githubUpload.owner,
-      repo: store.githubUpload.repo,
-      branch: store.githubUpload.branch,
-      basePath: store.githubUpload.basePath,
-      hasToken: Boolean(store.githubUpload.encryptedToken)
-    };
-  }
-
-  async saveGitHubUpload(config: GitHubUploadConfig): Promise<SafeGitHubUploadConfig> {
-    const store = await this.read();
-    const encrypted = config.token?.trim()
-      ? this.encryptSecret(config.token)
-      : {
-          value: store.githubUpload.encryptedToken,
-          encryption: store.githubUpload.encryption
-        };
-    store.githubUpload = {
-      enabled: config.enabled,
-      owner: config.owner.trim(),
-      repo: config.repo.trim(),
-      branch: config.branch.trim() || defaultGitHubUpload.branch,
-      basePath: normalizeUploadPath(config.basePath),
-      encryptedToken: encrypted.value,
-      encryption: encrypted.encryption
-    };
-    await this.write(store);
-    return this.getSafeGitHubUpload();
-  }
-
   async getSafeWebDavSync(): Promise<SafeWebDavSyncConfig> {
     const store = await this.read();
     return {
@@ -633,24 +596,6 @@ export class JsonWorkspaceStore {
     return store.appPreferences;
   }
 
-  async syncWorkspace(): Promise<WorkspaceSyncResult> {
-    return {
-      mode: 'sync',
-      status: 'skipped',
-      documentCount: 0,
-      message: 'GitHub workspace sync has been removed. Configure WebDAV metadata sync instead.'
-    };
-  }
-
-  async uploadWorkspace(): Promise<WorkspaceSyncResult> {
-    return {
-      mode: 'upload',
-      status: 'skipped',
-      documentCount: 0,
-      message: 'PDF files are not uploaded by the reader.'
-    };
-  }
-
   private async read(): Promise<StoreFile> {
     await mkdir(dirname(this.storePath), { recursive: true });
 
@@ -660,10 +605,8 @@ export class JsonWorkspaceStore {
       const parsed = { ...fallback, ...JSON.parse(raw) } as StoreFile;
       return {
         ...parsed,
-        documents: (parsed.documents ?? fallback.documents).map((document) => normalizeLibraryDocument(document)),
-        libraryGroups: parsed.libraryGroups ?? fallback.libraryGroups,
+        documents: (parsed.documents ?? fallback.documents).map((document) => normalizeDocumentMeta(document)),
         aiProvider: { ...fallback.aiProvider, ...parsed.aiProvider },
-        githubUpload: { ...fallback.githubUpload, ...parsed.githubUpload },
         webDavSync: { ...fallback.webDavSync, ...parsed.webDavSync },
         appPreferences: normalizeAppPreferences({ ...fallback.appPreferences, ...parsed.appPreferences }),
         translations: parsed.translations ?? fallback.translations,
@@ -672,9 +615,10 @@ export class JsonWorkspaceStore {
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        const fresh = emptyStore();
-        await this.write(fresh);
-        return fresh;
+        // Reads must stay side-effect free. During first launch, settings and
+        // Codex warm-up can read concurrently with the first PDF mutation; an
+        // eager empty write here could otherwise overwrite the new document.
+        return emptyStore();
       }
 
       if (error instanceof SyntaxError) {
@@ -698,23 +642,6 @@ export class JsonWorkspaceStore {
     const tmpPath = `${this.storePath}.tmp-${process.pid}-${Date.now()}-${randomUUID()}`;
     await writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, 'utf8');
     await renameWithTransientRetry(tmpPath, this.storePath);
-  }
-
-  private queueDocumentMetadataSync(documentId: string): void {
-    const previous = this.metadataSyncQueues.get(documentId) ?? Promise.resolve();
-    const next = previous
-      .catch(() => undefined)
-      .then(() => this.syncDocumentMetadata(documentId))
-      .then(() => undefined)
-      .catch((error: unknown) => {
-        console.warn(`WebDAV metadata sync failed for ${documentId}`, error);
-      });
-    this.metadataSyncQueues.set(documentId, next);
-    void next.finally(() => {
-      if (this.metadataSyncQueues.get(documentId) === next) {
-        this.metadataSyncQueues.delete(documentId);
-      }
-    });
   }
 
   private snapshotForDocument(store: StoreFile, documentId: string, documentHash: string): PdfSessionSnapshot {
@@ -792,9 +719,12 @@ export class JsonWorkspaceStore {
   }
 }
 
-function normalizeUploadPath(path: string): string {
-  const trimmed = path.trim().replace(/^\/+|\/+$/g, '');
-  return trimmed || defaultGitHubUpload.basePath;
+async function localFileAvailable(filePath: string): Promise<boolean> {
+  try {
+    return (await stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function normalizeWebDavPath(path: string): string {

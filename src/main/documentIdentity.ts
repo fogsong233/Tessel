@@ -60,7 +60,7 @@ export function inferDocumentFormat(filePath: string): DocumentFormat {
   return 'unknown';
 }
 
-export function normalizeLibraryDocument(document: PdfDocumentMeta): PdfDocumentMeta {
+export function normalizeDocumentMeta(document: PdfDocumentMeta): PdfDocumentMeta {
   const hash = document.fingerprint?.hash ?? document.sha256;
   const algorithm = document.fingerprint?.algorithm ?? document.hashAlgorithm ?? fullContentHashAlgorithm;
   return {
@@ -84,46 +84,8 @@ export function normalizeLibraryDocument(document: PdfDocumentMeta): PdfDocument
   };
 }
 
-export function documentContentHash(document: PdfDocumentMeta): string {
-  return document.fingerprint?.hash ?? document.sha256;
-}
-
 export function documentHashAlgorithm(document: PdfDocumentMeta): string {
   return document.fingerprint?.algorithm ?? document.hashAlgorithm ?? fullContentHashAlgorithm;
-}
-
-export function cloudAssetPathForDocument(document: PdfDocumentMeta): string {
-  const format = document.format ?? inferDocumentFormat(document.fileName);
-  const extension = cloudExtensionForFormat(format, document.fileName);
-  const hash = documentContentHash(document);
-  if (format === 'pdf') {
-    return `pdfs/${hash}${extension}`;
-  }
-  return `assets/${format}/${hash}${extension}`;
-}
-
-function cloudExtensionForFormat(format: DocumentFormat, fileName: string): string {
-  const extension = extname(fileName).toLowerCase();
-  if (extension) {
-    return extension;
-  }
-
-  switch (format) {
-    case 'pdf':
-      return '.pdf';
-    case 'markdown':
-      return '.md';
-    case 'text':
-      return '.txt';
-    case 'html':
-      return '.html';
-    case 'epub':
-      return '.epub';
-    case 'image':
-      return '.img';
-    case 'unknown':
-      return '.bin';
-  }
 }
 
 async function fullFileHash(filePath: string): Promise<string> {

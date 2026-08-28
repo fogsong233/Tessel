@@ -10,30 +10,23 @@ import {
   AiProviderConfig,
   AppPreferences,
   AppUpdateState,
-  GitHubUploadConfig,
   WebDavSyncConfig,
-  PdfDocumentMeta,
   SavePdfGeneratedOutlineInput,
-  SaveLibraryGroupInput,
   SaveConversationInput,
   SaveTranslationInput,
   SaveNoteInput,
   SaveWorkspaceBlockInput,
-  SidelightApi
+  TesselApi,
+  WindowChromeState
 } from '../shared/domain';
 
-const api: SidelightApi = {
-  listDocuments: () => ipcRenderer.invoke('library:listDocuments'),
-  listLibraryGroups: () => ipcRenderer.invoke('library:listGroups'),
-  saveLibraryGroup: (input: SaveLibraryGroupInput) => ipcRenderer.invoke('library:saveGroup', input),
-  deleteLibraryGroup: (groupId) => ipcRenderer.invoke('library:deleteGroup', groupId),
+const api: TesselApi = {
   openPdf: () => ipcRenderer.invoke('pdf:open'),
-  openDocumentWindow: (documentId) => ipcRenderer.invoke('window:openDocument', documentId),
+  openSettings: () => ipcRenderer.invoke('window:openSettings'),
+  listRecentDocuments: (limit) => ipcRenderer.invoke('library:listRecentDocuments', limit),
+  openStoredDocument: (documentId) => ipcRenderer.invoke('library:openDocument', documentId),
+  getStorageOverview: () => ipcRenderer.invoke('library:getStorageOverview'),
   loadPdf: (documentId) => ipcRenderer.invoke('pdf:load', documentId),
-  addDocumentToLibrary: (documentId) => ipcRenderer.invoke('pdf:addToLibrary', documentId),
-  updateDocument: (document: PdfDocumentMeta) => ipcRenderer.invoke('pdf:updateDocument', document),
-  syncWorkspace: () => ipcRenderer.invoke('sync:workspace'),
-  uploadWorkspace: () => ipcRenderer.invoke('sync:uploadWorkspace'),
   readPdfRange: (request) => ipcRenderer.invoke('pdf:readRange', request),
   listPdfMarks: (documentId) => ipcRenderer.invoke('pdf:listMarks', documentId),
   savePdfMark: (input) => ipcRenderer.invoke('pdf:saveMark', input),
@@ -62,14 +55,14 @@ const api: SidelightApi = {
   resolveRemoteImage: (url) => ipcRenderer.invoke('media:resolveRemoteImage', url),
   getAiProvider: () => ipcRenderer.invoke('settings:getAiProvider'),
   saveAiProvider: (config: AiProviderConfig) => ipcRenderer.invoke('settings:saveAiProvider', config),
-  getGitHubUpload: () => ipcRenderer.invoke('settings:getGitHubUpload'),
-  saveGitHubUpload: (config: GitHubUploadConfig) => ipcRenderer.invoke('settings:saveGitHubUpload', config),
   getWebDavSync: () => ipcRenderer.invoke('settings:getWebDavSync'),
   saveWebDavSync: (config: WebDavSyncConfig) => ipcRenderer.invoke('settings:saveWebDavSync', config),
   syncDocumentMetadata: (documentId) => ipcRenderer.invoke('sync:documentMetadata', documentId),
   getAppPreferences: () => ipcRenderer.invoke('settings:getAppPreferences'),
   saveAppPreferences: (config: AppPreferences) => ipcRenderer.invoke('settings:saveAppPreferences', config),
   getWindowChromeState: () => ipcRenderer.invoke('window:getChromeState'),
+  toggleWindowMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
+  closeWindow: () => ipcRenderer.invoke('window:close'),
   listAiModels: (config: AiProviderConfig): Promise<AiModelInfo[]> => ipcRenderer.invoke('ai:listModels', config),
   completeAi: (request: AiCompletionRequest) => ipcRenderer.invoke('ai:complete', request),
   completeAiStream: (input: AiStreamRequest) => ipcRenderer.invoke('ai:completeStream', input),
@@ -90,19 +83,19 @@ const api: SidelightApi = {
     return () => ipcRenderer.removeListener('app:update:state', channelListener);
   },
   onWindowChromeState: (listener) => {
-    const channelListener = (_event: Electron.IpcRendererEvent, payload: { macTrafficLightsVisible: boolean }): void => listener(payload);
+    const channelListener = (_event: Electron.IpcRendererEvent, payload: WindowChromeState): void => listener(payload);
     ipcRenderer.on('window:chromeState', channelListener);
     return () => ipcRenderer.removeListener('window:chromeState', channelListener);
+  },
+  onSettingsChanged: (listener) => {
+    const channelListener = (): void => listener();
+    ipcRenderer.on('settings:changed', channelListener);
+    return () => ipcRenderer.removeListener('settings:changed', channelListener);
   },
   onAiStreamEvent: (listener: (event: AiStreamEvent) => void) => {
     const channelListener = (_event: Electron.IpcRendererEvent, payload: AiStreamEvent): void => listener(payload);
     ipcRenderer.on('ai:stream:event', channelListener);
     return () => ipcRenderer.removeListener('ai:stream:event', channelListener);
-  },
-  onLibraryChanged: (listener: () => void) => {
-    const channelListener = (): void => listener();
-    ipcRenderer.on('library:changed', channelListener);
-    return () => ipcRenderer.removeListener('library:changed', channelListener);
   }
 };
 

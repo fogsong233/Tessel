@@ -5,7 +5,6 @@ export type TranslationId = string;
 export type AnchorId = string;
 export type NoteId = string;
 export type WorkspaceBlockId = string;
-export type LibraryGroupId = string;
 
 export type AiMode = 'ask' | 'explain' | 'translate' | 'summarize' | 'lesson';
 export type ConversationRole = 'user' | 'assistant' | 'system';
@@ -39,7 +38,7 @@ export interface DocumentSourceRef {
   filePath?: string;
 }
 
-export interface LibraryDocumentMeta {
+export interface DocumentMeta {
   id: DocumentId;
   title: string;
   fileName: string;
@@ -50,24 +49,16 @@ export interface LibraryDocumentMeta {
   sha256: string;
   hashAlgorithm?: string;
   inLibrary?: boolean;
-  groupIds?: LibraryGroupId[];
+  groupIds?: string[];
   tags: string[];
   createdAt: ISODate;
   updatedAt: ISODate;
   lastOpenedAt: ISODate;
 }
 
-export interface PdfDocumentMeta extends LibraryDocumentMeta {
+export interface PdfDocumentMeta extends DocumentMeta {
   pageCount?: number;
   readingState?: PdfReadingState;
-}
-
-export interface LibraryGroup {
-  id: LibraryGroupId;
-  name: string;
-  cloudHeld: boolean;
-  createdAt: ISODate;
-  updatedAt: ISODate;
 }
 
 export interface PdfOpenResult {
@@ -119,6 +110,64 @@ export interface PdfReadingState {
   documentId: DocumentId;
   lastPage: number;
   updatedAt: ISODate;
+}
+
+export interface RecentDocumentInfo {
+  document: PdfDocumentMeta;
+  fileAvailable: boolean;
+}
+
+export interface StoredConversationInfo {
+  id: ConversationId;
+  title: string;
+  pageNumber?: number;
+  messageCount: number;
+  updatedAt: ISODate;
+}
+
+export interface StoredTranslationInfo {
+  id: TranslationId;
+  pageNumber: number;
+  quote: string;
+  content: string;
+  status: TranslationStatus;
+  updatedAt: ISODate;
+}
+
+export interface StoredNoteInfo {
+  id: NoteId;
+  title: string;
+  pageStart: number;
+  pageEnd: number;
+  source?: 'manual' | 'ai';
+  updatedAt: ISODate;
+}
+
+export interface StoredWorkspaceBlockInfo {
+  id: WorkspaceBlockId;
+  kind: WorkspaceBlockKind;
+  title: string;
+  pageNumber?: number;
+  updatedAt: ISODate;
+}
+
+export interface StoredDocumentInfo extends RecentDocumentInfo {
+  conversations: StoredConversationInfo[];
+  translations: StoredTranslationInfo[];
+  notes: StoredNoteInfo[];
+  marks: PdfMark[];
+  bookmarks: PdfUserBookmark[];
+  workspaceBlocks: StoredWorkspaceBlockInfo[];
+  generatedOutline?: {
+    itemCount: number;
+    updatedAt: ISODate;
+  };
+}
+
+export interface WorkspaceStorageOverview {
+  metadataPath: string;
+  metadataBytes: number;
+  documents: StoredDocumentInfo[];
 }
 
 export interface AnchorRect {
@@ -292,19 +341,6 @@ export interface SafeAiProviderConfig extends Omit<AiProviderConfig, 'apiKey'> {
   hasApiKey: boolean;
 }
 
-export interface GitHubUploadConfig {
-  enabled: boolean;
-  owner: string;
-  repo: string;
-  branch: string;
-  basePath: string;
-  token?: string;
-}
-
-export interface SafeGitHubUploadConfig extends Omit<GitHubUploadConfig, 'token'> {
-  hasToken: boolean;
-}
-
 /**
  * WebDAV stores reader metadata only. PDF files always remain in the user's
  * local filesystem and are identified by their full SHA-256 digest.
@@ -327,17 +363,6 @@ export interface MetadataSyncResult {
   status: MetadataSyncStatus;
   documentId: DocumentId;
   syncedAt?: ISODate;
-  message: string;
-}
-
-export type WorkspaceSyncMode = 'sync' | 'upload';
-export type WorkspaceSyncStatus = 'skipped' | 'uploaded';
-
-export interface WorkspaceSyncResult {
-  mode: WorkspaceSyncMode;
-  status: WorkspaceSyncStatus;
-  documentCount: number;
-  uploadedAt?: ISODate;
   message: string;
 }
 
@@ -504,6 +529,7 @@ export interface CodexStreamRequest {
 export interface CodexAvailability {
   available: boolean;
   version?: string;
+  executablePath?: string;
   reason?: string;
 }
 
@@ -546,10 +572,6 @@ export interface SaveWorkspaceBlockInput {
   block: WorkspaceBlock;
 }
 
-export interface SaveLibraryGroupInput {
-  group: LibraryGroup;
-}
-
 export interface SavePdfMarkInput {
   mark: PdfMark;
 }
@@ -564,20 +586,17 @@ export interface SavePdfGeneratedOutlineInput {
 
 export interface WindowChromeState {
   macTrafficLightsVisible: boolean;
+  customControls: boolean;
+  maximized: boolean;
 }
 
-export interface SidelightApi {
-  listDocuments(): Promise<PdfDocumentMeta[]>;
-  listLibraryGroups(): Promise<LibraryGroup[]>;
-  saveLibraryGroup(input: SaveLibraryGroupInput): Promise<LibraryGroup>;
-  deleteLibraryGroup(groupId: LibraryGroupId): Promise<void>;
+export interface TesselApi {
   openPdf(): Promise<PdfOpenResult | null>;
-  openDocumentWindow(documentId: DocumentId): Promise<PdfDocumentMeta | null>;
+  openSettings(): Promise<void>;
+  listRecentDocuments(limit?: number): Promise<RecentDocumentInfo[]>;
+  openStoredDocument(documentId: DocumentId): Promise<boolean>;
+  getStorageOverview(): Promise<WorkspaceStorageOverview>;
   loadPdf(documentId: DocumentId): Promise<PdfOpenResult | null>;
-  addDocumentToLibrary(documentId: DocumentId): Promise<PdfDocumentMeta>;
-  updateDocument(document: PdfDocumentMeta): Promise<PdfDocumentMeta>;
-  syncWorkspace(): Promise<WorkspaceSyncResult>;
-  uploadWorkspace(): Promise<WorkspaceSyncResult>;
   readPdfRange(request: PdfRangeRequest): Promise<ArrayBuffer>;
   listPdfMarks(documentId: DocumentId): Promise<PdfMark[]>;
   savePdfMark(input: SavePdfMarkInput): Promise<PdfMark>;
@@ -606,14 +625,14 @@ export interface SidelightApi {
   resolveRemoteImage(url: string): Promise<string | undefined>;
   getAiProvider(): Promise<SafeAiProviderConfig>;
   saveAiProvider(config: AiProviderConfig): Promise<SafeAiProviderConfig>;
-  getGitHubUpload(): Promise<SafeGitHubUploadConfig>;
-  saveGitHubUpload(config: GitHubUploadConfig): Promise<SafeGitHubUploadConfig>;
   getWebDavSync(): Promise<SafeWebDavSyncConfig>;
   saveWebDavSync(config: WebDavSyncConfig): Promise<SafeWebDavSyncConfig>;
   syncDocumentMetadata(documentId: DocumentId): Promise<MetadataSyncResult>;
   getAppPreferences(): Promise<AppPreferences>;
   saveAppPreferences(config: AppPreferences): Promise<AppPreferences>;
   getWindowChromeState(): Promise<WindowChromeState>;
+  toggleWindowMaximize(): Promise<WindowChromeState>;
+  closeWindow(): Promise<void>;
   listAiModels(config: AiProviderConfig): Promise<AiModelInfo[]>;
   completeAi(request: AiCompletionRequest): Promise<AiCompletionResponse>;
   completeAiStream(input: AiStreamRequest): Promise<void>;
@@ -630,8 +649,8 @@ export interface SidelightApi {
   installAppUpdate(): Promise<void>;
   onAppUpdateState(listener: (state: AppUpdateState) => void): () => void;
   onWindowChromeState(listener: (state: WindowChromeState) => void): () => void;
+  onSettingsChanged(listener: () => void): () => void;
   onAiStreamEvent(listener: (event: AiStreamEvent) => void): () => void;
-  onLibraryChanged(listener: () => void): () => void;
 }
 
 export const defaultAiProvider: SafeAiProviderConfig = {
@@ -640,15 +659,6 @@ export const defaultAiProvider: SafeAiProviderConfig = {
   model: 'gpt-4.1-mini',
   temperature: 0.2,
   hasApiKey: false
-};
-
-export const defaultGitHubUpload: SafeGitHubUploadConfig = {
-  enabled: false,
-  owner: '',
-  repo: '',
-  branch: 'main',
-  basePath: 'sidelight',
-  hasToken: false
 };
 
 export const defaultWebDavSync: SafeWebDavSyncConfig = {

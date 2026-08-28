@@ -1,4 +1,4 @@
-import { SidelightApi } from '../shared/domain';
+import { TesselApi } from '../shared/domain';
 
 declare module '*?url' {
   const url: string;
@@ -7,7 +7,7 @@ declare module '*?url' {
 
 declare global {
   interface Window {
-    sidelight: SidelightApi;
+    sidelight: TesselApi;
   }
 }
 

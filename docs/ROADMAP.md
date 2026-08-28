@@ -1,41 +1,50 @@
-# Sidelight Roadmap
+# Tessel Roadmap
 
-## Version 0.1
+Last updated: 2026-08-28
 
-- Electron + React shell
-- PDF open and render with PDF.js
-- Selectable PDF text layer
-- Floating selection actions: chat, temporary translate, temporary summary
-- Persistent anchored conversations
-- Markdown notes with math rendering
-- Local search across conversations and notes
-- OpenAI-compatible provider settings
-- Library window plus one reader window per open PDF
+## Current Baseline: 1.3.x
 
-Product rule: Chat is the only persisted AI interaction. Translate and summary are temporary reading aids; closing the panel discards them.
+- Focused open/settings start window and direct PDF launch.
+- Full-content SHA-256 document identity.
+- Range-backed PDF.js rendering, outline, search, navigation, marks, bookmarks,
+  and reading progress.
+- Persistent contextual chats, translation history, Markdown notes, generated
+  outlines, and spatial workspace blocks.
+- OpenAI-compatible provider and experimental local Codex CLI integration.
+- Metadata-only WebDAV synchronization for reading state, chats, and recent
+  translations.
+- GitHub Release packaging and update support for Windows and macOS.
 
-## Version 0.2
+## Reliability And Maintainability
 
-- Replace JSON store with SQLite + FTS5
-- Better PDF text anchoring with stable quote selectors and page rectangles
-- Replace the custom page renderer with more of PDF.js' open-source viewer layer where it gives us better search, annotation layers, and page queue behavior
-- Conversation auto-title and auto-summary through the configured AI provider
-- Real PDF text search
-- Streaming AI responses
-- Per-document prompt presets
+- Continue decomposing `App.tsx`, `PdfReader.tsx`, and `styles.css`.
+- Add visual regression tests for reader dock, selection controls, and pinned
+  workspace blocks.
+- Add recovery and concurrency tests around the JSON Store and WebDAV merge.
+- Remove remaining historical CSS and `SIDELIGHT_*` naming where compatibility
+  permits.
+- Improve diagnostics for missing/moved PDF files and expired WebDAV sessions.
 
-## Version 0.3
+## Search And Storage
 
-- Lesson/note generation from selected PDF ranges plus conversation trees
-- Git-backed sync target for private GitHub repositories
-- Optional PDF file backup
-- Conflict-aware Markdown note merging
-- Document tags, collections, and reading projects
+- Replace the monolithic JSON workspace with SQLite and FTS5, or introduce a
+  migration layer that keeps the current JSON format recoverable.
+- Add real search across PDF text, conversations, translations, and notes.
+- Use stable quote selectors and page rectangles for stronger anchor recovery.
+- Define per-entity revisions before synchronizing additional artifact types.
+
+## Learning Workspace
+
+- Add selected-region snapshots and comparison blocks.
+- Allow pinned chats and notes to expand inline.
+- Add block filtering, minimization, and spatial navigation.
+- Add study-card and definition extraction flows that preserve source links.
+- Explore non-page canvas areas and multi-document workspaces.
 
 ## Later
 
-- Browser extension ingestion
-- Multi-PDF workspaces
-- OCR for scanned PDFs
-- WYSIWYG Markdown editor replacement
-- Export notes as Markdown, PDF, or DOCX
+- OCR for scanned PDFs.
+- Browser/webpage ingestion.
+- EPUB and richer non-PDF document support.
+- Conflict-aware note synchronization.
+- Export notes and learning artifacts as Markdown, PDF, or DOCX.

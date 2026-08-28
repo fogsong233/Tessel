@@ -1,291 +1,107 @@
-# Sidelight Handoff
+# Tessel Handoff
 
-Last updated: 2026-05-16
+Last updated: 2026-08-28
 
-This document captures the working context for continuing Sidelight on another
-machine.
+## Current Product
 
-## Product Goal
+Tessel is a local-first PDF reader built with Electron, React, TypeScript, and
+PDF.js. The current product intentionally starts with a focused open/settings
+window rather than a document library. Opening a file creates a reader window
+identified by the PDF's full SHA-256 digest.
 
-Sidelight is a local-first, LLM-assisted PDF reader built with Electron, React,
-TypeScript, and PDF.js.
+The intended reading loop is:
 
-The intended experience:
+1. Open a local PDF.
+2. Read with persistent page state, marks, and bookmarks.
+3. Select text to chat, translate, summarize, or start a note.
+4. Keep durable conversations and notes in the dock or pin them beside a page.
+5. Optionally synchronize reading progress, conversations, and recent
+   translations through WebDAV.
 
-- A Zotero-like library home for managing PDFs and, later, webpages.
-- Opening a PDF creates a separate reader window. One reader window per PDF.
-- Basic PDF reading must feel smooth, clean, and reliable.
-- The user can select text in a PDF and open an AI chat grounded in that
-  selection.
-- Chat conversations are permanently saved and attached to the PDF page and
-  selected context.
-- Summary and Translate are temporary reading aids. They are not persisted.
-- Explain is not a separate tool. Explanation should happen through Chat.
-- The right side of the reader shows page conversations and reading aids on top
-  of the PDF reading background, not as a hard separated app sidebar.
-- The PDF scrollbar should remain at the far right of the window.
-- The left outline/library sidebar can be hidden and restored.
-- Zoom is driven by mouse wheel with Ctrl/Cmd, not by a visible zoom widget.
+## Important Files
 
-## UX Preferences
+- `docs/ARCHITECTURE.md`: runtime boundaries and correctness invariants.
+- `src/main/index.ts`: windows, IPC, serialized Store mutation queue, AI routing.
+- `src/main/store.ts`: JSON persistence, secret storage, WebDAV snapshots.
+- `src/main/metadataSyncScheduler.ts`: coalesced WebDAV scheduling through the
+  Store mutation queue.
+- `src/main/aiService.ts`: OpenAI-compatible completions and PDF tools.
+- `src/main/codexAgent.ts`: experimental local Codex CLI adapter.
+- `src/renderer/src/App.tsx`: application state and reader workflows.
+- `src/renderer/src/PdfReader.tsx`: PDF.js viewer, dock, selection, marks, and
+  spatial workspace.
+- `src/shared/domain.ts`: shared domain and `TesselApi` contract.
 
-The user is sensitive to UI quality. Avoid rough custom controls when a polished
-PrimeReact or lucide-based component is available.
+## Current Capabilities
 
-Design direction:
+- Initial-buffer plus IPC range loading for large PDFs.
+- Embedded or AI-generated PDF outlines.
+- Persistent reading state, highlights, underlines, and bookmarks.
+- Persistent contextual conversations with Markdown, math, images, tool calls,
+  visible agent activity, cancellation, and active-turn guidance.
+- OpenAI-compatible and local Codex routing.
+- Translation history capped at ten entries per document.
+- Manual and AI-generated Markdown notes with CodeMirror and optional Vim mode.
+- Page-anchored conversation, note, translation, and image blocks that can be
+  dragged, resized, reopened, and removed without deleting their source.
+- English and Simplified Chinese UI, configurable colors and fonts.
+- Explicit GitHub Release update flow for installed builds.
+- Standalone singleton settings window and compact custom Windows chrome.
 
-- Minimal, calm, document-reader feel.
-- Chat should feel closer to ChatGPT: a transcript, scoped Markdown prose,
-  readable assistant content, compact user bubbles, and a bottom composer.
-- Avoid card-on-card layouts and oversized decorative elements.
-- Right dock controls should be grouped. Do not use an invisible spacer that
-  pushes the `+` button far away from the rest of the toolbar.
-- Text must not overlap PDF content or adjacent panels.
-- Summary and Translate belong in the right dock area, not centered over the PDF.
+## Storage And Sync
 
-## Current Implementation
+The workspace file is `userData/workspace/library.json`; the name is retained
+for compatibility with existing installations. Writes use a unique temporary
+file followed by rename. Invalid JSON is moved to a timestamped backup before a
+fresh store is created.
 
-Important files:
+API keys and WebDAV passwords use Electron `safeStorage` where available. A
+base64 plain fallback exists only for development environments without platform
+encryption.
 
-- `src/main/index.ts`
-  - Electron window creation.
-  - IPC registration.
-  - One reader window per PDF through `documentId`.
-  - AI stream handling with safe abort when the renderer frame closes.
-  - Chromium HTTP disk cache disabled and cache directories cleared on startup.
-- `src/main/aiService.ts`
-  - OpenAI-compatible chat completion and streaming.
-  - Local draft mode when no API key is configured.
-  - Stream cancellation via `AbortSignal`.
-- `src/main/store.ts`
-  - JSON workspace repository.
-  - Stores PDFs, marks, bookmarks, conversations, notes, reading state, and AI
-    provider settings.
-- `src/renderer/src/App.tsx`
-  - App state orchestration.
-  - Persistent Chat flow.
-  - Temporary Summary/Translate flow.
-- `src/renderer/src/PdfReader.tsx`
-  - PDF.js viewer.
-  - Left sidebar, PDF viewport, selection toolbar, marks, right dock, chat panel.
-  - Right dock can show chat, temporary reading aid, chat list, notes, bookmarks,
-    or marks.
-  - PDF auto-shrinks when the dock takes reading space so text does not sit under
-    panels.
-- `src/renderer/src/MarkdownView.tsx`
-  - Markdown rendering with GFM, math, and KaTeX.
-  - Normalizes LLM-style `\(...\)` and `\[...\]` delimiters to Markdown math.
-  - Skips code spans and fenced code when normalizing LaTeX delimiters.
-- `src/renderer/src/styles.css`
-  - Main styling. There are late overrides near the end of the file for the final
-    reader/dock/chat polish.
-- `tests/e2e/sidelight.spec.ts`
-  - Playwright Electron integration tests.
-- `docs/LEARNING_SPACE_PLAN.md`
-  - Product and implementation plan for evolving the reader into a spatial
-    learning canvas.
+WebDAV is metadata-only. It does not upload PDFs, notes, marks, bookmarks,
+outlines, workspace blocks, or preferences. Automatic sync must be scheduled by
+`MetadataSyncScheduler`; do not start Store synchronization directly from a
+Store save method because it can race with later full-file writes.
 
-## Recent Fixes
-
-PDF rendering:
-
-- Fixed blank PDF rendering. PDF.js `PDFViewer` needs `.pdf-viewport` to remain
-  absolutely positioned.
-- Added e2e checks that PDF text and canvas render.
-
-Reader layout:
-
-- PDF scrollbar remains at the far right.
-- Right dock lives in the gray reading background area.
-- Chat/Summary/Translate no longer appear in the middle of the PDF page.
-- PDF content auto-shrinks when the right dock is active, preventing overlap.
-- Left sidebar can be hidden/restored.
-
-Zoom:
-
-- Ctrl/Cmd + wheel zooms the PDF.
-- Tests verify first page width changes after Ctrl-wheel.
-
-AI modes:
-
-- Chat is persisted.
-- Summary and Translate stream into temporary panels and are not saved.
-- Explain was removed as a separate selection action.
-
-Chat:
-
-- Chat panel was restyled toward a ChatGPT-like transcript.
-- Markdown prose, blockquotes, headings, lists, code, and KaTeX have scoped
-  styles inside the dock.
-- Composer uses lucide/PrimeReact controls.
-- Chat supports image attachments from the file picker, drag/drop, and pasted
-  clipboard images. User messages persist image attachments and AI requests send
-  them as OpenAI-compatible `image_url` content blocks.
-
-LaTeX:
-
-- `remark-math`, `rehype-katex`, and `katex/dist/katex.min.css` are wired.
-- `MarkdownView` now supports `$...$`, `$$...$$`, `\(...\)`, and `\[...\]`.
-- E2E asserts that chat output creates `.katex` nodes.
-
-Stream crash:
-
-- Fixed crash/log spam when a reader window closed during AI streaming.
-- Main process now aborts the stream if `webContents` is destroyed or renderer
-  process is gone.
-- Catch paths no longer try to send error chunks into a disposed frame.
-
-Chromium cache logs:
-
-- Disabled Electron HTTP cache with `app.commandLine.appendSwitch('disable-http-cache')`.
-- Startup clears only Chromium cache directories:
-  - `Cache`
-  - `Code Cache`
-  - `GPUCache`
-  - `DawnCache`
-  - `blob_storage`
-  - `Shared Dictionary`
-- Workspace data is not cleared.
-
-## Tests
-
-Run:
+## Verification
 
 ```powershell
-pnpm install
-pnpm typecheck
-pnpm test:e2e
+corepack pnpm install --frozen-lockfile
+corepack pnpm typecheck
+corepack pnpm test:e2e
 ```
 
-Current e2e coverage:
+The active Playwright suite covers the focused home window, full-hash and range
+PDF loading, selection/chat flows, pinned blocks and images, Codex transports
+and guidance, translations, settings, generated outlines, synchronization
+scheduling, and WebDAV folder creation.
 
-- Opens a PDF from library into a reader window.
-- Verifies PDF text layer and canvas render.
-- Hides/restores the left sidebar.
-- Ctrl-wheel zoom increases page width.
-- Summary and Translation are temporary and not persisted.
-- Chat is persisted.
-- Chat image attachments show a composer preview, render in the transcript, and
-  are included in local draft / provider requests.
-- Chat LaTeX renders through KaTeX.
-- Right dock panels stay inside the dock.
-- PDF page does not sit under the dock.
-- AI stream stops cleanly when reader window closes.
-- AI stream stop from the composer persists a non-empty stopped/partial
-  assistant message.
+Expected non-blocking build warnings:
 
-Learning space:
+- `pdfjs-dist` contains `eval`.
+- PDF.js alt-text SVG assets can remain unresolved at build time.
 
-- The workspace store now has durable `WorkspaceBlock` records.
-- A chat can be pinned from the chat header into the PDF canvas.
-- Pinned conversation blocks sit beside the page and move with the continuous
-  PDF canvas.
-- Pinned blocks avoid the open dock by default, can be dragged/resized on the
-  horizontal canvas, and persist `x`, `y`, and `width`.
-- E2E checks that pinned block controls are not occluded and that block content
-  does not overflow after drag/resize.
-- Notes can be pinned from the notes list or note editor. Pinned note blocks use
-  `kind: note`; clicking one reopens its note editor.
-- E2E covers note block persistence, no-overflow rendering, and click-to-open.
-- The dock `+` action is context-aware: it creates a page chat from chat mode
-  and a current-page note from notes mode.
-- Pinning a block horizontally reveals it in the canvas without forcing the PDF
-  back to the top of the page. New blocks default near the current vertical
-  reading position rather than the page start.
-- Workspace blocks are absolute-positioned, so `.workspace-canvas-spacer`
-  intentionally contributes horizontal scroll width. Keep it when changing the
-  canvas; otherwise pinned blocks can save correctly but remain unreachable or
-  invisible.
-- Pin placement follows the current PDF page, not the source page of the open
-  chat/note. Example: if a p.1 chat is open while the reader is on p.2, pinning
-  places the card beside p.2.
-- New chat/note pins now default to the left side of the PDF page. The canvas
-  reserves a stable left gutter once any left-side pin exists, so dragging a
-  pinned card changes its visible position instead of being cancelled out by
-  shrinking padding.
-- Pinned cards use a short `workspace-block-pop` mount animation and a larger
-  top drag hit area. New pins are placed through an overlap-avoidance pass, and
-  e2e checks multiple note cards do not stack on top of each other.
-- Search results for notes and Q&A now have their own pin action, so cross-page
-  items found through search can be attached to the current PDF page without
-  first opening the dock editor/chat.
-- Keep the PDF loader effect independent of `workspaceBlocks`. A previous
-  version depended on `updateWorkspaceBlockLayouts`, which depended on
-  `workspaceBlocks`, so every pin caused the PDF.js document to be destroyed and
-  reloaded.
-- Note pinning must save sequentially. Saving the note and the workspace block
-  concurrently can race in the JSON store and drop the newly pinned block.
+On Windows, Codex auto-discovery should resolve the native executable inside a
+global npm installation even when a packaged GUI launch does not inherit the
+user's npm PATH. The settings page displays the resolved path for diagnostics.
 
-AI stream stop:
+## Editing Cautions
 
-- Stopping a stream records the stopped stream id in the renderer so a missing
-  final cancelled event still saves either the partial assistant text or
-  `Response stopped.` / `已停止回答。`.
-
-Expected build warnings:
-
-- `pdfjs-dist` uses `eval`; Vite warns about it.
-- `images/altText_add.svg` and `images/altText_done.svg` from PDF.js may remain
-  unresolved at build time.
-
-These warnings are currently non-blocking.
-
-## Running The App
-
-Development:
-
-```powershell
-Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
-pnpm dev
-```
-
-Production build/test:
-
-```powershell
-pnpm build
-pnpm test:e2e
-```
-
-If old logs keep appearing, stop all old Electron/Sidelight processes first.
-Old `out/main/index.js` processes will not pick up source changes until rebuilt
-and restarted.
-
-## Storage And Sync Direction
-
-Current storage is JSON in Electron `userData`:
-
-- `workspace/library.json`
-
-The eventual user plan is that all important data lives in one folder that can be
-synced with a private GitHub repository. PDFs may be optionally synced later, but
-notes, conversations, metadata, and provider configuration should be syncable.
-
-Keep storage boundaries clean so the JSON store can later move to SQLite + FTS
-or a Git-friendly file layout.
-
-## Important Caveats
-
-- The worktree may appear fully untracked if this project was initialized outside
-  Git tracking. Do not assume `git diff` is meaningful until files are added.
-- Do not delete or reset user changes.
-- Avoid large unrelated style rewrites in `styles.css`; it already has many late
-  overrides.
-- When touching PDF layout, preserve:
-  - `.pdf-viewport { position: absolute; }`
-  - PDF scrollbar at the far right
-  - `.pdfViewer { width: calc(100% - var(--dock-lane-width)); }`
-- When touching AI streaming, preserve safe abort behavior for closed renderer
-  frames.
+- Preserve the layout invariants listed in `docs/ARCHITECTURE.md`.
+- Avoid broad style rewrites in `styles.css`; the reader still has historical
+  override layers that should be reduced incrementally with visual checks.
+- Abort AI streams when their renderer is destroyed and never send a final
+  chunk into a disposed frame.
+- Keep PDF loading independent from workspace block updates.
+- Coordinate all `library.json` mutations through the main-process queue.
 
 ## Suggested Next Work
 
-- Add a focused visual regression screenshot test for right dock states.
-- Continue UI polish for:
-  - chat list item density
-  - bookmark/mark panels
-  - composer focus/disabled states
-  - long Chinese/English mixed Markdown content
-- Add real search over saved conversations and notes later, but the current
-  per-page chat list intentionally has no search box.
-- Add better conversation auto-summary after chat close.
-- Consider a more structured storage format before Git sync becomes central.
+- Split the remaining reader and settings UI into smaller modules.
+- Add screenshot-based visual regression coverage for dock states.
+- Move from the monolithic JSON file toward SQLite plus FTS or a conflict-aware
+  file layout before expanding sync scope.
+- Add durable synchronization for notes and spatial blocks only after defining
+  conflict semantics.
+- Continue removing unused historical CSS selectors with visual verification.

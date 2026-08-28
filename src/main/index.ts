@@ -1,5 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from 'electron';
-import { execFile } from 'node:child_process';
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type WebContents } from 'electron';
 import { open, rm, stat } from 'node:fs/promises';
 import { extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +13,6 @@ import {
   AppPreferences,
   Conversation,
   TranslationEntry,
-  LibraryGroup,
   NoteDocument,
   PdfGeneratedOutline,
   PdfDocumentMeta,
@@ -23,6 +21,7 @@ import {
   PdfReadingState,
   PdfSourceDescriptor,
   PdfUserBookmark,
+  WindowChromeState,
   WorkspaceBlock,
   pdfRangeChunkSize
 } from '../shared/domain';
@@ -31,6 +30,7 @@ import { extractPdfPageTextRange, readPdfOutline } from './pdfTools';
 import { JsonWorkspaceStore } from './store';
 import { CodexAgent } from './codexAgent';
 import { AppUpdateService } from './appUpdater';
+import { MetadataSyncScheduler } from './metadataSyncScheduler';
 
 if (process.env.SIDELIGHT_REMOTE_DEBUG_PORT) {
   app.commandLine.appendSwitch('remote-debugging-port', process.env.SIDELIGHT_REMOTE_DEBUG_PORT);
@@ -38,7 +38,10 @@ if (process.env.SIDELIGHT_REMOTE_DEBUG_PORT) {
 
 app.commandLine.appendSwitch('disable-http-cache');
 
-if (process.platform === 'win32') {
+// Electron enables Chromium GPU acceleration by default. Keep it enabled on
+// Windows for PDF canvas rendering, with an explicit escape hatch for machines
+// whose graphics driver cannot run the accelerated compositor reliably.
+if (process.env.TESSEL_DISABLE_HARDWARE_ACCELERATION === '1') {
   app.disableHardwareAcceleration();
 }
 
@@ -50,9 +53,14 @@ const hideE2eWindows = process.env.SIDELIGHT_E2E_HIDE_WINDOWS === '1';
 const pendingSystemPdfPaths: string[] = [];
 let handleSystemPdfOpen: ((filePath: string) => Promise<void>) | undefined;
 let storeMutationQueue = Promise.resolve();
+let settingsWindow: BrowserWindow | undefined;
 
-function windowChromeState(window?: BrowserWindow | null): { macTrafficLightsVisible: boolean } {
-  return { macTrafficLightsVisible: process.platform === 'darwin' && window != null && !window.isFullScreen() };
+function windowChromeState(window?: BrowserWindow | null): WindowChromeState {
+  return {
+    macTrafficLightsVisible: process.platform === 'darwin' && window != null && !window.isFullScreen(),
+    customControls: process.platform === 'win32',
+    maximized: Boolean(window?.isMaximized())
+  };
 }
 
 function sendWindowChromeState(window: BrowserWindow): void {
@@ -92,19 +100,22 @@ if (shouldUseSingleInstanceLock && hasSingleInstanceLock) {
   });
 }
 
-function createWindow(options: { documentId?: string } = {}): BrowserWindow {
+function createWindow(options: { documentId?: string; view?: 'settings' } = {}): BrowserWindow {
   const isReaderWindow = Boolean(options.documentId);
+  const isSettingsWindow = options.view === 'settings';
   const mainWindow = new BrowserWindow({
-    width: isReaderWindow ? 1440 : 720,
-    height: isReaderWindow ? 920 : 520,
-    minWidth: isReaderWindow ? 1080 : 620,
-    minHeight: isReaderWindow ? 720 : 460,
-    title: isReaderWindow ? 'Tessel Reader' : 'Tessel',
-    backgroundColor: '#f3f3f3',
+    width: isReaderWindow ? 1440 : isSettingsWindow ? 1040 : 720,
+    height: isReaderWindow ? 920 : isSettingsWindow ? 760 : 520,
+    minWidth: isReaderWindow ? 1080 : isSettingsWindow ? 820 : 620,
+    minHeight: isReaderWindow ? 720 : isSettingsWindow ? 600 : 460,
+    title: isReaderWindow ? 'Tessel Reader' : isSettingsWindow ? 'Tessel Settings' : 'Tessel',
+    backgroundColor: isSettingsWindow ? '#ffffff' : '#f3f3f3',
     icon: join(app.getAppPath(), 'src/assets/icons/icon_256x256.png'),
     paintWhenInitiallyHidden: true,
     show: !hideE2eWindows,
     skipTaskbar: hideE2eWindows,
+    autoHideMenuBar: true,
+    frame: process.platform !== 'win32',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {
       backgroundThrottling: !hideE2eWindows,
@@ -117,6 +128,12 @@ function createWindow(options: { documentId?: string } = {}): BrowserWindow {
 
   mainWindow.on('enter-full-screen', () => sendWindowChromeState(mainWindow));
   mainWindow.on('leave-full-screen', () => sendWindowChromeState(mainWindow));
+  mainWindow.on('maximize', () => sendWindowChromeState(mainWindow));
+  mainWindow.on('unmaximize', () => sendWindowChromeState(mainWindow));
+  if (process.platform === 'win32') {
+    mainWindow.setMenuBarVisibility(false);
+    mainWindow.removeMenu();
+  }
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
@@ -134,19 +151,49 @@ function createWindow(options: { documentId?: string } = {}): BrowserWindow {
     if (options.documentId) {
       rendererUrl.searchParams.set('documentId', options.documentId);
     }
+    if (options.view) {
+      rendererUrl.searchParams.set('view', options.view);
+    }
     void mainWindow.loadURL(rendererUrl.toString());
   } else {
+    const query = {
+      ...(options.documentId ? { documentId: options.documentId } : {}),
+      ...(options.view ? { view: options.view } : {})
+    };
     void mainWindow.loadFile(
       join(__dirname, '../renderer/index.html'),
-      options.documentId ? { query: { documentId: options.documentId } } : undefined
+      Object.keys(query).length > 0 ? { query } : undefined
     );
   }
 
   return mainWindow;
 }
 
+function openSettingsWindow(): BrowserWindow {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    focusWindow(settingsWindow);
+    return settingsWindow;
+  }
+  settingsWindow = createWindow({ view: 'settings' });
+  settingsWindow.once('closed', () => {
+    settingsWindow = undefined;
+  });
+  focusWindow(settingsWindow);
+  return settingsWindow;
+}
+
 function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent: CodexAgent, appUpdater: AppUpdateService): void {
   const activeAiStreams = new Map<string, AbortController>();
+  const metadataSyncScheduler = new MetadataSyncScheduler(
+    runStoreMutation,
+    (documentId) => store.syncDocumentMetadata(documentId),
+    {
+      onError: (documentId, error) => {
+        console.warn(`WebDAV metadata sync failed for ${documentId}`, error);
+      }
+    }
+  );
+  app.once('before-quit', () => metadataSyncScheduler.dispose());
   const openPdfPath = async (filePath: string) => {
     const result = await runStoreMutation(() => openPdfDocumentPath(store, filePath));
     return result;
@@ -168,6 +215,23 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
     }
 
     return openPdfPath(filePath);
+  });
+
+  ipcMain.handle('library:listRecentDocuments', (_event, limit?: number) => store.listRecentDocuments(limit));
+  ipcMain.handle('library:getStorageOverview', () => store.getStorageOverview());
+  ipcMain.handle('library:openDocument', async (_event, documentId: string) => {
+    const document = await store.getDocument(documentId);
+    if (!document) {
+      return false;
+    }
+    try {
+      await stat(document.filePath);
+    } catch {
+      return false;
+    }
+    const readerWindow = createWindow({ documentId });
+    focusWindow(readerWindow);
+    return true;
   });
 
   ipcMain.handle('pdf:load', async (_event, documentId: string) => {
@@ -223,19 +287,28 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
   });
   ipcMain.handle('pdf:getReadingState', (_event, documentId: string) => store.getReadingState(documentId));
   ipcMain.handle('pdf:saveReadingState', async (_event, state: PdfReadingState) => {
-    return runStoreMutation(() => store.saveReadingState(state));
+    const saved = await runStoreMutation(() => store.saveReadingState(state));
+    metadataSyncScheduler.schedule(saved.documentId);
+    return saved;
   });
 
   ipcMain.handle('conversation:list', (_event, documentId: string) => store.listConversations(documentId));
-  ipcMain.handle('conversation:save', (_event, input: { conversation: Conversation }) =>
-    runStoreMutation(() => store.saveConversation(input.conversation))
-  );
+  ipcMain.handle('conversation:save', async (_event, input: { conversation: Conversation }) => {
+    const saved = await runStoreMutation(() => store.saveConversation(input.conversation));
+    metadataSyncScheduler.schedule(saved.documentId);
+    return saved;
+  });
   ipcMain.handle('translation:list', (_event, documentId: string) => store.listTranslations(documentId));
-  ipcMain.handle('translation:save', (_event, input: { translation: TranslationEntry }) =>
-    runStoreMutation(() => store.saveTranslation(input.translation))
-  );
+  ipcMain.handle('translation:save', async (_event, input: { translation: TranslationEntry }) => {
+    const saved = await runStoreMutation(() => store.saveTranslation(input.translation));
+    metadataSyncScheduler.schedule(saved.documentId);
+    return saved;
+  });
   ipcMain.handle('translation:delete', async (_event, translationId: string) => {
-    await runStoreMutation(() => store.deleteTranslation(translationId));
+    const documentId = await runStoreMutation(() => store.deleteTranslation(translationId));
+    if (documentId) {
+      metadataSyncScheduler.schedule(documentId);
+    }
   });
 
   ipcMain.handle('note:get', (_event, documentId: string) => store.getNote(documentId));
@@ -276,9 +349,30 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
   ipcMain.handle('settings:saveAppPreferences', async (_event, config: AppPreferences) => {
     const preferences = await runStoreMutation(() => store.saveAppPreferences(config));
     codexAgent.resetConfiguration();
+    for (const window of BrowserWindow.getAllWindows()) {
+      sendToRenderer(window.webContents, 'settings:changed');
+    }
     return preferences;
   });
   ipcMain.handle('window:getChromeState', (event) => windowChromeState(BrowserWindow.fromWebContents(event.sender)));
+  ipcMain.handle('window:openSettings', () => {
+    openSettingsWindow();
+  });
+  ipcMain.handle('window:toggleMaximize', (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) {
+      return windowChromeState();
+    }
+    if (window.isMaximized()) {
+      window.unmaximize();
+    } else {
+      window.maximize();
+    }
+    return windowChromeState(window);
+  });
+  ipcMain.handle('window:close', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.close();
+  });
   ipcMain.handle('sync:documentMetadata', (_event, documentId: string) => runStoreMutation(() => store.syncDocumentMetadata(documentId)));
   ipcMain.handle('codex:availability', async (_event, executablePath?: string) => {
     const preferences = await store.getAppPreferences();
@@ -483,6 +577,9 @@ async function pickPdfFile(): Promise<string | undefined> {
 
 if (hasSingleInstanceLock) {
   app.whenReady().then(async () => {
+    if (process.platform === 'win32') {
+      Menu.setApplicationMenu(null);
+    }
     await clearChromiumCacheDirs();
 
     const store = new JsonWorkspaceStore();
@@ -670,61 +767,61 @@ async function loadRemoteImageDataUrl(value: string, depth = 0): Promise<string 
     return undefined;
   }
 
-  const metadata = await curlMetadata(url.toString());
-  if (metadata.contentType.startsWith('image/')) {
-    const bytes = await curlBody(metadata.url, 12 * 1024 * 1024);
-    return bytes.byteLength <= 12 * 1024 * 1024
-      ? `data:${metadata.contentType};base64,${bytes.toString('base64')}`
-      : undefined;
+  const response = await fetch(url, {
+    redirect: 'follow',
+    headers: {
+      Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*;q=0.9,text/html;q=0.6',
+      'User-Agent': remoteMediaUserAgent
+    },
+    signal: AbortSignal.timeout(10_000)
+  });
+  if (!response.ok) {
+    throw new Error(`Remote media request failed (${response.status} ${response.statusText}).`);
   }
-
-  if (!metadata.contentType.includes('html')) {
+  const effectiveUrl = new URL(response.url);
+  if (!/^https?:$/.test(effectiveUrl.protocol) || isLoopbackHost(effectiveUrl.hostname)) {
     return undefined;
   }
-  const html = (await curlBody(metadata.url, 2 * 1024 * 1024)).toString('utf8');
-  const imageUrl = imageCandidateFromHtml(html, metadata.url);
+  const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() ?? '';
+  const maxBytes = contentType.startsWith('image/') ? 12 * 1024 * 1024 : 2 * 1024 * 1024;
+  const bytes = await readRemoteBody(response, maxBytes);
+  if (contentType.startsWith('image/')) {
+    return `data:${contentType};base64,${bytes.toString('base64')}`;
+  }
+  if (!contentType.includes('html')) {
+    return undefined;
+  }
+  const imageUrl = imageCandidateFromHtml(bytes.toString('utf8'), effectiveUrl.toString());
   return imageUrl ? loadRemoteImageDataUrl(imageUrl, depth + 1) : undefined;
 }
 
 const remoteMediaUserAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36';
-const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
 
-async function curlMetadata(url: string): Promise<{ contentType: string; url: string }> {
-  const output = (await runCurl([
-    '--fail', '--location', '--silent', '--show-error', '--max-time', '10',
-    '--user-agent', remoteMediaUserAgent,
-    '--header', 'Accept: image/avif,image/webp,image/apng,image/svg+xml,image/*;q=0.9,text/html;q=0.6',
-    '--dump-header', '-', '--output', nullDevice,
-    '--write-out', '\nTYPE:%{content_type}\nURL:%{url_effective}\n',
-    url
-  ], 256 * 1024)).toString('utf8');
-  const contentType = output.match(/\nTYPE:([^\r\n]+)/)?.[1]?.split(';', 1)[0].trim().toLowerCase();
-  const effectiveUrl = output.match(/\nURL:([^\r\n]+)/)?.[1]?.trim();
-  if (!contentType || !effectiveUrl) {
-    throw new Error('Remote media did not return usable metadata.');
+async function readRemoteBody(response: Response, maxBytes: number): Promise<Buffer> {
+  const declaredSize = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredSize) && declaredSize > maxBytes) {
+    throw new Error('Remote media exceeds the size limit.');
   }
-  return { contentType, url: effectiveUrl };
-}
+  if (!response.body) {
+    return Buffer.alloc(0);
+  }
 
-function curlBody(url: string, maxBytes: number): Promise<Buffer> {
-  return runCurl([
-    '--fail', '--location', '--silent', '--show-error', '--max-time', '10', '--max-filesize', String(maxBytes),
-    '--user-agent', remoteMediaUserAgent,
-    '--output', '-',
-    url
-  ], maxBytes + 128 * 1024);
-}
-
-function runCurl(args: string[], maxBuffer: number): Promise<Buffer> {
-  return new Promise((resolveCurl, rejectCurl) => {
-    execFile('curl', args, { encoding: 'buffer', maxBuffer }, (error, stdout) => {
-      if (error) {
-        rejectCurl(error);
-        return;
-      }
-      resolveCurl(Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout));
-    });
-  });
+  const chunks: Buffer[] = [];
+  const reader = response.body.getReader();
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    totalBytes += value.byteLength;
+    if (totalBytes > maxBytes) {
+      await reader.cancel();
+      throw new Error('Remote media exceeds the size limit.');
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, totalBytes);
 }
 
 function imageCandidateFromHtml(html: string, baseUrl: string): string | undefined {
@@ -757,6 +854,9 @@ function htmlAttribute(tag: string, attribute: string): string | undefined {
 }
 
 function isLoopbackHost(host: string): boolean {
+  if (process.env.SIDELIGHT_E2E_ALLOW_LOOPBACK_MEDIA === '1') {
+    return false;
+  }
   return host === 'localhost' || host === '::1' || /^127(?:\.\d{1,3}){3}$/.test(host);
 }
 

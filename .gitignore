@@ -2,6 +2,7 @@ node_modules
 out
 tmp
 dist
+dist-preview
 dist-electron
 *.log
 *.tsbuildinfo

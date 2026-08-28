@@ -28,7 +28,9 @@ Tessel opens directly into a PDF. Select a passage, ask a question, translate it
 - **Codex sidebar**: an experimental local Codex CLI integration for chat, translation, document search, local tools, images, and LaTeX output.
 - **Flexible AI routing**: choose Codex or an OpenAI-compatible API for chat, translation, and generated outlines.
 - **Working memory**: pin conversations, translations, notes, and images alongside the PDF; reopen recent translations at any time.
-- **Your data stays yours**: document metadata is keyed by the SHA-256 hash of the PDF. Optional WebDAV sync preserves progress and conversations across devices.
+- **Fast return**: reopen recently viewed PDFs from the start page and inspect every local book's stored reading data from Settings.
+- **Crisp Windows reading**: GPU-accelerated, scale-aware PDF rendering keeps vector documents sharp without replacing the selectable text layer.
+- **Your data stays yours**: document metadata is keyed by the SHA-256 hash of the PDF. Optional WebDAV sync preserves progress, conversations, and recent translations across devices.
 - **Desktop native**: Electron builds for macOS and Windows, GitHub Release updates, and platform-specific application icons.
 
 ### Run from source
@@ -60,17 +62,19 @@ The experimental Codex integration requires a locally installed and authenticate
 
 ## 带着上下文阅读
 
-Tessel 打开后直接进入 PDF。选中一段文字后，可以提问、翻译或生成笔记；对话、引用、Pin、笔记和阅读进度都会按 PDF 内容哈希关联，而不是依赖文件名。
+Tessel 打开后直接进入 PDF。选中一段文字后，可以提问、翻译或生成笔记；对话、引用、Pin、笔记和阅读进度都按 PDF 内容哈希关联，而不依赖文件名。
 
 ### 主要功能
 
-- **直接阅读**：打开 PDF 后立即开始阅读，使用 PDF.js 矢量渲染并保存页码与视图状态。
+- **直接阅读**：打开 PDF 后立即开始阅读，使用 PDF.js 矢量渲染，并保存页码与视图状态。
 - **上下文对话**：选中的段落会先作为引用放入输入框，由你决定如何提问和发送。
-- **Codex 侧边栏**：实验性本地 Codex CLI 集成，支持对话、翻译、文档搜索、本地工具、图文与 LaTeX 输出。
-- **统一 AI 路由**：对话、翻译和 AI 目录可在 Codex 与 OpenAI 兼容 API 之间选择。
-- **阅读工作台**：将对话、翻译、笔记和图片 Pin 在 PDF 旁；最近翻译可随时重新打开。
-- **数据归你所有**：每份 PDF 使用 SHA-256 内容哈希保存元数据；可选 WebDAV 同步阅读进度与对话。
-- **原生桌面应用**：提供 macOS 和 Windows 构建、GitHub Release 自动更新及平台图标。
+- **Codex 侧边栏**：实验性的本地 Codex CLI 集成，支持对话、翻译、文档搜索、本地工具、图像和 LaTeX 输出。
+- **统一 AI 路由**：对话、翻译和 AI 目录可以在 Codex 与 OpenAI 兼容 API 之间选择。
+- **阅读工作台**：将对话、翻译、笔记和图片 Pin 在 PDF 旁边；最近的翻译可以随时重新打开。
+- **快速返回**：从首页直接进入最近浏览的 PDF，并在设置中检查每本书保存的阅读数据。
+- **清晰的 Windows 阅读体验**：启用 GPU 加速并按缩放倍率重绘矢量 PDF，同时保留可选择的文字层。
+- **数据归你所有**：每份 PDF 使用 SHA-256 内容哈希保存元数据；可选的 WebDAV 会同步阅读进度、对话和最近翻译。
+- **原生桌面应用**：提供 macOS 和 Windows 构建、GitHub Release 更新及平台图标。
 
 ### 从源码运行
 
@@ -87,10 +91,10 @@ pnpm build
 pnpm test:e2e
 ```
 
-若终端设置了 `ELECTRON_RUN_AS_NODE=1`，请先移除该环境变量再启动 Electron。
+如果终端设置了 `ELECTRON_RUN_AS_NODE=1`，请先移除该环境变量，再启动 Electron。
 
 ### 数据与隐私
 
-Tessel 将工作区保存在 Electron 的 `userData` 目录中，包含 PDF 元数据、阅读进度、对话、笔记、Pin 和偏好设置。系统支持时，API 密钥通过 Electron `safeStorage` 加密；PDF 文件始终留在原始位置。
+Tessel 将工作区保存在 Electron 的 `userData` 目录中，其中包含 PDF 元数据、阅读进度、对话、笔记、Pin 和偏好设置。系统支持时，API 密钥通过 Electron `safeStorage` 加密；PDF 文件始终保留在原始位置。
 
-实验性 Codex 功能要求本机已安装并登录 `codex` CLI。即使不可用，阅读器的其他功能也不受影响。
+实验性 Codex 功能要求本机已经安装并登录 `codex` CLI。即使 Codex 不可用，阅读器的其他功能也不受影响。

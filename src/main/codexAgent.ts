@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { delimiter, extname, join, relative, resolve } from 'node:path';
@@ -9,6 +9,7 @@ import {
   AiDocumentToolContext,
   AiStreamEvent,
   CodexPermissionMode,
+  CodexAvailability,
   CodexModelInfo,
   CodexStreamRequest,
   ConversationAttachment,
@@ -81,36 +82,150 @@ class ExecSteerCheckpointError extends Error {
 }
 
 function codexExecutable(configuredPath?: string): string {
-  if (configuredPath?.trim()) {
-    return configuredPath.trim();
+  const configured = configuredPath?.trim() || process.env.TESSEL_CODEX_PATH?.trim();
+  if (configured) {
+    return resolveCodexLocation(configured) ?? normalizeConfiguredPath(configured);
   }
   const fromPath = (process.env.PATH ?? '')
     .split(delimiter)
+    .map((directory) => normalizeConfiguredPath(directory))
     .filter(Boolean)
-    .map((directory) => join(directory, 'codex'))
+    .flatMap((directory) => executableCandidates(join(directory, 'codex')))
+    .map((candidate) => preferNativeCodex(candidate))
     .find((candidate) => existsSync(candidate));
   if (fromPath) {
     return fromPath;
   }
 
   // Finder launches do not inherit Homebrew's PATH. Fall back to the standard
-  // installation locations while retaining PATH precedence for custom installs.
+  // locations. Packaged Windows apps similarly miss the user's npm PATH, so
+  // prefer the native executable bundled with the global @openai/codex package.
   const fallback = [
-    process.env.TESSEL_CODEX_PATH,
+    ...windowsCodexLocations(),
     '/opt/homebrew/bin/codex',
     '/usr/local/bin/codex',
     join(homedir(), '.local/bin/codex'),
     join(homedir(), '.npm-global/bin/codex')
-  ].find((candidate): candidate is string => typeof candidate === 'string' && existsSync(candidate));
+  ].filter((candidate): candidate is string => typeof candidate === 'string')
+    .map((candidate) => resolveCodexLocation(candidate))
+    .find((candidate): candidate is string => Boolean(candidate));
   return fallback ?? 'codex';
 }
 
+function executableCandidates(path: string): string[] {
+  if (process.platform !== 'win32') {
+    return [path];
+  }
+  const extension = extname(path);
+  if (/^\.(?:cmd|bat|exe)$/i.test(extension)) {
+    return [path];
+  }
+  const basePath = extension ? path.slice(0, -extension.length) : path;
+  return [`${basePath}.exe`, `${basePath}.cmd`, `${basePath}.bat`, path];
+}
+
+function normalizeConfiguredPath(path: string): string {
+  const unquoted = path.trim().replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, '$1$2');
+  if (unquoted === '~') {
+    return homedir();
+  }
+  return unquoted.replace(/^~(?=[\\/])/, homedir());
+}
+
+function resolveCodexLocation(location: string): string | undefined {
+  const normalized = normalizeConfiguredPath(location);
+  let candidates: string[];
+  try {
+    candidates = existsSync(normalized) && statSync(normalized).isDirectory()
+      ? [...nativeCodexCandidates(normalized), ...executableCandidates(join(normalized, 'codex'))]
+      : executableCandidates(normalized);
+  } catch {
+    candidates = executableCandidates(normalized);
+  }
+  return candidates
+    .map((candidate) => preferNativeCodex(candidate))
+    .find((candidate) => existsSync(candidate));
+}
+
+function preferNativeCodex(candidate: string): string {
+  if (process.platform !== 'win32' || !/codex\.(?:cmd|bat|ps1)$/i.test(candidate)) {
+    return candidate;
+  }
+  return nativeCodexCandidates(resolve(candidate, '..')).find((path) => existsSync(path)) ?? candidate;
+}
+
+function windowsCodexLocations(): string[] {
+  if (process.platform !== 'win32') {
+    return [];
+  }
+  const prefixes = [
+    process.env.npm_config_prefix,
+    process.env.APPDATA ? join(process.env.APPDATA, 'npm') : undefined,
+    process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'npm') : undefined,
+    join(homedir(), 'AppData', 'Roaming', 'npm')
+  ].filter((value): value is string => Boolean(value));
+  return [
+    ...prefixes.flatMap((prefix) => [...nativeCodexCandidates(prefix), join(prefix, 'codex')]),
+    join(homedir(), '.local', 'bin', 'codex'),
+    join(homedir(), '.codex', 'bin', 'codex'),
+    ...(process.env.LOCALAPPDATA ? [join(process.env.LOCALAPPDATA, 'Programs', 'Codex', 'codex.exe')] : []),
+    ...(process.env.ProgramFiles ? [join(process.env.ProgramFiles, 'nodejs', 'codex')] : [])
+  ];
+}
+
+function nativeCodexCandidates(npmPrefix: string): string[] {
+  if (process.platform !== 'win32') {
+    return [];
+  }
+  const platforms = process.arch === 'arm64'
+    ? [['codex-win32-arm64', 'aarch64-pc-windows-msvc'], ['codex-win32-x64', 'x86_64-pc-windows-msvc']]
+    : [['codex-win32-x64', 'x86_64-pc-windows-msvc'], ['codex-win32-arm64', 'aarch64-pc-windows-msvc']];
+  return platforms.map(([packageName, target]) => join(
+    npmPrefix,
+    'node_modules',
+    '@openai',
+    'codex',
+    'node_modules',
+    '@openai',
+    packageName,
+    'vendor',
+    target,
+    'bin',
+    'codex.exe'
+  ));
+}
+
 function spawnCodex(executable: string, args: string[], stdio: ['pipe' | 'ignore', 'pipe', 'pipe']): ChildProcessWithoutNullStreams {
-  return spawn(executable, args, {
-    stdio,
-    // npm installs a .cmd launcher on Windows; shell is required for it.
-    shell: process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(executable)
-  }) as ChildProcessWithoutNullStreams;
+  if (process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(executable)) {
+    const doubleEscapeMetaCharacters = /node_modules[\\/]\.bin[\\/][^\\/]+\.cmd$/i.test(executable);
+    const shellCommand = [
+      escapeWindowsCommand(executable),
+      ...args.map((argument) => escapeWindowsArgument(argument, doubleEscapeMetaCharacters))
+    ].join(' ');
+    return spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${shellCommand}"`], {
+      stdio,
+      windowsVerbatimArguments: true
+    }) as ChildProcessWithoutNullStreams;
+  }
+  return spawn(executable, args, { stdio }) as ChildProcessWithoutNullStreams;
+}
+
+const windowsShellMetaCharacters = /([()\][%!^"`<>&|;, *?])/g;
+
+function escapeWindowsCommand(command: string): string {
+  return command.replace(windowsShellMetaCharacters, '^$1');
+}
+
+// Keep each argument intact across cmd.exe and npm's optional nested .cmd shim.
+// This follows the quoting rules used by cross-spawn without adding a runtime dependency.
+function escapeWindowsArgument(argument: string, doubleEscapeMetaCharacters: boolean): string {
+  let escaped = String(argument)
+    .replace(/(?=(\\+?)?)\1"/g, '$1$1\\"')
+    .replace(/(?=(\\+?)?)\1$/, '$1$1');
+  escaped = `"${escaped}"`.replace(windowsShellMetaCharacters, '^$1');
+  return doubleEscapeMetaCharacters
+    ? escaped.replace(windowsShellMetaCharacters, '^$1')
+    : escaped;
 }
 
 function runCodex(executable: string, args: string[], timeout = 4_000): Promise<{ stdout: string }> {
@@ -159,8 +274,9 @@ export class CodexAgent {
   private readonly activeExecTurns = new Map<string, ActiveExecTurn>();
   private readonly queuedSteers = new Map<string, PendingSteer[]>();
   private modelListPromise?: Promise<CodexModelInfo[]>;
-  private preferredTransport?: 'app-server' | 'exec';
   private transportDetectionPromise?: Promise<'app-server' | 'exec'>;
+  private executablePromise?: Promise<string>;
+  private appServerUnavailable = false;
 
   constructor(
     private readonly resolvePdf: (documentId: string) => Promise<PdfRuntime>,
@@ -169,21 +285,22 @@ export class CodexAgent {
     private readonly configuredExecutablePath: () => Promise<string | undefined> = async () => undefined
   ) {}
 
-  static async availability(configuredPath?: string): Promise<{ available: boolean; version?: string; reason?: string }> {
+  static async availability(configuredPath?: string): Promise<CodexAvailability> {
+    const executable = codexExecutable(configuredPath);
     try {
-      const executable = codexExecutable(configuredPath);
       const { stdout } = await runCodex(executable, ['--version']);
       const version = stdout.trim();
       if (!version) {
-        return { available: false, reason: 'Codex did not report a version.' };
+        return { available: false, executablePath: executable, reason: 'Codex did not report a version.' };
       }
       await runCodex(executable, ['login', 'status']);
-      return { available: true, version };
-    } catch {
+      return { available: true, version, executablePath: executable };
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
       if (configuredPath?.trim()) {
-        return { available: false, reason: 'The configured Codex executable path could not be started. Check the path and sign-in state.' };
+        return { available: false, executablePath: executable, reason: `The configured Codex executable could not be started: ${detail}` };
       }
-      return { available: false, reason: 'Codex CLI is missing or not signed in. Install and sign in to Codex before enabling this experiment.' };
+      return { available: false, executablePath: executable, reason: `Codex CLI could not be started automatically (${executable}): ${detail}` };
     }
   }
 
@@ -202,13 +319,17 @@ export class CodexAgent {
   warmup(): void {
     void this.initialTransport();
     void this.listModels();
+    if (codexTransportOverride() !== 'exec') {
+      void this.initialize().catch(() => undefined);
+    }
   }
 
   resetConfiguration(): void {
     this.modelListPromise = undefined;
-    this.preferredTransport = undefined;
     this.transportDetectionPromise = undefined;
-    void this.shutdown();
+    this.executablePromise = undefined;
+    this.appServerUnavailable = false;
+    void this.shutdown().finally(() => this.warmup());
   }
 
   private async loadModels(): Promise<CodexModelInfo[]> {
@@ -254,10 +375,15 @@ export class CodexAgent {
     input: CodexStreamRequest,
     onEvent: (event: Omit<AiStreamEvent, 'streamId'>) => void
   ): Promise<void> {
-    if (!this.preferredTransport) {
-      this.preferredTransport = await this.initialTransport();
-    }
-    if (this.preferredTransport === 'exec') {
+    const forcedTransport = codexTransportOverride();
+    const interactiveChat = !input.task || input.task === 'chat';
+    const transport = this.appServerUnavailable || forcedTransport === 'exec'
+      ? 'exec'
+      : forcedTransport === 'app-server' || interactiveChat
+        ? 'app-server'
+        : await this.initialTransport();
+
+    if (transport === 'exec') {
       onEvent({ activity: activity('transport:exec', 'reading', 'Starting a local Codex session', 'started') });
       await this.streamWithExecOrRestore(input, onEvent);
       return;
@@ -265,12 +391,11 @@ export class CodexAgent {
 
     try {
       await this.streamWithAppServer(input, onEvent);
-      this.preferredTransport = 'app-server';
     } catch (error) {
       if (!isAppServerClientForbidden(error)) {
         throw error;
       }
-      this.preferredTransport = 'exec';
+      this.appServerUnavailable = true;
       onEvent({ activity: activity('transport:exec', 'reading', 'Starting a local Codex session', 'started') });
       await this.streamWithExecOrRestore(input, onEvent);
     }
@@ -305,6 +430,10 @@ export class CodexAgent {
   }
 
   private async initialTransport(): Promise<'app-server' | 'exec'> {
+    const forcedTransport = codexTransportOverride();
+    if (forcedTransport) {
+      return forcedTransport;
+    }
     if (!this.transportDetectionPromise) {
       this.transportDetectionPromise = this.executable().then((executable) => runCodex(executable, ['login', 'status']))
         .then(({ stdout }) => /api key/i.test(stdout) ? 'exec' : 'app-server')
@@ -317,11 +446,15 @@ export class CodexAgent {
     input: CodexStreamRequest,
     onEvent: (event: Omit<AiStreamEvent, 'streamId'>) => void
   ): Promise<void> {
-    await this.initialize();
-    const runtime = await this.resolvePdf(input.documentId);
+    const [, runtime] = await Promise.all([
+      this.initialize(),
+      this.resolvePdf(input.documentId)
+    ]);
     const documentWorkspace = await this.documentWorkspace(runtime.document);
-    const threadId = await this.resolveThread(input, documentWorkspace, onEvent);
-    const workspaceImages = await this.workspaceImageVersions(documentWorkspace);
+    const [threadId, workspaceImages] = await Promise.all([
+      this.resolveThread(input, documentWorkspace, onEvent),
+      this.workspaceImageVersions(documentWorkspace)
+    ]);
     this.threadContexts.set(threadId, { input, onEvent });
     onEvent({ agentThreadId: threadId, usedProvider: 'Codex' });
     onEvent({ activity: activity(`session:${threadId}`, 'reading', 'Preparing PDF context', 'started') });
@@ -480,6 +613,52 @@ export class CodexAgent {
     ];
   }
 
+  private async prepareTurnInput(
+    input: CodexStreamRequest,
+    runtime: PdfRuntime,
+    onEvent: (event: Omit<AiStreamEvent, 'streamId'>) => void
+  ): Promise<Array<Record<string, unknown>>> {
+    if (input.task !== 'outline') {
+      return this.turnInput(input, runtime);
+    }
+
+    const pageCount = input.context.totalPages ?? runtime.document.pageCount ?? 1;
+    const rangeCount = outlineSampleStarts(pageCount).length;
+    onEvent({
+      activity: activity(
+        'outline:samples',
+        'reading',
+        'Reading representative PDF pages',
+        'started',
+        `${rangeCount} page ranges selected across ${pageCount} pages`
+      )
+    });
+    try {
+      const prepared = await this.turnInput(input, runtime);
+      onEvent({
+        activity: activity(
+          'outline:samples',
+          'reading',
+          'Reading representative PDF pages',
+          'completed',
+          `${rangeCount} representative ranges added to the AI context`
+        )
+      });
+      return prepared;
+    } catch (error) {
+      onEvent({
+        activity: activity(
+          'outline:samples',
+          'reading',
+          'Reading representative PDF pages',
+          'error',
+          error instanceof Error ? error.message : String(error)
+        )
+      });
+      throw error;
+    }
+  }
+
   private async outlinePageSamples(runtime: PdfRuntime, pageCount: number): Promise<Array<{
     pageNumber: number;
     text: string;
@@ -520,7 +699,7 @@ export class CodexAgent {
   }
 
   private async startTurn(input: CodexStreamRequest, runtime: PdfRuntime, active: ActiveTurn): Promise<void> {
-    const turnInput = await this.turnInput(input, runtime);
+    const turnInput = await this.prepareTurnInput(input, runtime, active.onEvent);
     const result = await this.request('turn/start', {
       threadId: active.threadId,
       input: turnInput,
@@ -620,10 +799,15 @@ export class CodexAgent {
     input: CodexStreamRequest,
     onEvent: (event: Omit<AiStreamEvent, 'streamId'>) => void
   ): Promise<void> {
-    const runtime = await this.resolvePdf(input.documentId);
+    const [runtime, executable] = await Promise.all([
+      this.resolvePdf(input.documentId),
+      this.executable()
+    ]);
     const workspaceDirectory = await this.documentWorkspace(runtime.document);
-    const workspaceImages = await this.workspaceImageVersions(workspaceDirectory);
-    const turnInput = await this.turnInput(input, runtime);
+    const [workspaceImages, turnInput] = await Promise.all([
+      this.workspaceImageVersions(workspaceDirectory),
+      this.prepareTurnInput(input, runtime, onEvent)
+    ]);
     const prompt = turnInput.find((item) => item.type === 'text')?.text;
     if (typeof prompt !== 'string') {
       throw new Error('Could not prepare the Codex reader prompt.');
@@ -631,8 +815,8 @@ export class CodexAgent {
     const imagePaths = turnInput
       .filter((item) => item.type === 'localImage' && typeof item.path === 'string')
       .map((item) => item.path as string);
-    const args = execArgs(input, workspaceDirectory, prompt, imagePaths);
-    const child = spawnCodex(await this.executable(), args, ['pipe', 'pipe', 'pipe']);
+    const args = execArgs(input, workspaceDirectory, imagePaths);
+    const child = spawnCodex(executable, args, ['pipe', 'pipe', 'pipe']);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
 
@@ -701,9 +885,10 @@ export class CodexAgent {
           void this.finishExecTurn(input.streamId, active, new Error(detail));
         }
       });
-      // Codex treats a piped stdin as additional prompt input and waits for EOF.
-      // No stdin payload is needed because the prompt is passed as an argument.
-      child.stdin.end();
+      // Passing multi-line prompts through a Windows .cmd launcher truncates them
+      // at the first line. Codex accepts `-` as an explicit stdin prompt on every
+      // supported platform, which also avoids shell quoting limits.
+      child.stdin.end(prompt);
     });
   }
 
@@ -1104,8 +1289,16 @@ export class CodexAgent {
   }
 
   private async executable(): Promise<string> {
-    return codexExecutable(await this.configuredExecutablePath());
+    if (!this.executablePromise) {
+      this.executablePromise = this.configuredExecutablePath().then((configuredPath) => codexExecutable(configuredPath));
+    }
+    return this.executablePromise;
   }
+}
+
+function codexTransportOverride(): 'app-server' | 'exec' | undefined {
+  const configured = process.env.TESSEL_CODEX_TRANSPORT?.trim().toLowerCase();
+  return configured === 'app-server' || configured === 'exec' ? configured : undefined;
 }
 
 function dynamicPdfTools(): Array<Record<string, unknown>> {
@@ -1241,7 +1434,7 @@ function steerContinuationPrompt(guidance: string): string {
   ].join('\n');
 }
 
-function execArgs(input: CodexStreamRequest, workspaceDirectory: string, prompt: string, imagePaths: string[]): string[] {
+function execArgs(input: CodexStreamRequest, workspaceDirectory: string, imagePaths: string[]): string[] {
   const modelArgs = input.model?.trim() ? ['--model', input.model.trim()] : [];
   const effortArgs = input.effort?.trim() ? ['--config', `model_reasoning_effort="${input.effort.trim()}"`] : [];
   const sandboxMode = codexSandboxMode(input.permissionMode);
@@ -1268,7 +1461,7 @@ function execArgs(input: CodexStreamRequest, workspaceDirectory: string, prompt:
       ...effortArgs,
       ...imageArgs,
       input.codexThreadId,
-      prompt
+      '-'
     ];
   }
   return [
@@ -1290,7 +1483,7 @@ function execArgs(input: CodexStreamRequest, workspaceDirectory: string, prompt:
     ...modelArgs,
     ...effortArgs,
     ...imageArgs,
-    prompt
+    '-'
   ];
 }
 

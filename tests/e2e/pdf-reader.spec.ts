@@ -1,7 +1,9 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { createServer } from 'node:http';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 
 const rootDir = resolve(__dirname, '../..');
@@ -21,9 +23,13 @@ test.describe('PDF reader flow', () => {
     await mkdir(userDataDir, { recursive: true });
     await createFixturePdf(pdfPath, { largeAttachment: testInfo.title.includes('range-backed') });
     const fakeCodexBin = join(runDir, 'bin');
+    const fakeAppData = join(runDir, 'app-data');
     const fakeCodexHome = join(runDir, 'codex-home');
     const fakeCodexLog = join(runDir, 'codex-requests.jsonl');
     await createFakeCodex(fakeCodexBin);
+    if (process.platform === 'win32') {
+      await createFakeCodex(join(fakeAppData, 'npm'));
+    }
     await createFakeCodexModelCache(fakeCodexHome);
     const useExecTransport = testInfo.title.includes('exec checkpoint')
       || testInfo.title.includes('fast translation')
@@ -34,12 +40,17 @@ test.describe('PDF reader flow', () => {
       cwd: rootDir,
       env: {
         ...process.env,
-        PATH: `${fakeCodexBin}:${process.env.PATH ?? ''}`,
+        PATH: process.platform === 'win32'
+          ? `${dirname(process.execPath)}${delimiter}${process.env.SystemRoot ?? 'C:\\Windows'}\\System32`
+          : `${fakeCodexBin}${delimiter}${process.env.PATH ?? ''}`,
+        ...(process.platform === 'win32' ? { APPDATA: fakeAppData } : {}),
         CODEX_HOME: fakeCodexHome,
         FAKE_CODEX_LOG: fakeCodexLog,
         FAKE_CODEX_AUTH: useExecTransport ? 'api-key' : 'chatgpt',
+        TESSEL_CODEX_TRANSPORT: testInfo.title.includes('exec checkpoint') ? 'exec' : '',
         SIDELIGHT_USER_DATA_DIR: userDataDir,
-        SIDELIGHT_E2E_HIDE_WINDOWS: '1'
+        SIDELIGHT_E2E_HIDE_WINDOWS: '1',
+        SIDELIGHT_E2E_ALLOW_LOOPBACK_MEDIA: '1'
       }
     });
     page = await app.firstWindow();
@@ -47,7 +58,9 @@ test.describe('PDF reader flow', () => {
 
   test.afterEach(async () => {
     await app?.close();
-    await rm(runDir, { recursive: true, force: true });
+    if (process.env.SIDELIGHT_E2E_KEEP_RUN_DIR !== '1') {
+      await rm(runDir, { recursive: true, force: true });
+    }
   });
 
   test('opens directly into the PDF reader and persists a full-hash session', async () => {
@@ -211,7 +224,8 @@ test.describe('PDF reader flow', () => {
   });
 
   test('resolves an agent image that incorrectly points at a public HTML profile page', async () => {
-    const resolvedImage = await page.evaluate(() => window.sidelight.resolveRemoteImage('https://cs.fudan.edu.cn/qxp/'));
+    const media = await startRemoteMediaFixture();
+    const resolvedImage = await page.evaluate((url) => window.sidelight.resolveRemoteImage(url), media.pageUrl);
     expect(resolvedImage).toMatch(/^data:image\//);
     const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
       documents: Array<{ id: string }>;
@@ -219,7 +233,7 @@ test.describe('PDF reader flow', () => {
     const documentId = store.documents[0]?.id;
     expect(documentId).toBeTruthy();
     const now = new Date().toISOString();
-    await page.evaluate(async ({ documentId, now }) => {
+    await page.evaluate(async ({ documentId, now, pageUrl }) => {
       await window.sidelight.saveConversation({
         conversation: {
           id: 'chat_profile_image_fixture',
@@ -231,27 +245,30 @@ test.describe('PDF reader flow', () => {
           messages: [{
             id: 'msg_profile_image_fixture',
             role: 'assistant',
-            content: '![Professor profile](https://cs.fudan.edu.cn/qxp/)',
+            content: `![Professor profile](${pageUrl})`,
             createdAt: now
           }],
           createdAt: now,
           updatedAt: now
         }
       });
-    }, { documentId: documentId!, now });
+    }, { documentId: documentId!, now, pageUrl: media.pageUrl });
 
     await page.reload();
     await expect(page.locator('.chat-bubble img[alt="Professor profile"]')).toHaveAttribute('src', /^data:image\//, { timeout: 20_000 });
+    await media.close();
   });
 
   test('previews a cited webpage when an agent says it is displaying a photo', async () => {
+    const media = await startRemoteMediaFixture();
+    await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
     const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
       documents: Array<{ id: string }>;
     };
     const documentId = store.documents[0]?.id;
     expect(documentId).toBeTruthy();
     const now = new Date().toISOString();
-    await page.evaluate(async ({ documentId, now }) => {
+    await page.evaluate(async ({ documentId, now, pageUrl }) => {
       await window.sidelight.saveConversation({
         conversation: {
           id: 'chat_visual_source_fixture',
@@ -263,17 +280,18 @@ test.describe('PDF reader flow', () => {
           messages: [{
             id: 'msg_visual_source_fixture',
             role: 'assistant',
-            content: 'This is a public professor photo from [Fudan University](https://cs.fudan.edu.cn/qxp/).',
+            content: `This is a public professor photo from [the fixture page](${pageUrl}).`,
             createdAt: now
           }],
           createdAt: now,
           updatedAt: now
         }
       });
-    }, { documentId: documentId!, now });
+    }, { documentId: documentId!, now, pageUrl: media.pageUrl });
 
     await page.reload();
     await expect(page.locator('.chat-bubble img[alt="Image from linked source"]')).toHaveAttribute('src', /^data:image\//, { timeout: 20_000 });
+    await media.close();
   });
 
   test('renders Codex output and activity in a collapsible timeline', async () => {
@@ -499,6 +517,7 @@ test.describe('PDF reader flow', () => {
   });
 
   test('keeps the ten most recent translations and reopens them from history', async () => {
+    await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
     const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
       documents: Array<{ id: string }>;
     };
@@ -532,9 +551,8 @@ test.describe('PDF reader flow', () => {
   });
 
   test('saves the translation backend from the compact settings workspace', async () => {
-    await page.getByTitle('Settings').click();
-    const settings = page.locator('.reader-settings');
-    await expect(settings).toBeVisible();
+    const settingsPage = await openSettingsWindow(app, page);
+    const settings = settingsPage.locator('.reader-settings');
     await settings.getByRole('button', { name: 'Codex' }).click();
     await settings.getByLabel('Enabled').check();
     await settings.getByLabel('Translation backend').selectOption('codex');
@@ -549,10 +567,13 @@ test.describe('PDF reader flow', () => {
   });
 
   test('uses and persists an explicit Codex executable path', async () => {
-    await page.getByTitle('Settings').click();
-    const settings = page.locator('.reader-settings');
+    const settingsPage = await openSettingsWindow(app, page);
+    const settings = settingsPage.locator('.reader-settings');
     await settings.getByRole('button', { name: 'Codex' }).click();
-    await settings.getByLabel('Codex executable path (optional)').fill(join(runDir, 'bin', 'codex'));
+    const configuredPath = process.platform === 'win32'
+      ? join(runDir, 'bin', 'codex.ps1')
+      : join(runDir, 'bin', 'codex');
+    await settings.getByLabel('Codex executable path (optional)').fill(configuredPath);
     await expect(settings.getByLabel('Enabled')).toBeEnabled();
     await settings.getByLabel('Enabled').check();
     await settings.getByRole('button', { name: 'Save' }).click();
@@ -562,12 +583,12 @@ test.describe('PDF reader flow', () => {
         appPreferences?: { experimentalCodexAgent?: { executablePath?: string } };
       };
       return store.appPreferences?.experimentalCodexAgent?.executablePath;
-    }).toBe(join(runDir, 'bin', 'codex'));
+    }).toBe(configuredPath);
   });
 
   test('persists reader appearance and keeps the chat composer at a two-line height', async () => {
-    await page.getByTitle('Settings').click();
-    const settings = page.locator('.reader-settings');
+    const settingsPage = await openSettingsWindow(app, page);
+    const settings = settingsPage.locator('.reader-settings');
     await settings.getByRole('button', { name: 'Appearance' }).click();
     await settings.getByLabel('Chat').evaluate((input) => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
@@ -597,12 +618,99 @@ test.describe('PDF reader flow', () => {
     await expect(composer).toBeVisible();
     await expect(composer).toHaveCSS('font-family', /Iowan|Charter|Georgia|serif/);
     expect(await composer.evaluate((textarea) => textarea.getBoundingClientRect().height)).toBeGreaterThanOrEqual(58);
+    const composerGeometry = await page.locator('.chat-composer__row').evaluate((row) => {
+      const textarea = row.querySelector('textarea')!.getBoundingClientRect();
+      const buttons = Array.from(row.querySelectorAll<HTMLElement>('.p-button')).map((button) => button.getBoundingClientRect());
+      return {
+        textarea: { left: textarea.left, right: textarea.right, centerY: textarea.top + textarea.height / 2 },
+        buttons: buttons.map((button) => ({ left: button.left, right: button.right, centerY: button.top + button.height / 2 }))
+      };
+    });
+    expect(composerGeometry.buttons).toHaveLength(2);
+    expect(composerGeometry.buttons[0].right).toBeLessThan(composerGeometry.textarea.left);
+    expect(composerGeometry.textarea.right).toBeLessThan(composerGeometry.buttons[1].left);
+    expect(Math.abs(composerGeometry.buttons[0].centerY - composerGeometry.textarea.centerY)).toBeLessThan(2);
+    expect(Math.abs(composerGeometry.buttons[1].centerY - composerGeometry.textarea.centerY)).toBeLessThan(2);
+  });
+
+  test('holds Space to pan the PDF canvas without triggering page navigation', async () => {
+    const viewport = page.locator('.pdf-viewport');
+    await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
+    const before = await viewport.evaluate((element) => {
+      element.scrollLeft = Math.min(180, Math.max(0, element.scrollWidth - element.clientWidth));
+      element.scrollTop = Math.min(180, Math.max(0, element.scrollHeight - element.clientHeight));
+      return { left: element.scrollLeft, top: element.scrollTop };
+    });
+    await viewport.focus();
+    await page.keyboard.down('Space');
+    await expect(viewport).toHaveClass(/is-canvas-drag-mode/);
+
+    const box = await viewport.boundingBox();
+    if (!box) {
+      throw new Error('PDF viewport is not visible.');
+    }
+    await page.mouse.move(box.x + 70, box.y + 110);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 120, box.y + 155, { steps: 4 });
+    await page.mouse.up();
+    await page.keyboard.up('Space');
+    await expect(viewport).not.toHaveClass(/is-canvas-drag-mode/);
+
+    const after = await viewport.evaluate((element) => ({ left: element.scrollLeft, top: element.scrollTop }));
+    expect(after.left !== before.left || after.top !== before.top).toBe(true);
+  });
+
+  test('rerenders vector PDF content when zooming without breaking text selection', async () => {
+    const pageView = page.locator('.pdfViewer .page[data-page-number="1"]');
+    const textLayer = pageView.locator('.textLayer');
+    const canvas = pageView.locator('canvas').first();
+    await expect(textLayer).toContainText('Reader fixture quote Alpha Beta');
+
+    const before = await canvas.evaluate((element) => ({
+      width: element.width,
+      cssWidth: element.getBoundingClientRect().width
+    }));
+
+    await page.getByTitle('Zoom in').click();
+    await page.getByTitle('Zoom in').click();
+    await expect.poll(() => canvas.evaluate((element) => element.width)).toBeGreaterThan(before.width);
+
+    const after = await canvas.evaluate((element) => ({
+      width: element.width,
+      cssWidth: element.getBoundingClientRect().width,
+      devicePixelRatio: window.devicePixelRatio
+    }));
+    expect(after.cssWidth).toBeGreaterThan(before.cssWidth);
+    expect(after.width / after.cssWidth).toBeGreaterThanOrEqual(after.devicePixelRatio * 0.9);
+
+    // Canvas and text layers complete independently. Wait until the text layer
+    // has stopped replacing spans before exercising the real selection flow.
+    await textLayer.evaluate((element) => new Promise<void>((resolve) => {
+      let quietTimer = window.setTimeout(done, 100);
+      const observer = new MutationObserver(() => {
+        window.clearTimeout(quietTimer);
+        quietTimer = window.setTimeout(done, 100);
+      });
+      function done(): void {
+        observer.disconnect();
+        resolve();
+      }
+      observer.observe(element, { childList: true, subtree: true });
+    }));
+    await expect(textLayer.locator('span').first()).toBeVisible();
+    await selectPdfText(page);
+    await expect(page.locator('.selection-toolbar')).toBeVisible();
+    await expect(page.locator('.selection-toolbar').getByRole('button', { name: /^Chat$/i })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.getSelection()?.toString() ?? '')).toContain('Reader fixture');
   });
 
   test('gives Codex outline generation sampled PDF page evidence', async () => {
     await enableCodexReader(page);
     await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
     await page.getByRole('button', { name: 'AI-generate PDF outline' }).click();
+    const progress = page.getByRole('progressbar', { name: /PDF context|Starting AI|representative pages|outline/i });
+    await expect(progress).toBeVisible();
+    await expect(progress).toHaveAttribute('aria-valuenow', /[1-9][0-9]?/);
     await expect(page.locator('.outline-item').filter({ hasText: 'Fixture introduction' })).toBeVisible();
 
     await expect.poll(async () => {
@@ -630,12 +738,15 @@ async function createFixturePdf(filePath: string, options: { largeAttachment?: b
 async function createFakeCodex(binDirectory: string): Promise<void> {
   await mkdir(binDirectory, { recursive: true });
   const executable = join(binDirectory, 'codex');
-  await writeFile(executable, `#!/usr/bin/env node
+  const script = `#!/usr/bin/env node
 const readline = require('node:readline');
 const args = process.argv.slice(2);
-if (process.env.FAKE_CODEX_LOG) {
-  require('node:fs').appendFileSync(process.env.FAKE_CODEX_LOG, JSON.stringify(args) + '\\n');
-}
+const logRequest = (request) => {
+  if (process.env.FAKE_CODEX_LOG) {
+    require('node:fs').appendFileSync(process.env.FAKE_CODEX_LOG, JSON.stringify(request) + '\\n');
+  }
+};
+if (args[0] !== 'exec') logRequest(args);
 if (args.includes('--version')) {
   process.stdout.write('codex-cli 0.0.0-test\\n');
   process.exit(0);
@@ -648,22 +759,26 @@ if (args[0] === 'exec') {
   const resumed = args[1] === 'resume';
   const sendExec = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
   sendExec({ type: 'thread.started', thread_id: 'thread_exec_steer_fixture' });
-  if (args.includes('--ephemeral')) {
-    const prompt = args[args.length - 1] || '';
-    const text = prompt.includes('external PDF table of contents')
-      ? '{"items":[{"title":"Fixture introduction","level":0,"pageNumber":1}]}'
-      : 'Translated quickly.';
-    setTimeout(() => sendExec({ type: 'item.completed', item: { id: 'exec_utility_answer', type: 'agent_message', text } }), 25);
-    setTimeout(() => sendExec({ type: 'turn.completed' }), 45);
-  } else if (resumed) {
-    setTimeout(() => sendExec({ type: 'item.completed', item: { id: 'exec_answer_2', type: 'agent_message', text: 'Guided exec result.' } }), 25);
-    setTimeout(() => sendExec({ type: 'turn.completed' }), 45);
-  } else {
-    setTimeout(() => sendExec({ type: 'item.completed', item: { id: 'exec_answer_1', type: 'agent_message', text: 'First exec segment.' } }), 30);
-    setTimeout(() => sendExec({ type: 'item.started', item: { id: 'exec_command_1', type: 'command_execution' } }), 6000);
-    setTimeout(() => sendExec({ type: 'item.completed', item: { id: 'exec_command_1', type: 'command_execution' } }), 6200);
-  }
-  process.stdin.resume();
+  let prompt = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => { prompt += chunk; });
+  process.stdin.on('end', () => {
+    logRequest(args.at(-1) === '-' ? [...args.slice(0, -1), prompt] : args);
+    if (args.includes('--ephemeral')) {
+      const text = prompt.includes('"pageSamples"')
+        ? '{"items":[{"title":"Fixture introduction","level":0,"pageNumber":1}]}'
+        : 'Translated quickly.';
+      setTimeout(() => sendExec({ type: 'item.completed', item: { id: 'exec_utility_answer', type: 'agent_message', text } }), 25);
+      setTimeout(() => sendExec({ type: 'turn.completed' }), 45);
+    } else if (resumed) {
+      setTimeout(() => sendExec({ type: 'item.completed', item: { id: 'exec_answer_2', type: 'agent_message', text: 'Guided exec result.' } }), 25);
+      setTimeout(() => sendExec({ type: 'turn.completed' }), 45);
+    } else {
+      setTimeout(() => sendExec({ type: 'item.completed', item: { id: 'exec_answer_1', type: 'agent_message', text: 'First exec segment.' } }), 30);
+      setTimeout(() => sendExec({ type: 'item.started', item: { id: 'exec_command_1', type: 'command_execution' } }), 6000);
+      setTimeout(() => sendExec({ type: 'item.completed', item: { id: 'exec_command_1', type: 'command_execution' } }), 6200);
+    }
+  });
   return;
 }
 if (!args.includes('app-server')) {
@@ -699,8 +814,57 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   }
 });
 process.on('exit', () => { for (const timer of timers) clearTimeout(timer); });
-`, 'utf8');
+`;
+  if (process.platform === 'win32') {
+    await writeFile(join(binDirectory, 'codex-fake.cjs'), script, 'utf8');
+    await writeFile(join(binDirectory, 'codex.cmd'), '@echo off\r\nnode "%~dp0codex-fake.cjs" %*\r\n', 'utf8');
+    await writeFile(join(binDirectory, 'codex.ps1'), '# This fixture resolves through the sibling codex.cmd launcher.\r\n', 'utf8');
+    return;
+  }
+  await writeFile(executable, script, 'utf8');
   await chmod(executable, 0o755);
+}
+
+async function openSettingsWindow(app: ElectronApplication, opener: Page): Promise<Page> {
+  const settingsWindowPromise = app.waitForEvent('window');
+  await opener.getByTitle('Settings').click();
+  const settingsPage = await settingsWindowPromise;
+  await expect(settingsPage.locator('.reader-settings--window')).toBeVisible();
+  await expect(opener.locator('.reader-settings')).toHaveCount(0);
+  return settingsPage;
+}
+
+async function startRemoteMediaFixture(): Promise<{ pageUrl: string; close(): Promise<void> }> {
+  const image = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64'
+  );
+  let baseUrl = '';
+  const server = createServer((request, response) => {
+    if (request.url === '/photo.png') {
+      response.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': image.length });
+      response.end(image);
+      return;
+    }
+    const html = `<html><head><meta property="og:image" content="${baseUrl}/photo.png"></head><body>Profile</body></html>`;
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    response.end(html);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  server.unref();
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('Could not start the remote media fixture.');
+  }
+  baseUrl = `http://127.0.0.1:${address.port}`;
+  return {
+    pageUrl: `${baseUrl}/profile`,
+    close: async () => {
+      server.close();
+      await once(server, 'close');
+    }
+  };
 }
 
 async function createFakeCodexModelCache(codexHome: string): Promise<void> {

@@ -4,7 +4,7 @@ Last updated: 2026-05-16
 
 ## Product Thesis
 
-Sidelight should evolve from a PDF reader with a right dock into a spatial
+Tessel should evolve from a PDF reader with a right dock into a spatial
 learning workspace. The PDF remains the spine: a continuous vertical book that
 sets context, page anchors, and reading flow. Around that spine, users can place
 durable blocks: conversations, notes, screenshots, comparisons, extracted
