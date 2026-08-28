@@ -135,6 +135,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release-artifacts
+          pattern: tessel-*-${{ needs.prepare.outputs.tag }}
 
       - name: Create or update release
         shell: bash
