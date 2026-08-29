@@ -7,12 +7,13 @@ import {
   useRef,
   useState
 } from 'react';
-import { ArrowLeftRight, CircleDashed, ImagePlus, Maximize2, PenLine, PenTool, Trash2, Undo2, X } from 'lucide-react';
+import { ArrowLeftRight, ChevronUp, CircleDashed, ImagePlus, Maximize2, PenLine, PenTool, SlidersHorizontal, Trash2, Undo2, X } from 'lucide-react';
 import type { WorkspaceBlock } from '../../../shared/domain';
 import { createId } from '../../../shared/ids';
 import type { LanDrawingPoint, LanDrawingStroke } from '../../../shared/lanWhiteboard';
 import {
   drawingSelectionBounds,
+  drawingStrokeNearPoint,
   drawingStrokePath,
   strokeIntersectsPolygon,
   transformDrawingSelection,
@@ -51,6 +52,7 @@ export interface WorkspaceDrawingLabels {
   deleteSelection: string;
   drawingColor: string;
   drawingSize: string;
+  hideDrawingToolbar: string;
   lassoTool: string;
   penOnlyMode: string;
   sendSelectionToAi: string;
@@ -60,6 +62,7 @@ export interface WorkspaceDrawingLabels {
   moveCanvasToRight: string;
   canvasSideOccupied: string;
   penTool: string;
+  showDrawingToolbar: string;
   undoStroke: string;
 }
 
@@ -71,7 +74,6 @@ interface WorkspaceDrawingBlockProps {
   showPlacementControl?: boolean;
   text: WorkspaceDrawingLabels;
   width: number;
-  onDelete(): void;
   onMoveSide(): void;
   onShareSelection(strokes: DrawingStroke[]): void;
   onSave(block: WorkspaceBlock): void;
@@ -87,7 +89,6 @@ export function WorkspaceDrawingBlock({
   showPlacementControl = true,
   text,
   width,
-  onDelete,
   onMoveSide,
   onShareSelection,
   onSave
@@ -101,6 +102,8 @@ export function WorkspaceDrawingBlock({
   const [color, setColor] = useState(drawingColors[0]);
   const [size, setSize] = useState(4);
   const [penOnly, setPenOnly] = useState(payload.penOnly);
+  const [toolbarExpanded, setToolbarExpanded] = useState(false);
+  const [temporaryEraser, setTemporaryEraser] = useState(false);
   const activePointsRef = useRef<DrawingPoint[]>([]);
   const activePointerRef = useRef<number>();
   const activeSimulatePressureRef = useRef(true);
@@ -108,6 +111,14 @@ export function WorkspaceDrawingBlock({
   const svgRef = useRef<SVGSVGElement>(null);
   const strokesRef = useRef(strokes);
   const selectionGestureRef = useRef<SelectionGesture>();
+  const stylusHoldRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  const temporaryEraserPointerRef = useRef<number>();
+  const eraserChangedRef = useRef(false);
   const previousBlockIdRef = useRef(block.id);
 
   useEffect(() => {
@@ -124,6 +135,12 @@ export function WorkspaceDrawingBlock({
   useEffect(() => {
     strokesRef.current = strokes;
   }, [strokes]);
+
+  useEffect(() => () => {
+    if (stylusHoldRef.current) {
+      clearTimeout(stylusHoldRef.current.timer);
+    }
+  }, []);
 
   const selectionBounds = useMemo(
     () => drawingSelectionBounds(strokes, selectedStrokeIds),
@@ -171,6 +188,48 @@ export function WorkspaceDrawingBlock({
     return [x, y, normalizedPressure];
   };
 
+  const cancelStylusHold = (pointerId?: number): void => {
+    const hold = stylusHoldRef.current;
+    if (!hold || (pointerId !== undefined && hold.pointerId !== pointerId)) {
+      return;
+    }
+    clearTimeout(hold.timer);
+    stylusHoldRef.current = undefined;
+  };
+
+  const eraseAt = (point: DrawingPoint): void => {
+    const next = strokesRef.current.filter((stroke) => !drawingStrokeNearPoint(stroke, point, Math.max(8, size * 1.8)));
+    if (next.length === strokesRef.current.length) {
+      return;
+    }
+    eraserChangedRef.current = true;
+    strokesRef.current = next;
+    setStrokes(next);
+  };
+
+  const armStylusEraser = (event: ReactPointerEvent<SVGSVGElement>, point: DrawingPoint): void => {
+    if (event.pointerType !== 'pen' || tool !== 'pen') {
+      return;
+    }
+    const pointerId = event.pointerId;
+    const startClientX = event.clientX;
+    const startClientY = event.clientY;
+    const timer = setTimeout(() => {
+      if (activePointerRef.current !== pointerId || tool !== 'pen') {
+        return;
+      }
+      stylusHoldRef.current = undefined;
+      activePointsRef.current = [];
+      setActivePoints([]);
+      eraserChangedRef.current = false;
+      temporaryEraserPointerRef.current = pointerId;
+      setTemporaryEraser(true);
+      eraseAt(point);
+      navigator.vibrate?.(12);
+    }, 480);
+    stylusHoldRef.current = { pointerId, startClientX, startClientY, timer };
+  };
+
   const beginStroke = (event: ReactPointerEvent<SVGSVGElement>): void => {
     if (event.button !== 0) {
       return;
@@ -199,6 +258,7 @@ export function WorkspaceDrawingBlock({
       activePointsRef.current = [point];
       setActivePoints([point]);
       setSelectedStrokeIds(new Set());
+      armStylusEraser(event, point);
     } else {
       setLassoPoints([[point[0], point[1]]]);
     }
@@ -253,6 +313,17 @@ export function WorkspaceDrawingBlock({
     const coalesced = event.nativeEvent.getCoalescedEvents?.();
     const samples = coalesced?.length ? coalesced : [event.nativeEvent];
     const points = samples.map((sample) => eventPoint(sample.clientX, sample.clientY, sample.pressure));
+    const hold = stylusHoldRef.current;
+    if (hold?.pointerId === event.pointerId
+      && Math.hypot(event.clientX - hold.startClientX, event.clientY - hold.startClientY) > 8) {
+      cancelStylusHold(event.pointerId);
+    }
+    if (temporaryEraserPointerRef.current === event.pointerId) {
+      for (const point of points) {
+        eraseAt(point);
+      }
+      return;
+    }
     if (tool === 'pen') {
       const next = [...activePointsRef.current, ...points];
       activePointsRef.current = next;
@@ -281,7 +352,18 @@ export function WorkspaceDrawingBlock({
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    cancelStylusHold(event.pointerId);
     activePointerRef.current = undefined;
+
+    if (temporaryEraserPointerRef.current === event.pointerId) {
+      temporaryEraserPointerRef.current = undefined;
+      setTemporaryEraser(false);
+      if (eraserChangedRef.current) {
+        saveStrokes(strokesRef.current);
+      }
+      eraserChangedRef.current = false;
+      return;
+    }
 
     if (tool === 'pen') {
       const points = activePointsRef.current;
@@ -358,59 +440,68 @@ export function WorkspaceDrawingBlock({
 
   return (
     <div className="workspace-drawing" style={{ width, height }}>
-      <div className="workspace-drawing__toolbar" onPointerDown={(event) => event.stopPropagation()}>
-        <button type="button" className={tool === 'pen' ? 'is-active' : ''} title={text.penTool} aria-label={text.penTool} onClick={() => setTool('pen')}>
-          <PenLine size={15} />
+      <div className={`workspace-drawing__toolbar${toolbarExpanded ? ' is-expanded' : ' is-collapsed'}`} onPointerDown={(event) => event.stopPropagation()}>
+        <button
+          type="button"
+          className="workspace-drawing__toolbar-toggle"
+          title={toolbarExpanded ? text.hideDrawingToolbar : text.showDrawingToolbar}
+          aria-label={toolbarExpanded ? text.hideDrawingToolbar : text.showDrawingToolbar}
+          aria-expanded={toolbarExpanded}
+          onClick={() => setToolbarExpanded((value) => !value)}
+        >
+          {toolbarExpanded ? <ChevronUp size={15} /> : <SlidersHorizontal size={15} />}
         </button>
-        <button type="button" className={tool === 'lasso' ? 'is-active' : ''} title={text.lassoTool} aria-label={text.lassoTool} onClick={() => setTool('lasso')}>
-          <CircleDashed size={15} />
-        </button>
-        <button type="button" className={penOnly ? 'is-active' : ''} title={text.penOnlyMode} aria-label={text.penOnlyMode} aria-pressed={penOnly} onClick={() => savePenOnly(!penOnly)}>
-          <PenTool size={15} />
-        </button>
-        <span className="workspace-drawing__divider" />
-        {drawingColors.map((preset) => (
-          <button
-            type="button"
-            key={preset}
-            className={`workspace-drawing__color${color === preset ? ' is-active' : ''}`}
-            style={{ '--drawing-color': preset } as CSSProperties}
-            title={text.drawingColor}
-            aria-label={`${text.drawingColor} ${preset}`}
-            onClick={() => setColor(preset)}
-          />
-        ))}
-        <label className="workspace-drawing__custom-color" title={text.drawingColor}>
-          <input type="color" value={color} aria-label={text.drawingColor} onChange={(event) => setColor(event.target.value)} />
-        </label>
-        <label className="workspace-drawing__size" title={text.drawingSize}>
-          <span style={{ width: size, height: size }} />
-          <input type="range" min="1" max="28" step="1" value={size} aria-label={text.drawingSize} onChange={(event) => setSize(Number(event.target.value))} />
-        </label>
-        <span className="workspace-drawing__spacer" />
-        {showPlacementControl && (
-          <button
-            type="button"
-            title={canMoveSide ? (payload.side === 'left' ? text.moveCanvasToRight : text.moveCanvasToLeft) : text.canvasSideOccupied}
-            aria-label={payload.side === 'left' ? text.moveCanvasToRight : text.moveCanvasToLeft}
-            disabled={!canMoveSide}
-            onClick={onMoveSide}
-          >
-            <ArrowLeftRight size={15} />
+        <div className="workspace-drawing__toolbar-controls">
+          <button type="button" className={tool === 'pen' ? 'is-active' : ''} title={text.penTool} aria-label={text.penTool} onClick={() => setTool('pen')}>
+            <PenLine size={15} />
           </button>
-        )}
-        <button type="button" title={text.undoStroke} aria-label={text.undoStroke} disabled={strokes.length === 0} onClick={() => saveStrokes(strokes.slice(0, -1))}>
-          <Undo2 size={15} />
-        </button>
-        <button type="button" title={text.deleteSelection} aria-label={text.deleteSelection} disabled={selectedStrokeIds.size === 0} onClick={removeSelection}>
-          <Trash2 size={15} />
-        </button>
-        <button type="button" title={text.clearCanvas} aria-label={text.clearCanvas} disabled={strokes.length === 0} onClick={() => saveStrokes([])}>
-          <X size={15} />
-        </button>
-        <button type="button" className="is-danger" title={text.delete} aria-label={text.delete} onClick={onDelete}>
-          <Trash2 size={15} />
-        </button>
+          <button type="button" className={tool === 'lasso' ? 'is-active' : ''} title={text.lassoTool} aria-label={text.lassoTool} onClick={() => setTool('lasso')}>
+            <CircleDashed size={15} />
+          </button>
+          <button type="button" className={penOnly ? 'is-active' : ''} title={text.penOnlyMode} aria-label={text.penOnlyMode} aria-pressed={penOnly} onClick={() => savePenOnly(!penOnly)}>
+            <PenTool size={15} />
+          </button>
+          <span className="workspace-drawing__divider" />
+          {drawingColors.map((preset) => (
+            <button
+              type="button"
+              key={preset}
+              className={`workspace-drawing__color${color === preset ? ' is-active' : ''}`}
+              style={{ '--drawing-color': preset } as CSSProperties}
+              title={text.drawingColor}
+              aria-label={`${text.drawingColor} ${preset}`}
+              onClick={() => setColor(preset)}
+            />
+          ))}
+          <label className="workspace-drawing__custom-color" title={text.drawingColor}>
+            <input type="color" value={color} aria-label={text.drawingColor} onChange={(event) => setColor(event.target.value)} />
+          </label>
+          <label className="workspace-drawing__size" title={text.drawingSize}>
+            <span style={{ width: size, height: size }} />
+            <input type="range" min="1" max="28" step="1" value={size} aria-label={text.drawingSize} onChange={(event) => setSize(Number(event.target.value))} />
+          </label>
+          <span className="workspace-drawing__spacer" />
+          {showPlacementControl && (
+            <button
+              type="button"
+              title={canMoveSide ? (payload.side === 'left' ? text.moveCanvasToRight : text.moveCanvasToLeft) : text.canvasSideOccupied}
+              aria-label={payload.side === 'left' ? text.moveCanvasToRight : text.moveCanvasToLeft}
+              disabled={!canMoveSide}
+              onClick={onMoveSide}
+            >
+              <ArrowLeftRight size={15} />
+            </button>
+          )}
+          <button type="button" title={text.undoStroke} aria-label={text.undoStroke} disabled={strokes.length === 0} onClick={() => saveStrokes(strokes.slice(0, -1))}>
+            <Undo2 size={15} />
+          </button>
+          <button type="button" title={text.deleteSelection} aria-label={text.deleteSelection} disabled={selectedStrokeIds.size === 0} onClick={removeSelection}>
+            <Trash2 size={15} />
+          </button>
+          <button type="button" title={text.clearCanvas} aria-label={text.clearCanvas} disabled={strokes.length === 0} onClick={() => saveStrokes([])}>
+            <X size={15} />
+          </button>
+        </div>
       </div>
       {selectionBounds && (
         <div
@@ -428,7 +519,7 @@ export function WorkspaceDrawingBlock({
       )}
       <svg
         ref={svgRef}
-        className={`workspace-drawing__surface is-${tool}${penOnly ? ' is-pen-only' : ''}`}
+        className={`workspace-drawing__surface is-${temporaryEraser ? 'eraser' : tool}${penOnly ? ' is-pen-only' : ''}`}
         viewBox={`0 0 ${payload.canvasWidth} ${payload.canvasHeight}`}
         preserveAspectRatio="none"
         onPointerDown={beginStroke}

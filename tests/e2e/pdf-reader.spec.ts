@@ -267,6 +267,11 @@ test.describe('PDF reader flow', () => {
     }
 
     const surface = board.locator('.workspace-drawing__surface');
+    const drawingToolbar = board.locator('.workspace-drawing__toolbar');
+    await expect(drawingToolbar).toHaveClass(/is-collapsed/);
+    await board.getByRole('button', { name: 'Show drawing tools' }).click();
+    await expect(drawingToolbar).toHaveClass(/is-expanded/);
+    await expect(drawingToolbar.getByRole('button', { name: /^Delete sheet/ })).toHaveCount(0);
     await expect.poll(async () => {
       const [box, viewport] = await Promise.all([
         surface.boundingBox(),
@@ -464,6 +469,60 @@ test.describe('PDF reader flow', () => {
       };
     }, { timeout: 8_000 }).toEqual({ count: 4, lightStart: true, expressiveRange: true });
 
+    // Holding a stationary stylus switches the current gesture to a temporary
+    // eraser without committing the initial dot.
+    await surface.dispatchEvent('pointerdown', {
+      pointerId: 32,
+      pointerType: 'pen',
+      button: 0,
+      buttons: 1,
+      clientX: drawingX - 64,
+      clientY: drawingY - 12,
+      pressure: 0.45
+    });
+    await page.waitForTimeout(540);
+    await expect(surface).toHaveClass(/is-eraser/);
+    await surface.dispatchEvent('pointerup', {
+      pointerId: 32,
+      pointerType: 'pen',
+      button: 0,
+      buttons: 0,
+      clientX: drawingX - 64,
+      clientY: drawingY - 12,
+      pressure: 0
+    });
+    await expect(surface.locator('path')).toHaveCount(1);
+
+    // Moving before the hold threshold keeps a normal pressure-aware stroke.
+    await surface.dispatchEvent('pointerdown', {
+      pointerId: 33,
+      pointerType: 'pen',
+      button: 0,
+      buttons: 1,
+      clientX: drawingX - 20,
+      clientY: drawingY - 100,
+      pressure: 0.2
+    });
+    await surface.dispatchEvent('pointermove', {
+      pointerId: 33,
+      pointerType: 'pen',
+      button: 0,
+      buttons: 1,
+      clientX: drawingX - 70,
+      clientY: drawingY - 75,
+      pressure: 0.7
+    });
+    await surface.dispatchEvent('pointerup', {
+      pointerId: 33,
+      pointerType: 'pen',
+      button: 0,
+      buttons: 0,
+      clientX: drawingX - 70,
+      clientY: drawingY - 75,
+      pressure: 0
+    });
+    await expect(surface.locator('path')).toHaveCount(2);
+
     const pdfViewport = page.locator('.pdf-viewport');
     const scrollBeforeModifierPan = await pdfViewport.evaluate((node) => ({
       left: node.scrollLeft,
@@ -492,6 +551,10 @@ test.describe('PDF reader flow', () => {
     await expect(page.locator('.workspace-block-card--notebook')).toHaveCount(1);
     await expect(page.locator('.workspace-notebook__sheet')).toHaveCount(2);
     await expect.poll(() => page.locator('.workspace-notebook__pages').evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
+    const secondSheetDelete = page.getByRole('button', { name: 'Delete sheet 2' });
+    await expect(secondSheetDelete).toBeVisible();
+    await secondSheetDelete.click();
+    await expect(page.locator('.workspace-notebook__sheet')).toHaveCount(1);
 
     await page.reload();
     await expect(page.locator('.workspace-block-card--drawing .workspace-drawing__surface path')).toHaveCount(2);
@@ -528,6 +591,15 @@ test.describe('PDF reader flow', () => {
 
     const tabletSurface = tablet.locator('.remote-canvas__paper');
     await expect(tabletSurface).toBeVisible();
+    await expect(tablet.locator('.remote-header__context')).toHaveCount(0);
+    const [tabletHeaderBox, tabletToolsBox] = await Promise.all([
+      tablet.locator('.remote-header').boundingBox(),
+      tablet.locator('.remote-tools').boundingBox()
+    ]);
+    expect(tabletHeaderBox).toBeTruthy();
+    expect(tabletToolsBox).toBeTruthy();
+    expect(tabletToolsBox!.y).toBeGreaterThanOrEqual(tabletHeaderBox!.y);
+    expect(tabletToolsBox!.y + tabletToolsBox!.height).toBeLessThanOrEqual(tabletHeaderBox!.y + tabletHeaderBox!.height + 1);
     await expect(page.locator('.workspace-block-card--drawing')).toBeVisible();
     const surfaceBox = await tabletSurface.boundingBox();
     expect(surfaceBox).toBeTruthy();
@@ -561,6 +633,30 @@ test.describe('PDF reader flow', () => {
     await tablet.mouse.up();
     await expect(tabletSurface.locator('path')).toHaveCount(1);
 
+    await tabletSurface.dispatchEvent('pointerdown', {
+      pointerId: 61,
+      pointerType: 'pen',
+      button: 0,
+      buttons: 1,
+      clientX: startX + 60,
+      clientY: startY + 32,
+      pressure: 0.5
+    });
+    await tablet.waitForTimeout(540);
+    await expect(tabletSurface).toHaveClass(/is-eraser/);
+    await tabletSurface.dispatchEvent('pointerup', {
+      pointerId: 61,
+      pointerType: 'pen',
+      button: 0,
+      buttons: 0,
+      clientX: startX + 60,
+      clientY: startY + 32,
+      pressure: 0
+    });
+    await expect(tabletSurface.locator('path')).toHaveCount(0);
+    await tablet.getByRole('button', { name: '撤销' }).click();
+    await expect(tabletSurface.locator('path')).toHaveCount(1);
+
     await tablet.getByRole('button', { name: '圈选' }).click();
     const lassoBox = await tabletSurface.boundingBox();
     expect(lassoBox).toBeTruthy();
@@ -585,6 +681,11 @@ test.describe('PDF reader flow', () => {
     await expect(tablet.locator('.remote-canvas__identity')).toContainText('纸张 2/2');
     await tablet.getByRole('button', { name: '显示纸张列表' }).click();
     await expect(tablet.locator('.remote-canvas-row')).toHaveCount(2);
+    await tablet.getByRole('button', { name: '缩小纸张列表' }).click();
+    await expect(tablet.locator('.remote-app')).toHaveClass(/is-sidebar-compact/);
+    await expect.poll(async () => (await tablet.locator('.remote-sidebar').boundingBox())?.width ?? 999).toBeLessThan(90);
+    await tablet.getByRole('button', { name: '展开纸张列表' }).click();
+    await expect(tablet.locator('.remote-app')).not.toHaveClass(/is-sidebar-compact/);
 
     const firstSheetRow = tablet.locator('.remote-canvas-row').filter({ hasText: '纸张 1' });
     await firstSheetRow.getByRole('button', { name: '删除纸张' }).click();
@@ -917,6 +1018,12 @@ test.describe('PDF reader flow', () => {
 
   test('steers an active Codex turn and persists the guidance in the same chat', async () => {
     await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
+    await expect.poll(async () => {
+      const requests = await readFakeCodexRequests(join(runDir, 'codex-requests.jsonl'));
+      const appServerIndex = requests.findIndex((request) => request.includes('app-server'));
+      const loginIndex = requests.findIndex((request) => request[0] === 'login' && request[1] === 'status');
+      return { appServerIndex, loginIndex };
+    }).toEqual({ appServerIndex: 0, loginIndex: 1 });
     const documentId = `pdf_${createHash('sha256').update(await readFile(pdfPath)).digest('hex')}`;
     const now = new Date().toISOString();
     await page.evaluate(async ({ documentId, now }) => {

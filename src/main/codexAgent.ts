@@ -25,6 +25,10 @@ interface PdfRuntime {
     pageEnd: number;
     pages: Array<{ pageNumber: number; text: string }>;
   }>;
+  readPageRanges?(ranges: Array<{ pageStart: number; pageEnd: number }>, maxCharsPerRange?: number): Promise<{
+    pageCount: number;
+    pages: Array<{ pageNumber: number; text: string }>;
+  }>;
 }
 
 interface ThreadContext {
@@ -317,11 +321,18 @@ export class CodexAgent {
   }
 
   warmup(): void {
-    void this.initialTransport();
     void this.listModels();
-    if (codexTransportOverride() !== 'exec') {
-      void this.initialize().catch(() => undefined);
+    if (codexTransportOverride() === 'exec') {
+      void this.initialTransport();
+      return;
     }
+    // Prioritize the reusable app-server process. Starting a separate
+    // `codex login status` process at the same time caused noticeable cold
+    // start contention on Windows; utility-task transport detection can warm
+    // immediately after the interactive server is ready.
+    void this.initialize()
+      .then(() => this.initialTransport())
+      .catch(() => undefined);
   }
 
   resetConfiguration(): void {
@@ -451,13 +462,15 @@ export class CodexAgent {
       this.resolvePdf(input.documentId)
     ]);
     const documentWorkspace = await this.documentWorkspace(runtime.document);
-    const [threadId, workspaceImages] = await Promise.all([
+    const reusingThread = Boolean(input.codexThreadId && this.threadContexts.has(input.codexThreadId));
+    onEvent({ activity: activity(`session:${input.streamId}`, 'reading', 'Preparing PDF context', 'started') });
+    const [threadId, workspaceImages, turnInput] = await Promise.all([
       this.resolveThread(input, documentWorkspace, onEvent),
-      this.workspaceImageVersions(documentWorkspace)
+      this.workspaceImageVersions(documentWorkspace),
+      this.prepareTurnInput(input, runtime, onEvent, !reusingThread)
     ]);
     this.threadContexts.set(threadId, { input, onEvent });
     onEvent({ agentThreadId: threadId, usedProvider: 'Codex' });
-    onEvent({ activity: activity(`session:${threadId}`, 'reading', 'Preparing PDF context', 'started') });
 
     await new Promise<void>((resolve, reject) => {
       const active: ActiveTurn = {
@@ -474,7 +487,7 @@ export class CodexAgent {
         onEvent({ activity: guidanceActivity(pending, 'started') });
       }
       this.activeTurns.set(input.streamId, active);
-      void this.startTurn(input, runtime, active)
+      void this.startTurn(input, turnInput, active)
         .catch((error: unknown) => {
           this.activeTurns.delete(input.streamId);
           reject(error instanceof Error ? error : new Error(String(error)));
@@ -552,7 +565,7 @@ export class CodexAgent {
     return started.thread.id;
   }
 
-  private async turnInput(input: CodexStreamRequest, runtime: PdfRuntime): Promise<Array<Record<string, unknown>>> {
+  private async turnInput(input: CodexStreamRequest, runtime: PdfRuntime, includeBootstrapContext = true): Promise<Array<Record<string, unknown>>> {
     const context = input.context;
     const documentHash = runtime.document.fingerprint?.hash ?? runtime.document.sha256;
     const isChatTask = !input.task || input.task === 'chat';
@@ -577,10 +590,10 @@ export class CodexAgent {
         : undefined,
       currentPage: context.currentPage,
       responseLanguage: input.preferredLanguage,
-      embeddedOutline: context.outline?.slice(0, 160),
+      embeddedOutline: includeBootstrapContext ? context.outline?.slice(0, 32) : undefined,
       providedPageText: context.pdfText?.slice(0, 40_000),
       pageSamples,
-      conversationContext: isChatTask
+      conversationContext: isChatTask && includeBootstrapContext
         ? context.conversations?.slice(-4).map((conversation) => ({
             title: conversation.title.slice(0, 240),
             brief: conversation.brief?.slice(0, 700),
@@ -591,7 +604,7 @@ export class CodexAgent {
     };
     // A resumed Codex thread already contains its transcript. Synced app
     // history is only needed when creating or reconstructing a local thread.
-    const history = isChatTask && !input.codexThreadId ? input.history?.slice(-8).map((message) => ({
+    const history = isChatTask && includeBootstrapContext ? input.history?.slice(-8).map((message) => ({
       role: message.role,
       content: message.content.slice(0, 2000),
       attachments: message.attachments?.map((attachment) => attachment.name)
@@ -616,10 +629,11 @@ export class CodexAgent {
   private async prepareTurnInput(
     input: CodexStreamRequest,
     runtime: PdfRuntime,
-    onEvent: (event: Omit<AiStreamEvent, 'streamId'>) => void
+    onEvent: (event: Omit<AiStreamEvent, 'streamId'>) => void,
+    includeBootstrapContext = true
   ): Promise<Array<Record<string, unknown>>> {
     if (input.task !== 'outline') {
-      return this.turnInput(input, runtime);
+      return this.turnInput(input, runtime, includeBootstrapContext);
     }
 
     const pageCount = input.context.totalPages ?? runtime.document.pageCount ?? 1;
@@ -634,7 +648,7 @@ export class CodexAgent {
       )
     });
     try {
-      const prepared = await this.turnInput(input, runtime);
+      const prepared = await this.turnInput(input, runtime, includeBootstrapContext);
       onEvent({
         activity: activity(
           'outline:samples',
@@ -667,9 +681,11 @@ export class CodexAgent {
       pageStart,
       pageEnd: Math.min(pageCount, pageStart + 7)
     }));
-    const results = await Promise.all(ranges.map((range) =>
-      runtime.readPages(range.pageStart, range.pageEnd, 12_000)
-    ));
+    const results = runtime.readPageRanges
+      ? [await runtime.readPageRanges(ranges, 12_000)]
+      : await Promise.all(ranges.map((range) =>
+        runtime.readPages(range.pageStart, range.pageEnd, 12_000)
+      ));
     const pages = new Map<number, string>();
     for (const result of results) {
       for (const page of result.pages) {
@@ -698,8 +714,7 @@ export class CodexAgent {
     return { type: 'localImage', path: filePath };
   }
 
-  private async startTurn(input: CodexStreamRequest, runtime: PdfRuntime, active: ActiveTurn): Promise<void> {
-    const turnInput = await this.prepareTurnInput(input, runtime, active.onEvent);
+  private async startTurn(input: CodexStreamRequest, turnInput: Array<Record<string, unknown>>, active: ActiveTurn): Promise<void> {
     const result = await this.request('turn/start', {
       threadId: active.threadId,
       input: turnInput,
@@ -715,7 +730,7 @@ export class CodexAgent {
       throw new Error('Codex app-server did not return a turn id.');
     }
     active.turnId = turn.turn.id;
-    active.onEvent({ activity: activity(`session:${active.threadId}`, 'reading', 'Preparing PDF context', 'completed') });
+    active.onEvent({ activity: activity(`session:${input.streamId}`, 'reading', 'Preparing PDF context', 'completed') });
     const pendingGuidance = active.pendingGuidance.splice(0);
     for (const pending of pendingGuidance) {
       await this.deliverAppServerSteer(active, pending);

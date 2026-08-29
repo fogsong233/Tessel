@@ -26,7 +26,7 @@ import {
   pdfRangeChunkSize
 } from '../shared/domain';
 import { AiService } from './aiService';
-import { extractPdfPageTextRange, readPdfOutline } from './pdfTools';
+import { extractPdfPageTextRange, extractPdfPageTextRanges, readPdfOutline } from './pdfTools';
 import { JsonWorkspaceStore } from './store';
 import { CodexAgent } from './codexAgent';
 import { AppUpdateService } from './appUpdater';
@@ -630,7 +630,8 @@ if (hasSingleInstanceLock) {
         return {
           document,
           readOutline: (maxItems) => readPdfOutline(document.filePath, maxItems),
-          readPages: (pageStart, pageEnd, maxChars) => extractPdfPageTextRange(document.filePath, pageStart, pageEnd, 8, maxChars)
+          readPages: (pageStart, pageEnd, maxChars) => extractPdfPageTextRange(document.filePath, pageStart, pageEnd, 8, maxChars),
+          readPageRanges: (ranges, maxCharsPerRange) => extractPdfPageTextRanges(document.filePath, ranges, 8, maxCharsPerRange)
         };
       },
       join(app.getPath('userData'), 'codex-inputs'),

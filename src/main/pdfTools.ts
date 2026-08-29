@@ -20,6 +20,11 @@ export interface PdfPageTextResult {
   pages: PdfPageText[];
 }
 
+export interface PdfPageTextRangesResult {
+  pageCount: number;
+  pages: PdfPageText[];
+}
+
 export async function extractPdfPageTextRange(
   filePath: string,
   requestedStart: number,
@@ -48,6 +53,49 @@ export async function extractPdfPageTextRange(
       pageStart,
       pageEnd,
       pages
+    };
+  } finally {
+    await pdfDocument.destroy();
+  }
+}
+
+/**
+ * Extract several non-contiguous ranges while keeping a single pdf.js document
+ * alive. Outline generation used to read and parse the entire PDF once per
+ * sample range, which made large local files needlessly expensive to prepare.
+ */
+export async function extractPdfPageTextRanges(
+  filePath: string,
+  requestedRanges: Array<{ pageStart: number; pageEnd: number }>,
+  maxPagesPerRange = 8,
+  maxCharsPerRange = 12000
+): Promise<PdfPageTextRangesResult> {
+  const pdfDocument = await loadPdf(filePath);
+  try {
+    const pages = new Map<number, string>();
+    for (const range of requestedRanges) {
+      const pageStart = clampPage(range.pageStart, pdfDocument.numPages);
+      const pageEnd = Math.min(
+        clampPage(Math.max(range.pageStart, range.pageEnd), pdfDocument.numPages),
+        pageStart + maxPagesPerRange - 1
+      );
+      let remainingChars = maxCharsPerRange;
+      for (let pageNumber = pageStart; pageNumber <= pageEnd && remainingChars > 0; pageNumber += 1) {
+        if (pages.has(pageNumber)) {
+          continue;
+        }
+        const page = await pdfDocument.getPage(pageNumber);
+        const textContent = await page.getTextContent();
+        const text = normalizeTextItems(textContent.items).slice(0, remainingChars);
+        remainingChars -= text.length;
+        pages.set(pageNumber, text);
+      }
+    }
+    return {
+      pageCount: pdfDocument.numPages,
+      pages: [...pages.entries()]
+        .sort(([left], [right]) => left - right)
+        .map(([pageNumber, text]) => ({ pageNumber, text }))
     };
   } finally {
     await pdfDocument.destroy();

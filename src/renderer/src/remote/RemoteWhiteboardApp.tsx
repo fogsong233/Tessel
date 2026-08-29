@@ -25,6 +25,7 @@ export function RemoteWhiteboardApp(): ReactElement {
   const { clientCount, latency, lastAcknowledgement, send, snapshot, status, transientStrokes } = useLanWhiteboardSocket(token);
   const [selectedCanvasId, setSelectedCanvasId] = useState<string>();
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarCompact, setSidebarCompact] = useState(false);
   const [fullscreen, setFullscreen] = useState(Boolean(document.fullscreenElement));
   const [pendingDelete, setPendingDelete] = useState<WorkspaceBlock>();
 
@@ -97,7 +98,7 @@ export function RemoteWhiteboardApp(): ReactElement {
   }
 
   return (
-    <main className={`remote-app${sidebarOpen ? ' has-sidebar' : ''}`}>
+    <main className={`remote-app${sidebarOpen ? ' has-sidebar' : ''}${sidebarOpen && sidebarCompact ? ' is-sidebar-compact' : ''}`}>
       <header className="remote-header">
         <div className="remote-header__brand">
           <button
@@ -111,13 +112,6 @@ export function RemoteWhiteboardApp(): ReactElement {
           <span className="remote-header__logo"><PenLine /></span>
           <span><strong>Tessel</strong><small>局域网手写</small></span>
         </div>
-        <div className="remote-header__context">
-          <FileText />
-          <span>
-            <strong>{contextDocument?.title ?? '等待电脑打开 PDF'}</strong>
-            {snapshot?.context && <small>电脑当前页 · {snapshot.context.pageNumber}</small>}
-          </span>
-        </div>
         <div className="remote-header__actions">
           <span className={`remote-status is-${status}`}>
             {status === 'connected' ? <Wifi /> : <RefreshCw className="is-spinning" />}
@@ -130,15 +124,24 @@ export function RemoteWhiteboardApp(): ReactElement {
         </div>
       </header>
 
-      <aside className={`remote-sidebar${sidebarOpen ? ' is-open' : ''}`}>
+      <aside className={`remote-sidebar${sidebarOpen ? ' is-open' : ''}${sidebarCompact ? ' is-compact' : ''}`}>
         <div className="remote-sidebar__heading">
           <div><span>纸张</span><strong>{snapshot?.canvases.length ?? 0}</strong></div>
-          <button
-            type="button"
-            title="在电脑当前页新增一张纸"
-            onClick={() => createCanvas(notebookSide)}
-            disabled={!snapshot?.context}
-          ><Plus /></button>
+          <span className="remote-sidebar__heading-actions">
+            <button
+              type="button"
+              title="在电脑当前页新增一张纸"
+              aria-label="在电脑当前页新增一张纸"
+              onClick={() => createCanvas(notebookSide)}
+              disabled={!snapshot?.context}
+            ><Plus /></button>
+            <button
+              type="button"
+              title={sidebarCompact ? '展开纸张列表' : '缩小纸张列表'}
+              aria-label={sidebarCompact ? '展开纸张列表' : '缩小纸张列表'}
+              onClick={() => setSidebarCompact((value) => !value)}
+            >{sidebarCompact ? <PanelLeftOpen /> : <PanelLeftClose />}</button>
+          </span>
         </div>
         <div className="remote-sidebar__list">
           {groupedCanvases.map((group) => (
@@ -148,7 +151,11 @@ export function RemoteWhiteboardApp(): ReactElement {
                 const payload = remoteDrawingPayload(block);
                 return (
                   <div className={`remote-canvas-row${block.id === selectedCanvasId ? ' is-active' : ''}`} key={block.id}>
-                    <button type="button" onClick={() => { setSelectedCanvasId(block.id); if (innerWidth < 760) setSidebarOpen(false); }}>
+                    <button
+                      type="button"
+                      aria-label={`PDF 第 ${block.pageNumber ?? '—'} 页 · 纸张 ${sheetNumber(snapshot?.canvases ?? [], block)}`}
+                      onClick={() => { setSelectedCanvasId(block.id); if (innerWidth < 760) setSidebarOpen(false); }}
+                    >
                       <span className="remote-canvas-row__preview">
                         <Radio />
                       </span>
@@ -190,7 +197,6 @@ export function RemoteWhiteboardApp(): ReactElement {
             block={selectedCanvas}
             connected={status === 'connected'}
             canMove
-            documentTitle={snapshot?.documents.find((document) => document.id === selectedCanvas.documentId)?.title ?? 'PDF'}
             sheetNumber={sheetNumber(snapshot?.canvases ?? [], selectedCanvas)}
             totalSheets={(snapshot?.canvases ?? []).filter((block) => block.documentId === selectedCanvas.documentId && block.pageNumber === selectedCanvas.pageNumber).length}
             remoteStrokes={Object.values(transientStrokes[selectedCanvas.id] ?? {})}

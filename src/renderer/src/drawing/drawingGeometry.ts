@@ -1,5 +1,5 @@
 import { getStroke } from 'perfect-freehand';
-import type { LanDrawingStroke } from '../../../shared/lanWhiteboard';
+import type { LanDrawingPoint, LanDrawingStroke } from '../../../shared/lanWhiteboard';
 
 export interface DrawingBounds {
   x: number;
@@ -48,6 +48,27 @@ export function strokeIntersectsPolygon(stroke: LanDrawingStroke, polygon: Array
   }
   const center = stroke.points.reduce<[number, number]>((sum, [x, y]) => [sum[0] + x, sum[1] + y], [0, 0]);
   return pointInPolygon([center[0] / stroke.points.length, center[1] / stroke.points.length], polygon);
+}
+
+export function drawingStrokeNearPoint(stroke: LanDrawingStroke, point: LanDrawingPoint, radius: number): boolean {
+  const threshold = radius + stroke.size / 2;
+  const thresholdSquared = threshold * threshold;
+  for (let index = 0; index < stroke.points.length; index += 1) {
+    const start = stroke.points[index];
+    const end = stroke.points[index + 1] ?? start;
+    const segmentX = end[0] - start[0];
+    const segmentY = end[1] - start[1];
+    const lengthSquared = segmentX * segmentX + segmentY * segmentY;
+    const projection = lengthSquared > 0
+      ? Math.max(0, Math.min(1, ((point[0] - start[0]) * segmentX + (point[1] - start[1]) * segmentY) / lengthSquared))
+      : 0;
+    const deltaX = point[0] - (start[0] + segmentX * projection);
+    const deltaY = point[1] - (start[1] + segmentY * projection);
+    if (deltaX * deltaX + deltaY * deltaY <= thresholdSquared) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function drawingSelectionBounds(strokes: LanDrawingStroke[], selectedIds: ReadonlySet<string>): DrawingBounds | undefined {

@@ -25,6 +25,8 @@ button { -webkit-tap-highlight-color: transparent; }
 .remote-app {
   --header-height: 64px;
   --sidebar-width: 276px;
+  --sidebar-compact-width: 76px;
+  --remote-control-radius: 14px;
   display: grid;
   grid-template: var(--header-height) minmax(0, 1fr) / 0 minmax(0, 1fr);
   width: 100%;
@@ -36,12 +38,13 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 .remote-app.has-sidebar { grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
+.remote-app.is-sidebar-compact { grid-template-columns: var(--sidebar-compact-width) minmax(0, 1fr); }
 
 .remote-header {
   z-index: 30;
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: minmax(205px, 1fr) minmax(0, 1.35fr) minmax(205px, 1fr);
+  grid-template-columns: minmax(170px, 1fr) minmax(170px, 1fr);
   align-items: center;
   gap: 14px;
   min-width: 0;
@@ -85,7 +88,8 @@ button { -webkit-tap-highlight-color: transparent; }
   place-items: center;
   color: #d5d8cc;
   border: 0;
-  border-radius: 11px;
+  border-radius: var(--remote-control-radius);
+  corner-shape: squircle;
   background: transparent;
 }
 
@@ -132,10 +136,11 @@ button { -webkit-tap-highlight-color: transparent; }
   border-right: 1px solid #d6d9d0;
   background: #f5e9a9;
   transform: translateX(-100%);
-  transition: transform 180ms ease;
+  transition: width 180ms ease, transform 180ms ease;
 }
 
 .remote-sidebar.is-open { transform: translateX(0); }
+.remote-sidebar.is-compact { width: var(--sidebar-compact-width); }
 
 .remote-sidebar__heading {
   display: flex;
@@ -145,8 +150,9 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 .remote-sidebar__heading > div { display: flex; align-items: baseline; gap: 7px; }
-.remote-sidebar__heading span { font-size: 13px; font-weight: 700; }
+.remote-sidebar__heading > div > span { font-size: 13px; font-weight: 700; }
 .remote-sidebar__heading strong { color: #888d80; font-size: 11px; }
+.remote-sidebar__heading-actions { display: flex; gap: 5px; }
 .remote-sidebar__heading button {
   display: grid;
   width: 31px;
@@ -155,11 +161,20 @@ button { -webkit-tap-highlight-color: transparent; }
   place-items: center;
   color: #44483d;
   border: 1px solid #daddd3;
-  border-radius: 9px;
+  border-radius: 11px;
+  corner-shape: squircle;
   background: #fff;
 }
 .remote-sidebar__heading button svg { width: 15px; }
 .remote-sidebar__heading button:disabled { opacity: 0.38; }
+
+.remote-sidebar.is-compact .remote-sidebar__heading {
+  padding: 12px 10px 10px;
+  justify-content: center;
+}
+.remote-sidebar.is-compact .remote-sidebar__heading > div { display: none; }
+.remote-sidebar.is-compact .remote-sidebar__heading-actions { flex-direction: column; }
+.remote-sidebar.is-compact .remote-sidebar__heading button { width: 36px; height: 36px; }
 
 .remote-sidebar__list {
   min-height: 0;
@@ -231,7 +246,8 @@ button { -webkit-tap-highlight-color: transparent; }
   place-items: center;
   color: #a94c47;
   border: 0;
-  border-radius: 8px;
+  border-radius: 10px;
+  corner-shape: squircle;
   background: rgba(255, 255, 255, 0.82);
   transform: translateY(-50%);
 }
@@ -254,7 +270,8 @@ button { -webkit-tap-highlight-color: transparent; }
   min-height: 36px;
   color: #303329;
   border: 1px solid #d5d9cc;
-  border-radius: 10px;
+  border-radius: var(--remote-control-radius);
+  corner-shape: squircle;
   background: #fff;
   font-size: 10px;
   font-weight: 650;
@@ -265,6 +282,26 @@ button { -webkit-tap-highlight-color: transparent; }
 .remote-workspace__empty button:disabled { opacity: 0.42; }
 .remote-sidebar__create svg,
 .remote-workspace__empty button svg { width: 13px; }
+
+.remote-sidebar.is-compact .remote-sidebar__list { padding: 2px 9px 12px; }
+.remote-sidebar.is-compact .remote-canvas-group + .remote-canvas-group { margin-top: 10px; }
+.remote-sidebar.is-compact .remote-canvas-group > header,
+.remote-sidebar.is-compact .remote-canvas-row > button:first-child > span:nth-child(2),
+.remote-sidebar.is-compact .remote-canvas-row > button:first-child > svg,
+.remote-sidebar.is-compact .remote-canvas-row__delete,
+.remote-sidebar.is-compact .remote-sidebar__empty,
+.remote-sidebar.is-compact .remote-sidebar__create small { display: none; }
+.remote-sidebar.is-compact .remote-canvas-row > button:first-child {
+  display: grid;
+  grid-template-columns: 1fr;
+  min-height: 54px;
+  padding: 7px;
+  place-items: center;
+}
+.remote-sidebar.is-compact .remote-canvas-row__preview { width: 36px; height: 44px; }
+.remote-sidebar.is-compact .remote-sidebar__create { padding: 10px 9px max(10px, env(safe-area-inset-bottom)); }
+.remote-sidebar.is-compact .remote-sidebar__create button { min-width: 0; min-height: 40px; padding: 0; font-size: 0; }
+.remote-sidebar.is-compact .remote-sidebar__create button svg { width: 16px; }
 
 .remote-sidebar__empty,
 .remote-workspace__empty,
@@ -288,22 +325,23 @@ button { -webkit-tap-highlight-color: transparent; }
 .remote-canvas { position: absolute; inset: 0; min-width: 0; min-height: 0; }
 
 .remote-tools {
-  position: absolute;
-  z-index: 12;
-  top: 14px;
+  position: fixed;
+  z-index: 40;
+  top: calc(env(safe-area-inset-top) + 7px);
   left: 50%;
   display: flex;
   align-items: center;
   gap: 3px;
-  max-width: calc(100% - 28px);
+  max-width: min(630px, calc(100vw - 430px));
   min-height: 49px;
   padding: 6px;
   overflow-x: auto;
   color: #36392f;
   border: 1px solid rgba(207, 211, 200, 0.95);
-  border-radius: 9px;
-  background: rgba(252, 252, 249, 0.97);
-  box-shadow: 0 5px 16px rgba(36, 39, 31, 0.1);
+  border-radius: 15px;
+  corner-shape: squircle;
+  background: rgba(252, 252, 249, 0.98);
+  box-shadow: 0 5px 18px rgba(8, 10, 7, 0.22);
   transform: translateX(-50%);
   backdrop-filter: blur(18px);
   scrollbar-width: none;
@@ -319,7 +357,8 @@ button { -webkit-tap-highlight-color: transparent; }
   justify-content: center;
   color: #62665b;
   border: 0;
-  border-radius: 10px;
+  border-radius: 12px;
+  corner-shape: squircle;
   background: transparent;
 }
 .remote-tool:hover { color: #22251e; background: #eceee7; }
@@ -340,7 +379,8 @@ button { -webkit-tap-highlight-color: transparent; }
   padding: 0;
   place-items: center;
   border: 0;
-  border-radius: 8px;
+  border-radius: 10px;
+  corner-shape: squircle;
   background: transparent;
 }
 .remote-color::after { width: 15px; height: 15px; content: ''; border-radius: 50%; background: var(--ink); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08); }
@@ -438,12 +478,13 @@ button { -webkit-tap-highlight-color: transparent; }
   gap: 2px;
   padding: 4px;
   border: 1px solid #d2d6cb;
-  border-radius: 7px;
+  border-radius: var(--remote-control-radius);
+  corner-shape: squircle;
   background: rgba(250, 251, 247, 0.94);
   box-shadow: 0 8px 24px rgba(35, 38, 30, 0.12);
   backdrop-filter: blur(14px);
 }
-.remote-zoom button { display: grid; min-width: 31px; height: 31px; padding: 0 7px; place-items: center; color: #555a4e; border: 0; border-radius: 8px; background: transparent; }
+.remote-zoom button { display: grid; min-width: 31px; height: 31px; padding: 0 7px; place-items: center; color: #555a4e; border: 0; border-radius: 11px; corner-shape: squircle; background: transparent; }
 .remote-zoom button:hover { background: #eceee7; }
 .remote-zoom button svg { width: 15px; }
 .remote-zoom .remote-zoom__value { min-width: 50px; color: #6e7366; font-size: 10px; font-variant-numeric: tabular-nums; }
@@ -470,13 +511,14 @@ button { -webkit-tap-highlight-color: transparent; }
   bottom: max(16px, env(safe-area-inset-bottom));
   display: flex;
   max-width: calc(100% - 270px);
-  min-height: 46px;
+  min-height: 42px;
   padding: 5px;
   align-items: center;
   gap: 3px;
   color: #4f5449;
   border: 1px solid #d2d6cb;
-  border-radius: 7px;
+  border-radius: var(--remote-control-radius);
+  corner-shape: squircle;
   background: rgba(250, 251, 247, 0.94);
   box-shadow: 0 8px 24px rgba(35, 38, 30, 0.12);
   backdrop-filter: blur(14px);
@@ -494,7 +536,8 @@ button { -webkit-tap-highlight-color: transparent; }
   gap: 5px;
   color: #5d6257;
   border: 0;
-  border-radius: 9px;
+  border-radius: 11px;
+  corner-shape: squircle;
   background: transparent;
   font-size: 9px;
 }
@@ -566,9 +609,9 @@ button { -webkit-tap-highlight-color: transparent; }
 @keyframes remote-shimmer { to { background-position: -120% 0; } }
 
 @media (max-width: 900px) {
-  .remote-tools { left: 12px; right: 12px; max-width: none; transform: none; }
+  .remote-tools { max-width: calc(100vw - 290px); }
   .remote-header { grid-template-columns: 1fr auto; }
-  .remote-header__context { display: none; }
+  .remote-header__brand > span:last-child { display: none; }
 }
 
 @media (max-width: 760px) {
@@ -576,11 +619,12 @@ button { -webkit-tap-highlight-color: transparent; }
   .remote-app.has-sidebar { grid-template-columns: minmax(0, 1fr); }
   .remote-header { grid-column: 1; }
   .remote-sidebar { position: fixed; top: var(--header-height); bottom: 0; left: 0; width: min(86vw, 320px); height: auto; box-shadow: 14px 0 45px rgba(25, 28, 22, 0.19); }
+  .remote-sidebar.is-compact { width: var(--sidebar-compact-width); }
   .remote-workspace { grid-column: 1; }
   .remote-sidebar-backdrop { position: fixed; z-index: 15; top: var(--header-height); right: 0; bottom: 0; left: 0; display: block; padding: 0; border: 0; background: rgba(20, 22, 18, 0.2); backdrop-filter: blur(1px); }
   .remote-header__brand > span:last-child small { display: none; }
   .remote-status small { display: none; }
-  .remote-tools { top: 9px; }
+  .remote-app.is-sidebar-compact .remote-sidebar-backdrop { display: none; }
 }
 
 @media (max-width: 560px) {
@@ -589,9 +633,13 @@ button { -webkit-tap-highlight-color: transparent; }
   .remote-header__logo { display: none; }
   .remote-header__brand { gap: 4px; }
   .remote-header__brand strong { font-size: 13px; }
+  .remote-header__brand > span:last-child { display: none; }
   .remote-status { min-height: 31px; padding: 0 8px; }
+  .remote-status > span { display: none; }
   .remote-header__button,
   .remote-header__sidebar-toggle { width: 34px; height: 34px; }
+  .remote-tools { max-width: calc(100vw - 164px); min-height: 45px; padding: 4px; }
+  .remote-tool { width: 35px; height: 35px; }
   .remote-color-row .remote-color:nth-child(n + 5):not(:last-child) { display: none; }
   .remote-size { width: 86px; }
   .remote-size output { display: none; }

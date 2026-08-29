@@ -1,5 +1,5 @@
 import { type ReactElement } from 'react';
-import { ArrowLeftRight, FileText, Plus } from 'lucide-react';
+import { ArrowLeftRight, FileText, Plus, Trash2 } from 'lucide-react';
 import type { WorkspaceBlock } from '../../../shared/domain';
 import type { LanDrawingStroke } from '../../../shared/lanWhiteboard';
 import { WorkspaceDrawingBlock, drawingBlockSide, type WorkspaceDrawingLabels } from './WorkspaceDrawingBlock';
@@ -66,7 +66,16 @@ export function WorkspaceDrawingNotebook({
             <article className="workspace-notebook__sheet" data-sheet-id={block.id} key={block.id}>
               <div className="workspace-notebook__sheet-label">
                 <span>{text.notebookSheet} {index + 1}</span>
-                <small>{block.payload?.penOnly === true ? text.penOnlyMode : ''}</small>
+                <span className="workspace-notebook__sheet-actions">
+                  <small>{block.payload?.penOnly === true ? text.penOnlyMode : ''}</small>
+                  <button
+                    type="button"
+                    className="workspace-notebook__delete-sheet"
+                    title={`${text.delete} ${text.notebookSheet} ${index + 1}`}
+                    aria-label={`${text.delete} ${text.notebookSheet} ${index + 1}`}
+                    onClick={() => onDelete(block.id)}
+                  ><Trash2 size={12} /></button>
+                </span>
               </div>
               <WorkspaceDrawingBlock
                 block={block}
@@ -76,7 +85,6 @@ export function WorkspaceDrawingNotebook({
                 showPlacementControl={false}
                 text={text}
                 width={sheetWidth}
-                onDelete={() => onDelete(block.id)}
                 onMoveSide={() => onMoveSide(nextSide)}
                 onSave={onSave}
                 onShareSelection={(strokes) => onShareSelection(block.pageNumber ?? 1, block.id, strokes)}

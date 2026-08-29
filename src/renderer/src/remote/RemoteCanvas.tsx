@@ -27,13 +27,14 @@ import type { WorkspaceBlock } from '../../../shared/domain';
 import type { LanDrawingPoint, LanDrawingStroke, LanWhiteboardClientMessage } from '../../../shared/lanWhiteboard';
 import {
   drawingSelectionBounds,
+  drawingStrokeNearPoint,
   drawingStrokePath,
   strokeIntersectsPolygon,
   transformDrawingSelection,
   type DrawingBounds
 } from '../drawing/drawingGeometry';
 import { createStylusPressureState, normalizeStylusPressure, type StylusPressureState } from '../reader/drawingPressure';
-import { remoteDrawingPayload, strokeNearPoint } from './remoteDrawing';
+import { remoteDrawingPayload } from './remoteDrawing';
 
 type DrawingTool = 'pen' | 'eraser' | 'lasso' | 'hand';
 
@@ -41,7 +42,6 @@ interface RemoteCanvasProps {
   block: WorkspaceBlock;
   canMove: boolean;
   connected: boolean;
-  documentTitle: string;
   sheetNumber: number;
   totalSheets: number;
   remoteStrokes: LanDrawingStroke[];
@@ -79,7 +79,7 @@ interface SelectionGesture {
 const colors = ['#171a16', '#2563eb', '#e0453b', '#16a36a', '#8b4bd6', '#e99620'];
 const canvasPadding = 56;
 
-export function RemoteCanvas({ block, canMove, connected, documentTitle, sheetNumber, totalSheets, remoteStrokes, send, onDelete, onMove }: RemoteCanvasProps): ReactElement {
+export function RemoteCanvas({ block, canMove, connected, sheetNumber, totalSheets, remoteStrokes, send, onDelete, onMove }: RemoteCanvasProps): ReactElement {
   const payload = remoteDrawingPayload(block);
   const [strokes, setStrokes] = useState(payload.strokes);
   const strokesRef = useRef(payload.strokes);
@@ -94,6 +94,7 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, sheetNu
   const [penOnly, setPenOnly] = useState(payload.penOnly);
   const [zoom, setZoom] = useState(1);
   const [selectionNotice, setSelectionNotice] = useState<string>();
+  const [temporaryEraser, setTemporaryEraser] = useState(false);
   const zoomRef = useRef(1);
   const viewportRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -106,6 +107,14 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, sheetNu
   const touchPointsRef = useRef(new Map<number, { x: number; y: number }>());
   const pinchRef = useRef<PinchState>();
   const eraserChangedRef = useRef(false);
+  const stylusHoldRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    strokeId: string;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  const temporaryEraserPointerRef = useRef<number>();
   const undoRef = useRef<LanDrawingStroke[][]>([]);
   const redoRef = useRef<LanDrawingStroke[][]>([]);
   const selectionGestureRef = useRef<SelectionGesture>();
@@ -169,6 +178,9 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, sheetNu
     if (frameRef.current !== undefined) {
       cancelAnimationFrame(frameRef.current);
     }
+    if (stylusHoldRef.current) {
+      clearTimeout(stylusHoldRef.current.timer);
+    }
   }, []);
 
   const canvasPoint = (clientX: number, clientY: number, pressure: number, simulatePressure: boolean): LanDrawingPoint => {
@@ -184,7 +196,61 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, sheetNu
     ];
   };
 
+  const cancelStylusHold = (pointerId?: number): void => {
+    const hold = stylusHoldRef.current;
+    if (!hold || (pointerId !== undefined && hold.pointerId !== pointerId)) {
+      return;
+    }
+    clearTimeout(hold.timer);
+    stylusHoldRef.current = undefined;
+  };
+
+  const eraseAt = (point: LanDrawingPoint): void => {
+    const next = strokesRef.current.filter((stroke) => !drawingStrokeNearPoint(stroke, point, Math.max(8, size * 1.8)));
+    if (next.length !== strokesRef.current.length) {
+      eraserChangedRef.current = true;
+      strokesRef.current = next;
+      setStrokes(next);
+    }
+  };
+
+  const armStylusEraser = (event: ReactPointerEvent<SVGSVGElement>, stroke: LanDrawingStroke, point: LanDrawingPoint): void => {
+    if (event.pointerType !== 'pen') {
+      return;
+    }
+    const pointerId = event.pointerId;
+    const timer = setTimeout(() => {
+      if (activePointerRef.current !== pointerId || activeStrokeRef.current?.id !== stroke.id) {
+        return;
+      }
+      stylusHoldRef.current = undefined;
+      if (frameRef.current !== undefined) {
+        cancelAnimationFrame(frameRef.current);
+        frameRef.current = undefined;
+      }
+      pendingTransmissionRef.current = [];
+      send({ type: 'stroke-cancel', canvasId: block.id, strokeId: stroke.id });
+      activeStrokeRef.current = undefined;
+      setActiveStroke(undefined);
+      undoRef.current.push(strokesRef.current);
+      redoRef.current = [];
+      eraserChangedRef.current = false;
+      temporaryEraserPointerRef.current = pointerId;
+      setTemporaryEraser(true);
+      eraseAt(point);
+      navigator.vibrate?.(12);
+    }, 480);
+    stylusHoldRef.current = {
+      pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      strokeId: stroke.id,
+      timer
+    };
+  };
+
   const cancelActive = (): void => {
+    cancelStylusHold();
     const stroke = activeStrokeRef.current;
     if (stroke) {
       send({ type: 'stroke-cancel', canvasId: block.id, strokeId: stroke.id });
@@ -196,6 +262,8 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, sheetNu
     setActiveStroke(undefined);
     lassoPointsRef.current = [];
     setLassoPoints([]);
+    temporaryEraserPointerRef.current = undefined;
+    setTemporaryEraser(false);
   };
 
   const beginPinchIfReady = (): boolean => {
@@ -291,6 +359,7 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, sheetNu
       setActiveStroke(stroke);
       setSelectedStrokeIds(new Set());
       send({ type: 'stroke-begin', canvasId: block.id, stroke });
+      armStylusEraser(event, stroke, point);
       return;
     }
     if (tool === 'eraser') {
@@ -302,15 +371,6 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, sheetNu
     }
     lassoPointsRef.current = [[point[0], point[1]]];
     setLassoPoints(lassoPointsRef.current);
-  };
-
-  const eraseAt = (point: LanDrawingPoint): void => {
-    const next = strokesRef.current.filter((stroke) => !strokeNearPoint(stroke, point, Math.max(8, size * 1.8)));
-    if (next.length !== strokesRef.current.length) {
-      eraserChangedRef.current = true;
-      strokesRef.current = next;
-      setStrokes(next);
-    }
   };
 
   const moveInteraction = (event: ReactPointerEvent<SVGSVGElement>): void => {
@@ -368,6 +428,11 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, sheetNu
       return;
     }
     event.preventDefault();
+    const hold = stylusHoldRef.current;
+    if (hold?.pointerId === event.pointerId
+      && Math.hypot(event.clientX - hold.startClientX, event.clientY - hold.startClientY) > 8) {
+      cancelStylusHold(event.pointerId);
+    }
     const pan = panRef.current;
     if ((tool === 'hand' || (tool === 'pen' && penOnly)) && pan?.pointerId === event.pointerId) {
       const viewport = viewportRef.current;
@@ -382,6 +447,12 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, sheetNu
     const coalesced = event.nativeEvent.getCoalescedEvents?.();
     const samples = coalesced?.length ? coalesced : [event.nativeEvent];
     const points = samples.map((sample) => canvasPoint(sample.clientX, sample.clientY, sample.pressure, simulatePressure));
+    if (temporaryEraserPointerRef.current === event.pointerId) {
+      for (const point of points) {
+        eraseAt(point);
+      }
+      return;
+    }
     if (tool === 'pen' && activeStrokeRef.current) {
       activeStrokeRef.current.points.push(...points);
       pendingTransmissionRef.current.push(...points);
@@ -420,11 +491,26 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, sheetNu
     }
     event.preventDefault();
     releasePointer(event);
+    cancelStylusHold(event.pointerId);
     activePointerRef.current = undefined;
     activePointerTypeRef.current = undefined;
     panRef.current = undefined;
 
-    if (tool === 'pen') {
+    if (temporaryEraserPointerRef.current === event.pointerId) {
+      temporaryEraserPointerRef.current = undefined;
+      setTemporaryEraser(false);
+      if (eraserChangedRef.current) {
+        send({
+          type: 'replace-strokes',
+          requestId: createRemoteId('erase'),
+          canvasId: block.id,
+          strokes: strokesRef.current
+        });
+      } else {
+        undoRef.current.pop();
+      }
+      eraserChangedRef.current = false;
+    } else if (tool === 'pen') {
       flushFrame();
       const stroke = activeStrokeRef.current;
       if (stroke && stroke.points.length > 0) {
@@ -612,8 +698,8 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, sheetNu
   return (
     <section className="remote-canvas">
       <div className="remote-tools" aria-label="手写工具栏">
-        <ToolButton active={tool === 'pen'} label="笔" onClick={() => setTool('pen')}><PenLine /></ToolButton>
-        <ToolButton active={tool === 'eraser'} label="橡皮" onClick={() => setTool('eraser')}><Eraser /></ToolButton>
+        <ToolButton active={tool === 'pen' && !temporaryEraser} label="笔" onClick={() => setTool('pen')}><PenLine /></ToolButton>
+        <ToolButton active={tool === 'eraser' || temporaryEraser} label="橡皮" onClick={() => setTool('eraser')}><Eraser /></ToolButton>
         <ToolButton active={tool === 'lasso'} label="圈选" onClick={() => setTool('lasso')}><CircleDashed /></ToolButton>
         <ToolButton active={tool === 'hand'} label="移动" onClick={() => setTool('hand')}><Hand /></ToolButton>
         <ToolButton active={penOnly} label="仅触控笔书写" onClick={togglePenOnly}><PenTool /></ToolButton>
@@ -639,7 +725,7 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, sheetNu
           <output>{size}</output>
         </label>
         <span className="remote-tools__spacer" />
-        <ToolButton disabled={strokes.length === 0} label="撤销" onClick={undo}><Undo2 /></ToolButton>
+        <ToolButton disabled={undoRef.current.length === 0 && strokes.length === 0} label="撤销" onClick={undo}><Undo2 /></ToolButton>
         <ToolButton disabled={redoRef.current.length === 0} label="重做" onClick={redo}><Redo2 /></ToolButton>
       </div>
 
@@ -653,7 +739,7 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, sheetNu
         >
           <svg
             ref={svgRef}
-            className={`remote-canvas__paper is-${tool}`}
+            className={`remote-canvas__paper is-${temporaryEraser ? 'eraser' : tool}`}
             style={{
               left: canvasPadding,
               top: canvasPadding,
@@ -719,7 +805,7 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, sheetNu
       </div>
 
       <div className="remote-canvas__identity">
-        <span><small title={documentTitle}>{documentTitle}</small><strong>PDF {block.pageNumber ?? '—'} · 纸张 {sheetNumber}/{totalSheets}</strong></span>
+        <span><strong>PDF {block.pageNumber ?? '—'} · 纸张 {sheetNumber}/{totalSheets}</strong></span>
         <button type="button" disabled={!canMove} title={`把笔记窗口移到${payload.side === 'left' ? '右' : '左'}侧`} onClick={onMove}><ArrowLeftRight />换侧</button>
         <button type="button" className="is-danger" title="删除这张纸" onClick={onDelete}><Trash2 />删除</button>
       </div>

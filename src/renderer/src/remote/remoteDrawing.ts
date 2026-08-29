@@ -1,5 +1,5 @@
 import type { WorkspaceBlock } from '../../../shared/domain';
-import type { LanDrawingPoint, LanDrawingStroke, LanWhiteboardSide } from '../../../shared/lanWhiteboard';
+import type { LanDrawingStroke, LanWhiteboardSide } from '../../../shared/lanWhiteboard';
 
 export interface RemoteDrawingPayload {
   canvasHeight: number;
@@ -22,16 +22,6 @@ export function remoteDrawingPayload(block: WorkspaceBlock): RemoteDrawingPayloa
     side: block.payload?.side === 'left' ? 'left' : 'right',
     strokes
   };
-}
-
-export function strokeNearPoint(stroke: LanDrawingStroke, point: LanDrawingPoint, radius: number): boolean {
-  const threshold = radius + stroke.size / 2;
-  const thresholdSquared = threshold * threshold;
-  return stroke.points.some(([x, y]) => {
-    const dx = x - point[0];
-    const dy = y - point[1];
-    return dx * dx + dy * dy <= thresholdSquared;
-  });
 }
 
 function finitePositive(value: unknown, fallback: number): number {
