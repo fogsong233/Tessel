@@ -103,10 +103,10 @@ test('reopens a recently viewed book and shows its stored information in setting
         SIDELIGHT_E2E_HIDE_WINDOWS: '1'
       }
     });
-    const firstHome = await app.firstWindow();
-    const firstReaderPromise = app.waitForEvent('window');
-    await firstHome.getByRole('button', { name: 'Open PDF' }).click();
-    const firstReader = await firstReaderPromise;
+    // SIDELIGHT_TEST_OPEN_PDF opens the fixture directly in the first reader
+    // window. Waiting for another Open PDF action races the initial PDF load and
+    // can match both the reader toolbar and its temporary empty-state button.
+    const firstReader = await app.firstWindow();
     await expect(firstReader.locator('.textLayer')).toContainText('Recent browsing history fixture');
     await app.close();
 

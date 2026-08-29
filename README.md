@@ -27,7 +27,8 @@ Tessel opens directly into a PDF. Select a passage, ask a question, translate it
 - **Contextual conversations**: quote a selected passage into chat without sending it, then ask in your own words.
 - **Codex sidebar**: an experimental local Codex CLI integration for chat, translation, document search, local tools, images, and LaTeX output.
 - **Flexible AI routing**: choose Codex or an OpenAI-compatible API for chat, translation, and generated outlines.
-- **Working memory**: pin conversations, translations, notes, and images alongside the PDF; reopen recent translations at any time.
+- **Working memory**: pin conversations, translations, notes, and fixed-viewport images alongside the PDF; reopen recent translations at any time.
+- **Page whiteboards**: place a page-sized vector canvas on either side of a PDF page, with pressure-aware pens, colors, sizes, undo, and lasso selection.
 - **Fast return**: reopen recently viewed PDFs from the start page and inspect every local book's stored reading data from Settings.
 - **Crisp Windows reading**: GPU-accelerated, scale-aware PDF rendering keeps vector documents sharp without replacing the selectable text layer.
 - **Your data stays yours**: document metadata is keyed by the SHA-256 hash of the PDF. Optional WebDAV sync preserves progress, conversations, and recent translations across devices.

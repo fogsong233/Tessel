@@ -6,9 +6,11 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
   type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
   type SetStateAction,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -37,6 +39,7 @@ import tesselLogoUrl from '../../assets/icons/tessel-logo.png?url';
 import {
   BookOpen,
   ArrowLeft,
+  ArrowRight,
   Bookmark,
   BookmarkPlus,
   ChevronDown,
@@ -63,18 +66,21 @@ import {
   ShieldCheck,
   Pin,
   PinOff,
+  PenLine,
   Quote,
   Sparkles,
   Square,
   Terminal,
   Trash2,
   Underline,
+  Users,
   X
 } from 'lucide-react';
 import {
   AiMode,
   Conversation,
   ConversationAttachment,
+  ConversationParticipantNames,
   AiDocumentToolContext,
   AiToolCallEvent,
   AgentActivityEvent,
@@ -105,6 +111,14 @@ import { normalizeSelectionColors, selectionColorForRole } from '../../shared/se
 import { canOpenWorkspaceBlockSource, defaultWorkspaceBlockWidth, workspaceBlockSpec } from '../../shared/workspacePins';
 import { MarkdownView } from './MarkdownView';
 import { MarkdownNoteEditor } from './MarkdownNoteEditor';
+import { WorkspaceDrawingBlock, drawingBlockSide } from './reader/WorkspaceDrawingBlock';
+import {
+  type ZoomAnchor,
+  prepareZoomScrollSpace,
+  readViewportZoomAnchor,
+  readZoomAnchor,
+  restoreZoomAnchor
+} from './reader/pdfZoom';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -145,6 +159,7 @@ interface PdfReaderProps {
   documentLoadPending?: boolean;
   documentLoadError?: string;
   uiLanguage?: UiLanguage;
+  codexEnabled?: boolean;
   selectionColors: SelectionColorPreferences;
   sidebarColor?: string;
   sidebarActiveColor?: string;
@@ -190,6 +205,7 @@ interface PdfReaderProps {
     toolContext?: AiDocumentToolContext
   ): void;
   onUpdateConversationCodexSettings(conversationId: string, settings: CodexConversationSettings): void;
+  onUpdateConversationParticipantNames(conversationId: string, names: ConversationParticipantNames): void;
   onStopGeneration(): void;
   onSaveWorkspaceBlock(block: WorkspaceBlock): void | Promise<void>;
   onDeleteWorkspaceBlock(blockId: string): void;
@@ -245,19 +261,6 @@ interface PdfJsOutlineNode {
   items?: PdfJsOutlineNode[];
 }
 
-interface ZoomAnchor {
-  clientX: number;
-  clientY: number;
-  offsetX: number;
-  offsetY: number;
-  scrollLeft: number;
-  scrollTop: number;
-  pageNumber?: string;
-  pageWidth?: number;
-  pageOffsetX?: number;
-  pageOffsetY?: number;
-}
-
 interface ZoomPageLock {
   enforceScroll?: boolean;
   pageNumber: number;
@@ -274,8 +277,10 @@ interface PdfNavigationHistoryEntry {
 
 interface WorkspaceBlockLayout {
   left: number;
+  pageHeight: number;
   pageScale: number;
   pageTop: number;
+  pageWidth: number;
   renderedY: number;
   top: number;
 }
@@ -283,6 +288,19 @@ interface WorkspaceBlockLayout {
 function readerText(language: UiLanguage) {
   if (language === 'zh-CN') {
     return {
+      addCanvasLeft: '在左侧添加白板',
+      addCanvasRight: '在右侧添加白板',
+      assistantDisplayName: 'AI 名称',
+      canvas: '白板',
+      clearCanvas: '清空白板',
+      deleteSelection: '删除圈选内容',
+      drawingColor: '笔触颜色',
+      drawingSize: '笔触大小',
+      lassoTool: '圈选工具',
+      penTool: '画笔工具',
+      resetImageZoom: '重置图片缩放',
+      undoStroke: '撤销笔触',
+      userDisplayName: '我的名称',
       addBookmark: '添加书签',
       aiDraft: 'AI 草稿',
       aiNote: 'AI 笔记',
@@ -419,6 +437,19 @@ function readerText(language: UiLanguage) {
   }
 
   return {
+    addCanvasLeft: 'Add whiteboard on left',
+    addCanvasRight: 'Add whiteboard on right',
+    assistantDisplayName: 'AI name',
+    canvas: 'Whiteboard',
+    clearCanvas: 'Clear whiteboard',
+    deleteSelection: 'Delete selected strokes',
+    drawingColor: 'Stroke color',
+    drawingSize: 'Stroke size',
+    lassoTool: 'Lasso tool',
+    penTool: 'Pen tool',
+    resetImageZoom: 'Reset image zoom',
+    undoStroke: 'Undo stroke',
+    userDisplayName: 'My name',
     addBookmark: 'Add bookmark',
     aiDraft: 'AI draft',
     aiNote: 'AI note',
@@ -574,6 +605,7 @@ export function PdfReader({
   documentLoadPending = false,
   documentLoadError,
   uiLanguage = 'en',
+  codexEnabled = false,
   selectionColors,
   sidebarColor,
   sidebarActiveColor,
@@ -614,6 +646,7 @@ export function PdfReader({
   onCloseTransientAid,
   onSendMessage,
   onUpdateConversationCodexSettings,
+  onUpdateConversationParticipantNames,
   onStopGeneration,
   onSaveWorkspaceBlock,
   onDeleteWorkspaceBlock,
@@ -646,6 +679,7 @@ export function PdfReader({
   const activePageRef = useRef(activePage);
   const zoomPageLockRef = useRef<ZoomPageLock>();
   const zoomLockVersionRef = useRef(0);
+  const zoomLayoutTimersRef = useRef<number[]>([]);
   const pendingRevealScrollTopRef = useRef<number>();
   const lastPdfReadingIntentRef = useRef(0);
   const selectionMouseUpTimerRef = useRef<number>();
@@ -752,12 +786,28 @@ export function PdfReader({
         return maxTail;
       }
 
+      if (block.kind === 'drawing' && drawingBlockSide(block) === 'right') {
+        const coordinateScale = workspaceBlockCoordinateScale(block, scale);
+        const renderedWidth = block.width * (scale / coordinateScale);
+        return Math.max(maxTail, renderedWidth + 208);
+      }
+
       return Math.max(maxTail, block.x > 0 ? block.x + block.width + 180 : 0);
     }, 0);
-  }, [effectiveWorkspaceBlocks]);
+  }, [effectiveWorkspaceBlocks, scale]);
   const workspaceLeftGutter = useMemo(() => {
     const neededGutter = effectiveWorkspaceBlocks.reduce((maxGutter, block) => {
-      if (block.anchor !== 'page' || block.x >= 0) {
+      if (block.anchor !== 'page') {
+        return maxGutter;
+      }
+
+      if (block.kind === 'drawing' && drawingBlockSide(block) === 'left') {
+        const coordinateScale = workspaceBlockCoordinateScale(block, scale);
+        const renderedWidth = block.width * (scale / coordinateScale);
+        return Math.max(maxGutter, renderedWidth + 76);
+      }
+
+      if (block.x >= 0) {
         return maxGutter;
       }
 
@@ -765,7 +815,7 @@ export function PdfReader({
     }, 0);
 
     return neededGutter > 0 ? Math.max(560, neededGutter) : 0;
-  }, [effectiveWorkspaceBlocks]);
+  }, [effectiveWorkspaceBlocks, scale]);
   const chatPanelOpen = chatOpen && Boolean(activeConversation);
   const hasTransientAid = Boolean(transientAid);
   const hasOpenDock = chatPanelOpen || hasTransientAid || Boolean(noteEditorNote);
@@ -1119,40 +1169,60 @@ export function PdfReader({
     const viewer = viewerRef.current;
     const canvas = containerRef.current?.querySelector<HTMLElement>('.pdf-canvas');
     if (!viewer || !canvas) {
-      setWorkspaceBlockLayouts({});
       return;
     }
 
     const pageScale = currentWorkspacePageScale();
-    const nextLayouts: Record<string, WorkspaceBlockLayout> = {};
-    for (const block of workspaceBlocksRef.current) {
-      if (block.anchor !== 'page' || !block.pageNumber) {
-        continue;
+    setWorkspaceBlockLayouts((currentLayouts) => {
+      const nextLayouts: Record<string, WorkspaceBlockLayout> = {};
+      for (const block of workspaceBlocksRef.current) {
+        if (block.anchor !== 'page' || !block.pageNumber) {
+          continue;
+        }
+
+        const page = viewer.querySelector<HTMLElement>(`.page[data-page-number="${block.pageNumber}"]`);
+        if (!page) {
+          if (currentLayouts[block.id]) {
+            nextLayouts[block.id] = currentLayouts[block.id];
+          }
+          continue;
+        }
+
+        const pageBounds = elementBoundsInCanvas(page, canvas);
+        if (pageBounds.width < 1 || pageBounds.height < 1) {
+          if (currentLayouts[block.id]) {
+            nextLayouts[block.id] = currentLayouts[block.id];
+          }
+          continue;
+        }
+        const coordinateScale = workspaceBlockCoordinateScale(
+          block,
+          pageScale,
+          workspaceBlockCoordinateScalesRef.current[block.id]
+        );
+        workspaceBlockCoordinateScalesRef.current[block.id] = coordinateScale;
+        const isDrawing = block.kind === 'drawing';
+        const renderedY = isDrawing ? 0 : renderedWorkspaceBlockY(block, pageScale, coordinateScale);
+        const left = isDrawing
+          ? drawingBlockSide(block) === 'left'
+            ? pageBounds.left - pageBounds.width - 28
+            : pageBounds.left + pageBounds.width + 28
+          : block.x < 0
+            ? pageBounds.left + block.x
+            : pageBounds.left + pageBounds.width + block.x;
+        nextLayouts[block.id] = {
+          left,
+          pageHeight: pageBounds.height,
+          pageScale,
+          pageTop: pageBounds.top,
+          pageWidth: pageBounds.width,
+          renderedY,
+          top: pageBounds.top + renderedY
+        };
       }
 
-      const page = viewer.querySelector<HTMLElement>(`.page[data-page-number="${block.pageNumber}"]`);
-      if (!page) {
-        continue;
-      }
-
-      const pageBounds = elementBoundsInCanvas(page, canvas);
-      const coordinateScale = workspaceBlockCoordinateScale(
-        block,
-        pageScale,
-        workspaceBlockCoordinateScalesRef.current[block.id]
-      );
-      workspaceBlockCoordinateScalesRef.current[block.id] = coordinateScale;
-      const renderedY = renderedWorkspaceBlockY(block, pageScale, coordinateScale);
-      nextLayouts[block.id] = {
-        left: block.x < 0 ? pageBounds.left + block.x : pageBounds.left + pageBounds.width + block.x,
-        pageScale,
-        pageTop: pageBounds.top,
-        renderedY,
-        top: pageBounds.top + renderedY
-      };
-    }
-
-    setWorkspaceBlockLayouts(nextLayouts);
+      return nextLayouts;
+    });
   }, [currentWorkspacePageScale]);
 
   const currentWorkspacePageNumber = useCallback((): number => {
@@ -1173,18 +1243,25 @@ export function PdfReader({
     }
 
     const viewportRect = container.getBoundingClientRect();
+    const blockRect = block.getBoundingClientRect();
     const dockRect = container.querySelector<HTMLElement>('.reader-dock-lane')?.getBoundingClientRect();
     const availableRight = dockRect && dockRect.left < viewportRect.right ? dockRect.left : viewportRect.right;
     const availableWidth = Math.max(220, availableRight - viewportRect.left);
     const targetInset = Math.max(36, Math.min(96, (availableWidth - block.offsetWidth) / 2));
+    const targetScrollLeft = Math.max(
+      0,
+      container.scrollLeft + blockRect.left - viewportRect.left - targetInset
+    );
     const maxScrollLeft = Math.max(0, container.scrollWidth - container.clientWidth);
-    const targetScrollLeft = Math.max(0, block.offsetLeft - targetInset);
     if (targetScrollLeft > maxScrollLeft) {
       const currentPaddingRight = Number.parseFloat(window.getComputedStyle(canvas).paddingRight) || 0;
       canvas.style.paddingRight = `${Math.ceil(currentPaddingRight + targetScrollLeft - maxScrollLeft + 48)}px`;
     }
 
-    container.scrollLeft = targetScrollLeft;
+    container.scrollLeft = Math.min(
+      targetScrollLeft,
+      Math.max(0, container.scrollWidth - container.clientWidth)
+    );
     const blockTop = block.offsetTop;
     const blockBottom = blockTop + block.offsetHeight;
     const viewportTop = container.scrollTop;
@@ -1233,18 +1310,23 @@ export function PdfReader({
     }
 
     let secondFrame = 0;
+    let settleTimer = 0;
     const frame = window.requestAnimationFrame(() => {
       revealWorkspaceBlock(pendingRevealBlockId);
       secondFrame = window.requestAnimationFrame(() => {
         revealWorkspaceBlock(pendingRevealBlockId);
-        pendingRevealScrollTopRef.current = undefined;
-        setPendingRevealBlockId(undefined);
+        settleTimer = window.setTimeout(() => {
+          revealWorkspaceBlock(pendingRevealBlockId);
+          pendingRevealScrollTopRef.current = undefined;
+          setPendingRevealBlockId(undefined);
+        }, 120);
       });
     });
 
     return () => {
       window.cancelAnimationFrame(frame);
       window.cancelAnimationFrame(secondFrame);
+      window.clearTimeout(settleTimer);
     };
   }, [pendingRevealBlockId, revealWorkspaceBlock, workspaceBlockLayouts]);
 
@@ -1519,6 +1601,72 @@ export function PdfReader({
       });
   }, [pinImageToCanvas]);
 
+  const addDrawingToCanvas = useCallback((side: 'left' | 'right'): void => {
+    if (!meta) {
+      return;
+    }
+
+    const pageNumber = currentWorkspacePageNumber();
+    const existing = workspaceBlocksForPlacement().find((block) => (
+      block.kind === 'drawing' && block.pageNumber === pageNumber && drawingBlockSide(block) === side
+    ));
+    if (existing) {
+      pendingRevealScrollTopRef.current = containerRef.current?.scrollTop;
+      setPendingRevealBlockId(existing.id);
+      return;
+    }
+
+    const container = containerRef.current;
+    const canvas = container?.querySelector<HTMLElement>('.pdf-canvas');
+    const page = viewerRef.current?.querySelector<HTMLElement>(`.page[data-page-number="${pageNumber}"]`);
+    const pageBounds = canvas && page ? elementBoundsInCanvas(page, canvas) : undefined;
+    const layoutScale = currentWorkspacePageScale();
+    const width = Math.round(pageBounds?.width ?? 612 * layoutScale);
+    const height = Math.round(pageBounds?.height ?? 792 * layoutScale);
+    const now = new Date().toISOString();
+    const block: WorkspaceBlock = {
+      id: createId('drawing'),
+      documentId: meta.id,
+      kind: 'drawing',
+      anchor: 'page',
+      sourceKind: 'manual',
+      contentKind: 'custom',
+      pageNumber,
+      title: `${t.canvas} · p.${pageNumber}`,
+      payload: {
+        version: 1,
+        side,
+        layoutScale,
+        canvasWidth: width,
+        canvasHeight: height,
+        strokes: []
+      },
+      x: side === 'left' ? -width - 28 : 28,
+      y: 0,
+      width,
+      height,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    optimisticWorkspaceBlocksRef.current = [
+      block,
+      ...optimisticWorkspaceBlocksRef.current.filter((candidate) => candidate.id !== block.id)
+    ];
+    setOptimisticWorkspaceBlocks((current) => [block, ...current.filter((candidate) => candidate.id !== block.id)]);
+    workspaceBlocksRef.current = [block, ...workspaceBlocksRef.current.filter((candidate) => candidate.id !== block.id)];
+    onSaveWorkspaceBlock(block);
+    pendingRevealScrollTopRef.current = containerRef.current?.scrollTop;
+    setPendingRevealBlockId(block.id);
+  }, [
+    currentWorkspacePageNumber,
+    currentWorkspacePageScale,
+    meta,
+    onSaveWorkspaceBlock,
+    t.canvas,
+    workspaceBlocksForPlacement
+  ]);
+
   useEffect(() => {
     if (!pageDraftFocused) {
       setPageDraft(String(activePage));
@@ -1566,6 +1714,34 @@ export function PdfReader({
     window.addEventListener('resize', updateWorkspaceBlockLayouts);
     return () => window.removeEventListener('resize', updateWorkspaceBlockLayouts);
   }, [updateWorkspaceBlockLayouts]);
+
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+
+    let frame = 0;
+    const scheduleLayout = (): void => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(updateWorkspaceBlockLayouts);
+    };
+    const resizeObserver = new ResizeObserver(scheduleLayout);
+    const observePages = (): void => {
+      resizeObserver.observe(viewer);
+      viewer.querySelectorAll<HTMLElement>('.page[data-page-number]').forEach((page) => resizeObserver.observe(page));
+      scheduleLayout();
+    };
+    const mutationObserver = new MutationObserver(observePages);
+    mutationObserver.observe(viewer, { childList: true, subtree: true });
+    observePages();
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      mutationObserver.disconnect();
+      resizeObserver.disconnect();
+    };
+  }, [source, updateWorkspaceBlockLayouts]);
 
   const alignDockRight = useCallback((): void => {
     const container = containerRef.current;
@@ -1725,17 +1901,24 @@ export function PdfReader({
     const blockToKeepVisible = visibleWorkspaceBlockId(lockedPage);
     const lockVersion = beginZoomPageLock(lockedPage);
     const scaleRatio = clampedScale / currentScale;
+    zoomLayoutTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    zoomLayoutTimersRef.current = [120, 360, 760, 1_400].map((delay) => window.setTimeout(() => {
+      updateWorkspaceBlockLayouts();
+      if (blockToKeepVisible) {
+        window.requestAnimationFrame(() => revealWorkspaceBlock(blockToKeepVisible));
+      }
+    }, delay));
     prepareZoomScrollSpace(container, anchor, scaleRatio);
     runtime.pdfViewer.currentScale = clampedScale;
     restoreZoomAnchor(container, anchor, scaleRatio, () => {
       finishZoomPageLock(lockVersion, lockedPage);
-      if (blockToKeepVisible) {
+      updateWorkspaceBlockLayouts();
+      window.requestAnimationFrame(() => {
         updateWorkspaceBlockLayouts();
-        window.requestAnimationFrame(() => {
-          updateWorkspaceBlockLayouts();
+        if (blockToKeepVisible) {
           window.requestAnimationFrame(() => revealWorkspaceBlock(blockToKeepVisible));
-        });
-      }
+        }
+      });
     });
   }, [
     beginZoomPageLock,
@@ -1746,6 +1929,11 @@ export function PdfReader({
     visibleWorkspaceBlockId
   ]);
 
+  useEffect(() => () => {
+    zoomLayoutTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    zoomLayoutTimersRef.current = [];
+  }, []);
+
   const zoomViewport = useCallback((direction: 'in' | 'out'): void => {
     const runtime = runtimeRef.current;
     const container = containerRef.current;
@@ -1753,7 +1941,7 @@ export function PdfReader({
       return;
     }
 
-    const anchor = readViewportZoomAnchor(container, runtime);
+    const anchor = readViewportZoomAnchor(container, runtime.pdfViewer.currentPageNumber);
     const factor = direction === 'in' ? 1.1 : 1 / 1.1;
     applyZoomAtAnchor(anchor, runtime.pdfViewer.currentScale * factor);
   }, [applyZoomAtAnchor, status]);
@@ -1955,6 +2143,7 @@ export function PdfReader({
     }
 
     let cancelled = false;
+    let firstPageRendered = false;
     let loadingTask: PDFDocumentLoadingTask | undefined;
     const eventBus = new EventBus();
     const linkService = new PDFLinkService({
@@ -1997,6 +2186,7 @@ export function PdfReader({
     setOutlineBusy(false);
     setSelectionPopover(undefined);
     setActiveMark(undefined);
+    setWorkspaceBlockLayouts({});
     workspaceBlockCoordinateScalesRef.current = {};
     viewerRef.current.textContent = '';
     viewerRef.current.style.minWidth = '';
@@ -2056,6 +2246,10 @@ export function PdfReader({
     });
 
     eventBus.on('pagerendered', () => {
+      if (!firstPageRendered) {
+        firstPageRendered = true;
+        setStatus('ready');
+      }
       renderMarks();
       updateWorkspaceBlockLayouts();
     });
@@ -2107,7 +2301,6 @@ export function PdfReader({
               setOutlineBusy(false);
             }
           });
-        setStatus('ready');
       })
       .catch((error: unknown) => {
         if (!cancelled) {
@@ -2506,6 +2699,7 @@ export function PdfReader({
             title={meta?.title}
             totalPages={totalPages}
             onAddBookmark={() => onAddBookmark(activePage)}
+            onAddCanvas={addDrawingToCanvas}
             onFindNext={() => executeSearch(true)}
             onFindPrevious={() => executeSearch(true, true)}
             onFitWidth={() => {
@@ -2556,7 +2750,11 @@ export function PdfReader({
             {meta && source ? (
               <>
                 <div
-                  className={canvasDragEnabled ? 'pdf-viewport is-canvas-drag-mode' : 'pdf-viewport'}
+                  className={[
+                    'pdf-viewport',
+                    canvasDragEnabled ? 'is-canvas-drag-mode' : '',
+                    status !== 'ready' ? 'is-loading' : ''
+                  ].filter(Boolean).join(' ')}
                   ref={containerRef}
                   onDoubleClick={enterCanvasDragMode}
                   onWheel={(event) => notePdfReadingIntent(event.target)}
@@ -2597,6 +2795,7 @@ export function PdfReader({
                         noteBusy={noteBusy}
                         pdfReadingSignal={pdfReadingSignal}
                         uiLanguage={uiLanguage}
+                        codexEnabled={codexEnabled}
                         text={t}
                         pageConversationCount={pageConversationCount}
                         activeTab={activeDockTab}
@@ -2627,6 +2826,7 @@ export function PdfReader({
                           );
                         }}
                         onUpdateConversationCodexSettings={onUpdateConversationCodexSettings}
+                        onUpdateConversationParticipantNames={onUpdateConversationParticipantNames}
                         onStopGeneration={onStopGeneration}
                         onPinConversation={pinConversationToCanvas}
                         onPinTranslation={pinTranslationToCanvas}
@@ -2755,6 +2955,7 @@ function ReaderLeftPanel({
   title,
   totalPages,
   onAddBookmark,
+  onAddCanvas,
   onFindNext,
   onFindPrevious,
   onFitWidth,
@@ -2795,6 +2996,7 @@ function ReaderLeftPanel({
   title?: string;
   totalPages: number;
   onAddBookmark(): void;
+  onAddCanvas(side: 'left' | 'right'): void;
   onFindNext(): void;
   onFindPrevious(): void;
   onFitWidth(): void;
@@ -2817,7 +3019,15 @@ function ReaderLeftPanel({
   onZoomOut(): void;
 }): ReactElement {
   const hasDocument = Boolean(activeDocumentId);
+  const documentReady = hasDocument && status === 'ready';
+  const [canvasMenuOpen, setCanvasMenuOpen] = useState(false);
   const t = text;
+
+  useEffect(() => {
+    if (!documentReady) {
+      setCanvasMenuOpen(false);
+    }
+  }, [documentReady]);
 
   return (
     <aside className="left-panel">
@@ -2855,13 +3065,13 @@ function ReaderLeftPanel({
           value={searchQuery}
           type="search"
           placeholder={t.searchInPdf}
-          disabled={!hasDocument}
+          disabled={!documentReady}
           onChange={(event) => onSearchQueryChange(event.target.value)}
         />
-        <button type="button" title="Previous match" disabled={!hasDocument || !searchQuery.trim()} onClick={onFindPrevious}>
+        <button type="button" title="Previous match" disabled={!documentReady || !searchQuery.trim()} onClick={onFindPrevious}>
           <Minus size={14} />
         </button>
-        <button type="button" title="Next match" disabled={!hasDocument || !searchQuery.trim()} onClick={onFindNext}>
+        <button type="button" title="Next match" disabled={!documentReady || !searchQuery.trim()} onClick={onFindNext}>
           <Plus size={14} />
         </button>
       </form>
@@ -2871,7 +3081,7 @@ function ReaderLeftPanel({
           <InputText
             value={pageDraft}
             inputMode="numeric"
-            disabled={!hasDocument}
+            disabled={!documentReady}
             aria-label={t.page}
             onBlur={onPageDraftBlur}
             onChange={(event) => onPageDraftChange(event.target.value.replace(/[^\d]/g, ''))}
@@ -2881,22 +3091,48 @@ function ReaderLeftPanel({
           <span>{totalPages || '-'}</span>
         </form>
         <div className="zoom-control">
-          <button className="icon-button" type="button" title={t.zoomOut} disabled={!hasDocument} onClick={onZoomOut}>
+          <button className="icon-button" type="button" title={t.zoomOut} disabled={!documentReady} onClick={onZoomOut}>
             <Minus size={15} />
           </button>
-          <button className="zoom-readout" type="button" title={t.fitWidth} disabled={!hasDocument} onClick={onFitWidth}>
+          <button className="zoom-readout" type="button" title={t.fitWidth} disabled={!documentReady} onClick={onFitWidth}>
             {Math.round(scale * 100)}%
           </button>
-          <button className="icon-button" type="button" title={t.zoomIn} disabled={!hasDocument} onClick={onZoomIn}>
+          <button className="icon-button" type="button" title={t.zoomIn} disabled={!documentReady} onClick={onZoomIn}>
             <Plus size={15} />
           </button>
         </div>
-        <button className="icon-button" type="button" title={t.bookmarkPage} disabled={!hasDocument} onClick={onAddBookmark}>
+        <button className="icon-button" type="button" title={t.bookmarkPage} disabled={!documentReady} onClick={onAddBookmark}>
           <BookmarkPlus size={15} />
         </button>
         <button className="icon-button" type="button" title="Back to link origin" disabled={!canGoBack} onClick={onHistoryBack}>
           <ArrowLeft size={15} />
         </button>
+      </div>
+
+      <div className="canvas-placement-menu" aria-label={t.canvas}>
+        <button
+          type="button"
+          className="canvas-placement-menu__trigger"
+          disabled={!documentReady}
+          aria-expanded={canvasMenuOpen}
+          onClick={() => setCanvasMenuOpen((current) => !current)}
+        >
+          <PenLine size={14} />
+          <span>{t.canvas}</span>
+          <ChevronDown size={13} />
+        </button>
+        {canvasMenuOpen && (
+          <div className="canvas-placement-menu__options">
+            <button type="button" title={t.addCanvasLeft} aria-label={t.addCanvasLeft} onClick={() => { setCanvasMenuOpen(false); onAddCanvas('left'); }}>
+              <ArrowLeft size={14} />
+              <span>{t.addCanvasLeft}</span>
+            </button>
+            <button type="button" title={t.addCanvasRight} aria-label={t.addCanvasRight} onClick={() => { setCanvasMenuOpen(false); onAddCanvas('right'); }}>
+              <ArrowRight size={14} />
+              <span>{t.addCanvasRight}</span>
+            </button>
+          </div>
+        )}
       </div>
 
       <nav className="panel-breadcrumb" aria-label="Reader tools">
@@ -2917,15 +3153,14 @@ function ReaderLeftPanel({
             {outline.length === 0 && (
               <div className="outline-empty">
                 <span className="empty-line">{outlineBusy ? t.readingOutline : t.noOutline}</span>
-                {!outlineBusy && hasDocument && (
+                {!outlineBusy && documentReady && !outlineGenerationBusy && (
                   <button
                     type="button"
                     className="outline-ai-button"
-                    disabled={outlineGenerationBusy}
                     onClick={onGenerateOutline}
                   >
                     <Sparkles size={14} />
-                    {outlineGenerationBusy ? t.generatingOutline : t.generateAiOutline}
+                    {t.generateAiOutline}
                   </button>
                 )}
                 {outlineGenerationBusy && outlineGenerationProgress && (
@@ -3050,6 +3285,7 @@ function ReaderDock({
   pdfReadingSignal,
   pageConversationCount,
   uiLanguage,
+  codexEnabled,
   text,
   activeTab,
   tab,
@@ -3071,6 +3307,7 @@ function ReaderDock({
   onGenerateNote,
   onSendMessage,
   onUpdateConversationCodexSettings,
+  onUpdateConversationParticipantNames,
   onStopGeneration,
   onPinConversation,
   onPinTranslation,
@@ -3098,6 +3335,7 @@ function ReaderDock({
   pdfReadingSignal: number;
   pageConversationCount: number;
   uiLanguage: UiLanguage;
+  codexEnabled: boolean;
   text: ReaderText;
   activeTab?: DockTab;
   tab: DockTab;
@@ -3119,6 +3357,7 @@ function ReaderDock({
   onGenerateNote(pageStart: number, pageEnd: number): void;
   onSendMessage(conversationId: string, prompt: string, attachments: ConversationAttachment[]): void;
   onUpdateConversationCodexSettings(conversationId: string, settings: CodexConversationSettings): void;
+  onUpdateConversationParticipantNames(conversationId: string, names: ConversationParticipantNames): void;
   onStopGeneration(): void;
   onPinConversation(conversation: Conversation): void;
   onPinTranslation(translation: TranslationEntry): void;
@@ -3197,12 +3436,14 @@ function ReaderDock({
           composerPrefill={composerPrefill?.conversationId === activeConversation.id ? composerPrefill : undefined}
           pdfReadingSignal={pdfReadingSignal}
           uiLanguage={uiLanguage}
+          codexEnabled={codexEnabled}
           text={t}
           onClose={onCloseConversation}
           onPin={() => onPinConversation(activeConversation)}
           onPinImage={(attachment) => onPinImage(attachment, activeConversation)}
           onSend={(prompt, attachments) => onSendMessage(activeConversation.id, prompt, attachments)}
           onUpdateCodexSettings={(settings) => onUpdateConversationCodexSettings(activeConversation.id, settings)}
+          onUpdateParticipantNames={(names) => onUpdateConversationParticipantNames(activeConversation.id, names)}
           onStop={onStopGeneration}
         />
       ) : noteEditorNote ? (
@@ -3383,18 +3624,24 @@ function TransientAidPanel({
   return (
     <section className="transient-aid-panel">
       <header>
-        <div>
+        <div className="transient-aid-panel__title">
           <span>{text.temporaryReadingAid}</span>
           <strong>
             <Icon size={15} />
             {title}
           </strong>
         </div>
-        <Badge value={`p.${aid.pageNumber}`} />
-        {onPin && <Button type="button" text rounded title={text.pinToCanvas} aria-label={text.pinToCanvas} onClick={onPin}><Pin size={15} /></Button>}
-        <Button type="button" text rounded className="panel-close-button" title={text.close} aria-label={text.close} onClick={onClose}>
-          <X size={15} />
-        </Button>
+        <div className="transient-aid-panel__actions">
+          <Badge value={`p.${aid.pageNumber}`} />
+          {onPin && (
+            <Button type="button" text rounded title={text.pinToCanvas} aria-label={text.pinToCanvas} onClick={onPin}>
+              <Pin size={15} />
+            </Button>
+          )}
+          <Button type="button" text rounded className="panel-close-button" title={text.close} aria-label={text.close} onClick={onClose}>
+            <X size={15} />
+          </Button>
+        </div>
       </header>
 
       <blockquote className="transient-aid-panel__quote">{aid.quote}</blockquote>
@@ -3883,7 +4130,6 @@ function WorkspaceBlockLayer({
   onSave(block: WorkspaceBlock): void;
 }): ReactElement {
   const [drafts, setDrafts] = useState<Record<string, Partial<Pick<WorkspaceBlock, 'x' | 'y' | 'width'>>>>({});
-  const [imageZoom, setImageZoom] = useState<Record<string, number>>({});
   const visibleBlocks = blocks.filter((block) => block.anchor === 'page' && layouts[block.id]);
   const displayPlacements = new Map<string, { left: number; top: number; width: number }>();
   const placedByLane = new Map<string, Array<{ left: number; right: number; top: number; bottom: number }>>();
@@ -3894,6 +4140,14 @@ function WorkspaceBlockLayer({
   for (const block of sortedVisibleBlocks) {
     const layout = layouts[block.id];
     const draft = drafts[block.id];
+    if (block.kind === 'drawing') {
+      displayPlacements.set(block.id, {
+        left: layout.left,
+        top: layout.pageTop,
+        width: layout.pageWidth
+      });
+      continue;
+    }
     const left = layout.left + (draft?.x ?? block.x) - block.x;
     let top = layout.pageTop + (draft?.y ?? layout.renderedY);
     const width = draft?.width ?? block.width;
@@ -3938,7 +4192,10 @@ function WorkspaceBlockLayer({
     }
   };
 
-  const startMove = (block: WorkspaceBlock, event: ReactMouseEvent<HTMLButtonElement>): void => {
+  const startMove = (block: WorkspaceBlock, event: ReactMouseEvent<HTMLElement>): void => {
+    if (event.button !== 0) {
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     document.body.classList.add('is-moving-workspace-block');
@@ -4046,7 +4303,8 @@ function WorkspaceBlockLayer({
         const placement = displayPlacements.get(block.id);
         const imagePayload = imageBlockPayload(block);
         const isImage = block.kind === 'image' && Boolean(imagePayload?.dataUrl);
-        const zoom = imageZoom[block.id] ?? 100;
+        const isDrawing = block.kind === 'drawing';
+        const layout = layouts[block.id];
         return (
           <article
             key={block.id}
@@ -4057,44 +4315,38 @@ function WorkspaceBlockLayer({
             style={{
               left: placement?.left,
               top: placement?.top,
-              width: placement?.width
+              width: placement?.width,
+              height: isDrawing ? layout.pageHeight : isImage ? block.height : undefined
             }}
           >
-            <button
-              type="button"
-              className="workspace-block-card__drag"
-              title={text.moveBlock}
-              aria-label={text.moveBlock}
-              onMouseDown={(event) => startMove(block, event)}
-            />
+            {!isImage && !isDrawing && (
+              <button
+                type="button"
+                className="workspace-block-card__drag"
+                title={text.moveBlock}
+                aria-label={text.moveBlock}
+                onMouseDown={(event) => startMove(block, event)}
+              />
+            )}
             {isImage && imagePayload?.dataUrl ? (
-              <>
-                <div className="workspace-block-card__image" aria-label={imagePayload.name ?? block.title}>
-                  <img
-                    src={imagePayload.dataUrl}
-                    alt={imagePayload.name ?? block.title}
-                    style={{ width: `${zoom}%` }}
-                  />
-                </div>
-                <div className="workspace-block-card__image-actions">
-                  <button type="button" title={text.unpinFromCanvas} aria-label={text.unpinFromCanvas} onClick={() => onDelete(block.id)}><PinOff size={14} /></button>
-                  <button type="button" title={text.deleteImage} aria-label={text.deleteImage} onClick={() => onDelete(block.id)}><Trash2 size={14} /></button>
-                  <button type="button" title={text.copyImage} aria-label={text.copyImage} onClick={() => void copyImage(imagePayload.dataUrl!)}><Copy size={14} /></button>
-                </div>
-                <label className="workspace-block-card__image-zoom" title={text.zoomImage}>
-                  <Minus size={13} />
-                  <input
-                    aria-label={text.zoomImage}
-                    type="range"
-                    min="50"
-                    max="200"
-                    value={zoom}
-                    onChange={(event) => setImageZoom((current) => ({ ...current, [block.id]: Number(event.target.value) }))}
-                  />
-                  <Plus size={13} />
-                  <span>{zoom}%</span>
-                </label>
-              </>
+              <WorkspaceImageBlock
+                block={block}
+                payload={imagePayload}
+                text={text}
+                onCopy={() => void copyImage(imagePayload.dataUrl!)}
+                onDelete={() => onDelete(block.id)}
+                onMove={(event) => startMove(block, event)}
+                onSave={onSave}
+              />
+            ) : isDrawing ? (
+              <WorkspaceDrawingBlock
+                block={block}
+                height={layout.pageHeight}
+                text={text}
+                width={layout.pageWidth}
+                onDelete={() => onDelete(block.id)}
+                onSave={onSave}
+              />
             ) : (
               <>
                 <button
@@ -4120,13 +4372,15 @@ function WorkspaceBlockLayer({
                 </button>
               </>
             )}
-            <button
-              type="button"
-              className="workspace-block-card__resize"
-              title={text.resizeBlock}
-              aria-label={text.resizeBlock}
-              onMouseDown={(event) => startResize(block, event)}
-            />
+            {!isDrawing && (
+              <button
+                type="button"
+                className="workspace-block-card__resize"
+                title={text.resizeBlock}
+                aria-label={text.resizeBlock}
+                onMouseDown={(event) => startResize(block, event)}
+              />
+            )}
           </article>
         );
       })}
@@ -4151,17 +4405,187 @@ function workspaceBlockLabel(block: WorkspaceBlock, text: ReaderText): string {
     return text.image;
   }
 
+  if (block.kind === 'drawing') {
+    return text.canvas;
+  }
+
   return block.kind;
 }
 
-function imageBlockPayload(block: WorkspaceBlock): { dataUrl?: string; name?: string } | undefined {
+interface WorkspaceImagePayload {
+  dataUrl?: string;
+  name?: string;
+  panX: number;
+  panY: number;
+  zoom: number;
+}
+
+function imageBlockPayload(block: WorkspaceBlock): WorkspaceImagePayload | undefined {
   if (block.kind !== 'image' || !block.payload) {
     return undefined;
   }
 
   const dataUrl = typeof block.payload.dataUrl === 'string' ? block.payload.dataUrl : undefined;
   const name = typeof block.payload.name === 'string' ? block.payload.name : undefined;
-  return { dataUrl, name };
+  const zoom = typeof block.payload.zoom === 'number' ? clamp(block.payload.zoom, 25, 800) : 100;
+  const panX = typeof block.payload.panX === 'number' ? Math.max(0, block.payload.panX) : 0;
+  const panY = typeof block.payload.panY === 'number' ? Math.max(0, block.payload.panY) : 0;
+  return { dataUrl, name, panX, panY, zoom };
+}
+
+function WorkspaceImageBlock({
+  block,
+  payload,
+  text,
+  onCopy,
+  onDelete,
+  onMove,
+  onSave
+}: {
+  block: WorkspaceBlock;
+  payload: WorkspaceImagePayload;
+  text: ReaderText;
+  onCopy(): void;
+  onDelete(): void;
+  onMove(event: ReactMouseEvent<HTMLElement>): void;
+  onSave(block: WorkspaceBlock): void;
+}): ReactElement {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const rightButtonHeldRef = useRef(false);
+  const persistTimerRef = useRef<number>();
+  const [zoom, setZoom] = useState(payload.zoom);
+
+  const persistView = useCallback((nextZoom: number, panX: number, panY: number): void => {
+    if (persistTimerRef.current) {
+      window.clearTimeout(persistTimerRef.current);
+    }
+    persistTimerRef.current = window.setTimeout(() => {
+      onSave({
+        ...block,
+        payload: {
+          ...block.payload,
+          zoom: Math.round(nextZoom),
+          panX: Math.round(Math.max(0, panX)),
+          panY: Math.round(Math.max(0, panY))
+        },
+        updatedAt: new Date().toISOString()
+      });
+    }, 180);
+  }, [block, onSave]);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      return;
+    }
+    viewport.scrollLeft = payload.panX;
+    viewport.scrollTop = payload.panY;
+  }, [block.id]);
+
+  useEffect(() => () => {
+    if (persistTimerRef.current) {
+      window.clearTimeout(persistTimerRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
+    const releaseRightButton = (): void => {
+      rightButtonHeldRef.current = false;
+    };
+    window.addEventListener('pointerup', releaseRightButton);
+    window.addEventListener('blur', releaseRightButton);
+    return () => {
+      window.removeEventListener('pointerup', releaseRightButton);
+      window.removeEventListener('blur', releaseRightButton);
+    };
+  }, []);
+
+  const resetZoom = (): void => {
+    const viewport = viewportRef.current;
+    setZoom(100);
+    if (viewport) {
+      viewport.scrollTo({ left: 0, top: 0 });
+      persistView(100, 0, 0);
+    }
+  };
+
+  const zoomAroundPointer = (event: ReactWheelEvent<HTMLDivElement>): void => {
+    if (!rightButtonHeldRef.current) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      return;
+    }
+
+    const rect = viewport.getBoundingClientRect();
+    const pointerX = event.clientX - rect.left;
+    const pointerY = event.clientY - rect.top;
+    const contentX = viewport.scrollLeft + pointerX;
+    const contentY = viewport.scrollTop + pointerY;
+    const step = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+    const nextZoom = clamp(zoom * step, 25, 800);
+    const ratio = nextZoom / zoom;
+    setZoom(nextZoom);
+
+    window.requestAnimationFrame(() => {
+      viewport.scrollLeft = contentX * ratio - pointerX;
+      viewport.scrollTop = contentY * ratio - pointerY;
+      persistView(nextZoom, viewport.scrollLeft, viewport.scrollTop);
+    });
+  };
+
+  return (
+    <div className="workspace-image">
+      <div
+        ref={viewportRef}
+        className="workspace-image__viewport"
+        onContextMenu={(event) => event.preventDefault()}
+        onMouseDown={(event) => {
+          if (event.button === 0) {
+            onMove(event);
+          }
+        }}
+        onPointerDown={(event) => {
+          if (event.button === 2) {
+            event.preventDefault();
+            event.stopPropagation();
+            rightButtonHeldRef.current = true;
+          }
+        }}
+        onPointerCancel={() => {
+          rightButtonHeldRef.current = false;
+        }}
+        onScroll={(event) => {
+          const viewport = event.currentTarget;
+          persistView(zoom, viewport.scrollLeft, viewport.scrollTop);
+        }}
+        onWheel={zoomAroundPointer}
+      >
+        <img
+          src={payload.dataUrl}
+          alt={payload.name ?? block.title}
+          draggable={false}
+          style={{ width: `${zoom}%` }}
+        />
+      </div>
+      <span className="workspace-image__zoom" aria-live="polite">{Math.round(zoom)}%</span>
+      <div className="workspace-block-card__image-actions">
+        <button type="button" title={text.resetImageZoom} aria-label={text.resetImageZoom} onClick={resetZoom}>
+          <Move size={13} />
+        </button>
+        <button type="button" title={text.copyImage} aria-label={text.copyImage} onClick={onCopy}>
+          <Copy size={13} />
+        </button>
+        <button type="button" title={text.deleteImage} aria-label={text.deleteImage} onClick={onDelete}>
+          <Trash2 size={13} />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function DockChatPanel({
@@ -4171,12 +4595,14 @@ function DockChatPanel({
   composerPrefill,
   pdfReadingSignal,
   uiLanguage,
+  codexEnabled,
   text,
   onClose,
   onPin,
   onPinImage,
   onSend,
   onUpdateCodexSettings,
+  onUpdateParticipantNames,
   onStop
 }: {
   busy: boolean;
@@ -4185,12 +4611,14 @@ function DockChatPanel({
   composerPrefill?: { text: string; nonce: string };
   pdfReadingSignal: number;
   uiLanguage: UiLanguage;
+  codexEnabled: boolean;
   text: ReaderText;
   onClose(): void;
   onPin(): void;
   onPinImage(attachment: ConversationAttachment): void;
   onSend(prompt: string, attachments: ConversationAttachment[]): void;
   onUpdateCodexSettings(settings: CodexConversationSettings): void;
+  onUpdateParticipantNames(names: ConversationParticipantNames): void;
   onStop(): void;
 }): ReactElement {
   const [draft, setDraft] = useState('');
@@ -4199,6 +4627,17 @@ function DockChatPanel({
   const [codexModels, setCodexModels] = useState<CodexModelInfo[]>([]);
   const [commandNotice, setCommandNotice] = useState<string>();
   const [configMenu, setConfigMenu] = useState<'model' | 'permissions'>();
+  const [participantEditorOpen, setParticipantEditorOpen] = useState(false);
+  const participantEditorLabel = uiLanguage === 'zh-CN' ? '修改对话称呼' : 'Rename conversation participants';
+  const defaultParticipantNames: ConversationParticipantNames = {
+    user: uiLanguage === 'zh-CN' ? '我' : 'You',
+    assistant: conversation.agentKind === 'codex' ? 'Codex' : 'Tessel'
+  };
+  const resolvedParticipantNames: ConversationParticipantNames = {
+    user: conversation.participantNames?.user?.trim() || defaultParticipantNames.user,
+    assistant: conversation.participantNames?.assistant?.trim() || defaultParticipantNames.assistant
+  };
+  const [participantNameDrafts, setParticipantNameDrafts] = useState(resolvedParticipantNames);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const configMenuRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -4206,7 +4645,7 @@ function DockChatPanel({
   const composingRef = useRef(false);
   const shouldFollowMessagesRef = useRef(true);
   const previousConversationIdRef = useRef(conversation.id);
-  const isCodex = conversation.agentKind === 'codex';
+  const isCodex = codexEnabled || conversation.agentKind === 'codex' || Boolean(conversation.codexThreadId || conversation.codexSettings);
   const codexSettings = conversation.codexSettings ?? {};
   const permissionMode = codexSettings.permissionMode ?? 'workspace-write';
   const selectedModel = codexModels.find((model) => model.id === codexSettings.model);
@@ -4218,6 +4657,17 @@ function DockChatPanel({
   const matchingSlashCommands = slashQuery.startsWith('/') && !slashQuery.includes(' ')
     ? slashCommands.filter((command) => command.command.startsWith(slashQuery.toLowerCase()))
     : [];
+
+  useEffect(() => {
+    setParticipantNameDrafts(resolvedParticipantNames);
+    setParticipantEditorOpen(false);
+  }, [
+    conversation.id,
+    conversation.participantNames?.assistant,
+    conversation.participantNames?.user,
+    conversation.agentKind,
+    uiLanguage
+  ]);
 
   useEffect(() => {
     setCommandNotice(undefined);
@@ -4272,6 +4722,10 @@ function DockChatPanel({
     }
 
     // Preserve a two-line starting field even before the user types.
+    if (!draft) {
+      textarea.style.height = '58px';
+      return;
+    }
     textarea.style.height = 'auto';
     textarea.style.height = `${Math.max(58, Math.min(textarea.scrollHeight, 144))}px`;
   }, [draft]);
@@ -4323,6 +4777,20 @@ function DockChatPanel({
       return;
     }
     onUpdateCodexSettings({ ...codexSettings, ...patch });
+  };
+
+  const commitParticipantNames = (): void => {
+    const nextNames: ConversationParticipantNames = {
+      user: participantNameDrafts.user.trim() || defaultParticipantNames.user,
+      assistant: participantNameDrafts.assistant.trim() || defaultParticipantNames.assistant
+    };
+    setParticipantNameDrafts(nextNames);
+    if (
+      nextNames.user !== resolvedParticipantNames.user ||
+      nextNames.assistant !== resolvedParticipantNames.assistant
+    ) {
+      onUpdateParticipantNames(nextNames);
+    }
   };
 
   const runSlashCommand = (rawCommand: string): boolean => {
@@ -4415,35 +4883,90 @@ function DockChatPanel({
   };
 
   return (
-    <section className={conversation.anchor ? 'dock-chat-panel has-anchor' : 'dock-chat-panel has-no-anchor'}>
+    <section className={[
+      'dock-chat-panel',
+      conversation.anchor ? 'has-anchor' : 'has-no-anchor',
+      participantEditorOpen ? 'has-participant-editor' : ''
+    ].filter(Boolean).join(' ')}>
       <header>
         <div className="dock-chat-panel__title">
           <span>{text.conversation}</span>
           <strong>{conversation.summary.title}</strong>
         </div>
-        <Badge value={`p.${conversation.pageNumber ?? '-'}`} />
-        <Button
-          type="button"
-          text
-          rounded
-          title={text.pinToCanvas}
-          aria-label={text.pinToCanvas}
-          onClick={onPin}
-        >
-          <Pin size={15} />
-        </Button>
-        <Button
-          type="button"
-          text
-          rounded
-          className="panel-close-button"
-          title={text.collapseChat}
-          aria-label={text.collapseChat}
-          onClick={onClose}
-        >
-          <X size={16} />
-        </Button>
+        <div className="dock-chat-panel__actions">
+          <Badge value={`p.${conversation.pageNumber ?? '-'}`} />
+          <Button
+            type="button"
+            text
+            rounded
+            className="participant-editor-button"
+            title={participantEditorLabel}
+            aria-label={participantEditorLabel}
+            aria-expanded={participantEditorOpen}
+            onClick={() => setParticipantEditorOpen((current) => !current)}
+          >
+            <Users size={15} />
+          </Button>
+          <Button
+            type="button"
+            text
+            rounded
+            title={text.pinToCanvas}
+            aria-label={text.pinToCanvas}
+            onClick={onPin}
+          >
+            <Pin size={15} />
+          </Button>
+          <Button
+            type="button"
+            text
+            rounded
+            className="panel-close-button"
+            title={text.collapseChat}
+            aria-label={text.collapseChat}
+            onClick={onClose}
+          >
+            <X size={16} />
+          </Button>
+        </div>
       </header>
+
+      {participantEditorOpen && (
+        <div className="dock-chat-panel__participant-editor" role="group" aria-label={participantEditorLabel}>
+          <label title={text.assistantDisplayName}>
+            <span>{text.assistantDisplayName}</span>
+            <input
+              value={participantNameDrafts.assistant}
+              maxLength={32}
+              disabled={busy}
+              aria-label={text.assistantDisplayName}
+              onChange={(event) => setParticipantNameDrafts((current) => ({ ...current, assistant: event.target.value }))}
+              onBlur={commitParticipantNames}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+          </label>
+          <label title={text.userDisplayName}>
+            <span>{text.userDisplayName}</span>
+            <input
+              value={participantNameDrafts.user}
+              maxLength={32}
+              disabled={busy}
+              aria-label={text.userDisplayName}
+              onChange={(event) => setParticipantNameDrafts((current) => ({ ...current, user: event.target.value }))}
+              onBlur={commitParticipantNames}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+          </label>
+        </div>
+      )}
 
       {conversation.anchor && <blockquote className="dock-chat-anchor">{conversation.anchor.quote}</blockquote>}
 
@@ -4469,9 +4992,13 @@ function DockChatPanel({
             const isStreamingMessage = busy && messageIndex === conversation.messages.length - 1;
             return (
               <article key={message.id} className={`chat-message chat-message--${message.role}`}>
-                {message.role === 'assistant' && <div className="chat-avatar">{conversation.agentKind === 'codex' ? 'C' : 'S'}</div>}
+                {message.role === 'assistant' && <div className="chat-avatar">{participantNameDrafts.assistant.trim().slice(0, 1).toUpperCase() || 'A'}</div>}
                 <div className="chat-message__content">
-                  <div className="chat-message__role">{message.role === 'assistant' ? conversation.agentKind === 'codex' ? 'Codex' : 'Tessel' : 'You'}</div>
+                  <div className="chat-message__role">
+                    {message.role === 'assistant'
+                      ? participantNameDrafts.assistant.trim() || defaultParticipantNames.assistant
+                      : participantNameDrafts.user.trim() || defaultParticipantNames.user}
+                  </div>
                   {message.attachments?.length ? (
                     <div className="chat-attachments">
                       {message.attachments.map((attachment) => (
@@ -5438,127 +5965,6 @@ function workspaceBlockCoordinateScale(
 
 function renderedWorkspaceBlockY(block: WorkspaceBlock, pageScale: number, coordinateScale: number): number {
   return block.y * ((sanitizeWorkspaceBlockScale(pageScale) ?? 1) / (sanitizeWorkspaceBlockScale(coordinateScale) ?? 1));
-}
-
-function readZoomAnchor(container: HTMLElement, clientX: number, clientY: number): ZoomAnchor {
-  const containerRect = container.getBoundingClientRect();
-  const offsetX = clamp(clientX - containerRect.left, 0, containerRect.width);
-  const offsetY = clamp(clientY - containerRect.top, 0, containerRect.height);
-  const page = pdfPageAtPoint(container, clientX, clientY);
-
-  if (!page) {
-    return {
-      clientX,
-      clientY,
-      offsetX,
-      offsetY,
-      scrollLeft: container.scrollLeft,
-      scrollTop: container.scrollTop
-    };
-  }
-
-  const pageRect = page.getBoundingClientRect();
-  return {
-    clientX,
-    clientY,
-    offsetX,
-    offsetY,
-    scrollLeft: container.scrollLeft,
-    scrollTop: container.scrollTop,
-    pageNumber: page.dataset.pageNumber,
-    pageWidth: pageRect.width,
-    pageOffsetX: clientX - pageRect.left,
-    pageOffsetY: clientY - pageRect.top
-  };
-}
-
-function pdfPageAtPoint(container: HTMLElement, clientX: number, clientY: number): HTMLElement | null {
-  const target = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
-  const directPage = target?.closest<HTMLElement>('.page[data-page-number]');
-  if (directPage && container.contains(directPage)) {
-    return directPage;
-  }
-
-  if (target?.closest('.reader-dock-lane, .workspace-block-card, .selection-toolbar, button, input, textarea, select, [contenteditable="true"]')) {
-    return null;
-  }
-
-  const pages = Array.from(container.querySelectorAll<HTMLElement>('.page[data-page-number]'));
-  return pages.find((page) => {
-    const rect = page.getBoundingClientRect();
-    return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
-  }) ?? null;
-}
-
-function readViewportZoomAnchor(container: HTMLElement, runtime: PdfRuntime): ZoomAnchor {
-  const containerRect = container.getBoundingClientRect();
-  const centerX = containerRect.left + containerRect.width / 2;
-  const centerY = containerRect.top + containerRect.height / 2;
-  const centeredAnchor = readZoomAnchor(container, centerX, centerY);
-  if (centeredAnchor.pageNumber) {
-    return centeredAnchor;
-  }
-
-  const currentPage = container.querySelector<HTMLElement>(`.page[data-page-number="${runtime.pdfViewer.currentPageNumber}"]`);
-  if (currentPage) {
-    const pageRect = currentPage.getBoundingClientRect();
-    const clientX = clamp((Math.max(pageRect.left, containerRect.left) + Math.min(pageRect.right, containerRect.right)) / 2, containerRect.left, containerRect.right);
-    const clientY = clamp((Math.max(pageRect.top, containerRect.top) + Math.min(pageRect.bottom, containerRect.bottom)) / 2, containerRect.top, containerRect.bottom);
-    return readZoomAnchor(container, clientX, clientY);
-  }
-
-  return centeredAnchor;
-}
-
-function prepareZoomScrollSpace(container: HTMLElement, anchor: ZoomAnchor, scaleRatio: number): void {
-  if (anchor.pageOffsetX === undefined || scaleRatio <= 1) {
-    return;
-  }
-
-  const canvas = container.querySelector<HTMLElement>('.pdf-canvas');
-  if (!canvas) {
-    return;
-  }
-
-  const neededScrollLeft = anchor.scrollLeft + anchor.pageOffsetX * (scaleRatio - 1) + 24;
-  const currentMaxScrollLeft = Math.max(0, container.scrollWidth - container.clientWidth);
-  if (neededScrollLeft <= currentMaxScrollLeft) {
-    return;
-  }
-
-  const currentPaddingRight = Number.parseFloat(window.getComputedStyle(canvas).paddingRight) || 0;
-  canvas.style.paddingRight = `${Math.ceil(currentPaddingRight + neededScrollLeft - currentMaxScrollLeft)}px`;
-}
-
-function restoreZoomAnchor(container: HTMLElement, anchor: ZoomAnchor, scaleRatio: number, onRestored?: () => void): void {
-  const restore = (): { left: number; top: number } => {
-    if (anchor.pageNumber && anchor.pageOffsetX !== undefined && anchor.pageOffsetY !== undefined) {
-      const page = container.querySelector<HTMLElement>(`.page[data-page-number="${anchor.pageNumber}"]`);
-      if (page) {
-        const pageRect = page.getBoundingClientRect();
-        container.scrollLeft += pageRect.left + anchor.pageOffsetX * scaleRatio - anchor.clientX;
-        container.scrollTop += pageRect.top + anchor.pageOffsetY * scaleRatio - anchor.clientY;
-        return { left: container.scrollLeft, top: container.scrollTop };
-      }
-    }
-
-    container.scrollLeft = anchor.scrollLeft * scaleRatio + anchor.offsetX * (scaleRatio - 1);
-    container.scrollTop = anchor.scrollTop * scaleRatio + anchor.offsetY * (scaleRatio - 1);
-    return { left: container.scrollLeft, top: container.scrollTop };
-  };
-
-  window.requestAnimationFrame(() => {
-    const restoredScroll = restore();
-    window.requestAnimationFrame(() => {
-      const userScrolledAfterRestore =
-        Math.abs(container.scrollLeft - restoredScroll.left) > 2 ||
-        Math.abs(container.scrollTop - restoredScroll.top) > 2;
-      if (!userScrolledAfterRestore) {
-        restore();
-      }
-      onRestored?.();
-    });
-  });
 }
 
 function selectionFromWindow(viewerElement: HTMLDivElement | null): PdfSelectionPayload | undefined {

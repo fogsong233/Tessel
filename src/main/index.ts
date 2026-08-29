@@ -235,6 +235,10 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
   });
 
   ipcMain.handle('pdf:load', async (_event, documentId: string) => {
+    const testLoadDelay = Number(process.env.SIDELIGHT_E2E_PDF_LOAD_DELAY_MS ?? 0);
+    if (Number.isFinite(testLoadDelay) && testLoadDelay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(testLoadDelay, 5_000)));
+    }
     const document = await store.getDocument(documentId);
     if (!document) {
       return null;

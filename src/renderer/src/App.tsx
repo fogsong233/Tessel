@@ -36,6 +36,7 @@ import {
   Conversation,
   ConversationAttachment,
   ConversationMessage,
+  ConversationParticipantNames,
   ConversationSummary,
   defaultAppPreferences,
   NoteDocument,
@@ -624,12 +625,39 @@ export function App(): ReactElement {
     codexSettings: CodexConversationSettings
   ): Promise<void> {
     const conversation = conversations.find((candidate) => candidate.id === conversationId);
-    if (!conversation || conversation.agentKind !== 'codex' || busy) {
+    const canUseCodex = Boolean(
+      conversation && (
+        appPreferences.experimentalCodexAgent.enabled ||
+        conversation.agentKind === 'codex' ||
+        conversation.codexThreadId ||
+        conversation.codexSettings
+      )
+    );
+    if (!conversation || !canUseCodex || busy) {
       return;
     }
     await saveConversationLocally({
       ...conversation,
+      agentKind: 'codex',
       codexSettings,
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  async function updateConversationParticipantNames(
+    conversationId: string,
+    participantNames: ConversationParticipantNames
+  ): Promise<void> {
+    const conversation = conversations.find((candidate) => candidate.id === conversationId);
+    if (!conversation || busy) {
+      return;
+    }
+    await saveConversationLocally({
+      ...conversation,
+      participantNames: {
+        user: participantNames.user.trim().slice(0, 32),
+        assistant: participantNames.assistant.trim().slice(0, 32)
+      },
       updatedAt: new Date().toISOString()
     });
   }
@@ -1460,6 +1488,7 @@ export function App(): ReactElement {
         documentLoadPending={readerLoadPending}
         documentLoadError={readerLoadError}
         uiLanguage={appPreferences.uiLanguage}
+        codexEnabled={appPreferences.experimentalCodexAgent.enabled}
         selectionColors={appPreferences.selectionColors}
         sidebarColor={resolvedSidebarColor}
         sidebarActiveColor={resolvedSidebarActiveColor}
@@ -1498,6 +1527,8 @@ export function App(): ReactElement {
           void sendMessage(conversationId, prompt, attachments, toolContext)}
         onUpdateConversationCodexSettings={(conversationId, settings) =>
           void updateConversationCodexSettings(conversationId, settings)}
+        onUpdateConversationParticipantNames={(conversationId, names) =>
+          void updateConversationParticipantNames(conversationId, names)}
         onStopGeneration={stopActiveGeneration}
         noteBusy={noteBusy}
         outlineGenerationBusy={outlineGenerationBusy}
@@ -1964,9 +1995,8 @@ function ReaderSettingsPanel({
               </div>
               {updateState?.releaseNotes && <label className="reader-settings__notes">{t.releaseNotes}<textarea readOnly rows={4} value={updateState.releaseNotes} /></label>}
               <div className="reader-settings__actions reader-settings__actions--inline">
-                <button className="quiet-button" type="button" disabled={updateState?.status === 'checking' || updateState?.status === 'downloading'} onClick={() => void window.sidelight.checkForAppUpdates()}>{t.checkForUpdates}</button>
+                <button className="quiet-button" type="button" disabled={updateState?.status === 'checking' || updateState?.status === 'downloading' || updateState?.status === 'installing'} onClick={() => void window.sidelight.checkForAppUpdates()}>{t.checkForUpdates}</button>
                 {updateState?.status === 'available' && <>
-                  <button className="quiet-button" type="button" onClick={() => void window.sidelight.dismissAppUpdate()}>{t.later}</button>
                   <button className="primary-button" type="button" onClick={() => void window.sidelight.downloadAppUpdate()}>{t.downloadUpdate}</button>
                 </>}
                 {updateState?.status === 'ready' && <button className="primary-button" type="button" onClick={() => void window.sidelight.installAppUpdate()}>{t.restartToUpdate}</button>}
@@ -2124,8 +2154,8 @@ function readerSettingsText(language: UiLanguage) {
       webDavSync: 'WebDAV 同步', perPdfMetadata: '按 PDF 保存元数据', serverUrl: '服务器 URL', folder: '文件夹', username: '用户名', password: '密码', storedPassword: '已保存。输入新密码可替换。',
       storageOverview: '本地存储概览', storageDescription: '查看本机保存的书籍、阅读状态和衍生内容；不会展示密钥。', refresh: '刷新', books: '书籍', pdfStorage: 'PDF 文件', metadataStorage: 'Tessel 元数据', metadataLocation: '元数据位置', noStoredBooks: '还没有保存的书籍。打开 PDF 后会显示在这里。', items: '项内容', fileStatus: '文件状态', available: '可访问', missing: '文件已移动或不可访问', fileSize: '文件大小', pages: '总页数', lastReadPage: '上次阅读页', addedAt: '加入时间', lastOpened: '最近打开', filePath: '文件路径', storedContent: '已保存内容', conversations: '对话', messages: '消息', translations: '翻译', notes: '笔记', marks: '标注', bookmarks: '书签', canvasItems: '画布内容', outlineItems: 'AI 目录项', noBookContent: '这本书目前只有文件与阅读记录。', highlight: '高亮', underline: '划线',
       languageDescription: '界面文本和 AI 回复', uiLanguage: '界面语言', aiPreferredLanguage: 'AI 首选语言',
-      updateDescription: '自动检查 GitHub Releases；下载和安装均由你确认。未签名 macOS 版使用手动更新。', currentVersion: '当前版本', updateStatus: '更新状态', availableVersion: '可用版本', releaseNotes: '发行说明', checkForUpdates: '检查更新', downloadUpdate: '下载更新', later: '稍后', openDownloads: '前往下载页', restartToUpdate: '重启并更新', cancel: '取消', save: '保存',
-      updateUnsupported: '更新仅在已安装的正式版中可用。', updateManualMac: '当前未签名 macOS 版本请下载新安装包更新。', updateChecking: '正在检查更新...', updateAvailable: '发现新版本，等待下载确认。', updateDownloading: (percent?: number) => `正在下载更新${percent === undefined ? '...' : `（${percent}%）`}`, updateReady: '更新已下载，重启即可安装。', updateCurrent: '已是最新版本。', updateError: '无法检查更新。'
+      updateDescription: '自动检查并后台下载 GitHub Releases；下载完成后会在退出时覆盖安装，也可立即重启更新。未签名 macOS 版使用手动更新。', currentVersion: '当前版本', updateStatus: '更新状态', availableVersion: '可用版本', releaseNotes: '发行说明', checkForUpdates: '检查更新', downloadUpdate: '重试下载', later: '稍后', openDownloads: '前往下载页', restartToUpdate: '重启并更新', cancel: '取消', save: '保存',
+      updateUnsupported: '更新仅在已安装的正式版中可用。', updateManualMac: '当前未签名 macOS 版本请下载新安装包更新。', updateChecking: '正在检查更新...', updateAvailable: '发现新版本，正在准备后台下载。', updateDownloading: (percent?: number) => `正在下载更新${percent === undefined ? '...' : `（${percent}%）`}`, updateReady: '更新已下载；退出时会自动安装，也可立即重启更新。', updateInstalling: '正在覆盖安装并重新启动...', updateCurrent: '已是最新版本。', updateError: '无法检查更新。'
     };
   }
   return {
@@ -2136,8 +2166,8 @@ function readerSettingsText(language: UiLanguage) {
     webDavSync: 'WebDAV sync', perPdfMetadata: 'Per-PDF metadata', serverUrl: 'Server URL', folder: 'Folder', username: 'Username', password: 'Password', storedPassword: 'Stored. Enter a new password to replace it.',
     storageOverview: 'Local storage overview', storageDescription: 'Inspect locally stored books, reading state, and derived content. Secrets are never shown.', refresh: 'Refresh', books: 'Books', pdfStorage: 'PDF files', metadataStorage: 'Tessel metadata', metadataLocation: 'Metadata location', noStoredBooks: 'No books are stored yet. Open a PDF and it will appear here.', items: 'items', fileStatus: 'File status', available: 'Available', missing: 'Moved or unavailable', fileSize: 'File size', pages: 'Pages', lastReadPage: 'Last read page', addedAt: 'Added', lastOpened: 'Last opened', filePath: 'File path', storedContent: 'Stored content', conversations: 'Conversations', messages: 'Messages', translations: 'Translations', notes: 'Notes', marks: 'Annotations', bookmarks: 'Bookmarks', canvasItems: 'Canvas items', outlineItems: 'AI outline items', noBookContent: 'This book currently contains only its file and reading record.', highlight: 'Highlight', underline: 'Underline',
     languageDescription: 'Interface text and AI responses', uiLanguage: 'UI language', aiPreferredLanguage: 'AI preferred language',
-    updateDescription: 'Checks GitHub Releases automatically; downloading and installing require your confirmation. Unsigned macOS builds update manually.', currentVersion: 'Current version', updateStatus: 'Update status', availableVersion: 'Available version', releaseNotes: 'Release notes', checkForUpdates: 'Check for updates', downloadUpdate: 'Download update', later: 'Later', openDownloads: 'Open downloads', restartToUpdate: 'Restart to update', cancel: 'Cancel', save: 'Save',
-    updateUnsupported: 'Updates are available in installed releases only.', updateManualMac: 'This unsigned macOS build is updated by downloading a new installer.', updateChecking: 'Checking for updates...', updateAvailable: 'A new version is available. Choose whether to download it.', updateDownloading: (percent?: number) => `Downloading update${percent === undefined ? '...' : ` (${percent}%)`}`, updateReady: 'Update downloaded. Restart to install.', updateCurrent: 'You are up to date.', updateError: 'Unable to check for updates.'
+    updateDescription: 'Checks and downloads GitHub Releases in the background. A downloaded update replaces the current install on exit, or you can restart now. Unsigned macOS builds update manually.', currentVersion: 'Current version', updateStatus: 'Update status', availableVersion: 'Available version', releaseNotes: 'Release notes', checkForUpdates: 'Check for updates', downloadUpdate: 'Retry download', later: 'Later', openDownloads: 'Open downloads', restartToUpdate: 'Restart and update', cancel: 'Cancel', save: 'Save',
+    updateUnsupported: 'Updates are available in installed releases only.', updateManualMac: 'This unsigned macOS build is updated by downloading a new installer.', updateChecking: 'Checking for updates...', updateAvailable: 'A new version is available. Preparing the background download.', updateDownloading: (percent?: number) => `Downloading update${percent === undefined ? '...' : ` (${percent}%)`}`, updateReady: 'Update downloaded. It will install on exit, or you can restart now.', updateInstalling: 'Replacing the current install and restarting...', updateCurrent: 'You are up to date.', updateError: 'Unable to check for updates.'
   };
 }
 
@@ -2151,6 +2181,7 @@ function updateStatusText(state: AppUpdateState | undefined, text: ReturnType<ty
     case 'available': return state.message ? `${text.updateAvailable} ${state.message}` : text.updateAvailable;
     case 'downloading': return text.updateDownloading(state.downloadPercent);
     case 'ready': return state.message ? `${text.updateReady} ${state.message}` : text.updateReady;
+    case 'installing': return text.updateInstalling;
     case 'not-available': return text.updateCurrent;
     case 'error': return state.message ? `${text.updateError} ${state.message}` : text.updateError;
     default: return text.updateChecking;

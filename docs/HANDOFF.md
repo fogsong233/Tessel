@@ -30,6 +30,10 @@ The intended reading loop is:
 - `src/renderer/src/App.tsx`: application state and reader workflows.
 - `src/renderer/src/PdfReader.tsx`: PDF.js viewer, dock, selection, marks, and
   spatial workspace.
+- `src/renderer/src/reader/pdfZoom.ts`: page-relative zoom anchor capture and
+  restoration, isolated from the PDF.js runtime.
+- `src/renderer/src/reader/WorkspaceDrawingBlock.tsx`: persisted vector
+  whiteboard strokes, pressure handling, and lasso editing.
 - `src/shared/domain.ts`: shared domain and `TesselApi` contract.
 
 ## Current Capabilities
@@ -45,7 +49,10 @@ The intended reading loop is:
 - Page-anchored conversation, note, translation, and image blocks that can be
   dragged, resized, reopened, and removed without deleting their source.
 - English and Simplified Chinese UI, configurable colors and fonts.
-- Explicit GitHub Release update flow for installed builds.
+- Installed Windows builds check GitHub Releases and download updates in the
+  background. Downloaded NSIS updates install silently on exit, or immediately
+  through “Restart and update”, while preserving the running executable's custom
+  install directory.
 - Standalone singleton settings window and compact custom Windows chrome.
 
 ## Storage And Sync

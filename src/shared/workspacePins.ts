@@ -90,6 +90,17 @@ export const workspaceBlockKindSpecs: Record<WorkspaceBlockKind, WorkspaceBlockK
     defaultContentKind: 'image',
     openableSource: false
   },
+  drawing: {
+    kind: 'drawing',
+    label: 'Drawing',
+    defaultWidth: 612,
+    minWidth: 320,
+    maxWidth: 3200,
+    minHeight: 420,
+    maxHeight: 4200,
+    defaultContentKind: 'custom',
+    openableSource: false
+  },
   link: {
     kind: 'link',
     label: 'Link',

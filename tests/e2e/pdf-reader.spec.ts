@@ -48,6 +48,7 @@ test.describe('PDF reader flow', () => {
         FAKE_CODEX_LOG: fakeCodexLog,
         FAKE_CODEX_AUTH: useExecTransport ? 'api-key' : 'chatgpt',
         TESSEL_CODEX_TRANSPORT: testInfo.title.includes('exec checkpoint') ? 'exec' : '',
+        SIDELIGHT_E2E_PDF_LOAD_DELAY_MS: testInfo.title.includes('stable while loading') ? '900' : '',
         SIDELIGHT_USER_DATA_DIR: userDataDir,
         SIDELIGHT_E2E_HIDE_WINDOWS: '1',
         SIDELIGHT_E2E_ALLOW_LOOPBACK_MEDIA: '1'
@@ -74,6 +75,42 @@ test.describe('PDF reader flow', () => {
       };
       return store.documents[0];
     }).toMatchObject({ id: `pdf_${expectedHash}`, fingerprint: { hash: expectedHash } });
+  });
+
+  test('keeps the sidebar and PDF anchor stable while loading and zooming', async () => {
+    await expect(page.locator('.pdf-state')).toBeVisible();
+    const loadingLayout = await readReaderLayout(page);
+    expect(loadingLayout.contained).toBe(true);
+    expect(loadingLayout.ordered).toBe(true);
+
+    await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
+    await expect(page.locator('.pdf-state')).toHaveCount(0);
+    const readyLayout = await readReaderLayout(page);
+    expect(readyLayout.contained).toBe(true);
+    expect(readyLayout.ordered).toBe(true);
+    expect(Math.abs(readyLayout.left - loadingLayout.left)).toBeLessThanOrEqual(1);
+    expect(Math.abs(readyLayout.width - loadingLayout.width)).toBeLessThanOrEqual(1);
+
+    for (const zoomAction of ['Zoom out', 'Zoom out', 'Zoom in', 'Zoom in']) {
+      const anchorBefore = await readPdfViewportAnchor(page);
+      expect(anchorBefore.pageNumber).toBe('1');
+      await page.getByTitle(zoomAction).click();
+      await expect.poll(async () => {
+        const anchorAfter = await readPdfViewportAnchor(page, {
+          clientX: anchorBefore.clientX,
+          clientY: anchorBefore.clientY
+        });
+        return Boolean(
+          anchorAfter.pageNumber === anchorBefore.pageNumber &&
+          Math.abs(anchorAfter.xRatio - anchorBefore.xRatio) < 0.035 &&
+          Math.abs(anchorAfter.yRatio - anchorBefore.yRatio) < 0.035
+        );
+      }).toBe(true);
+      await expect(page.getByRole('textbox', { name: 'Page' })).toHaveValue('1');
+      const zoomedLayout = await readReaderLayout(page);
+      expect(zoomedLayout).toMatchObject({ contained: true, ordered: true });
+      expect(Math.abs(zoomedLayout.width - readyLayout.width)).toBeLessThanOrEqual(1);
+    }
   });
 
   test('loads a range-backed PDF larger than the initial reader buffer', async () => {
@@ -107,7 +144,7 @@ test.describe('PDF reader flow', () => {
     await expect(page.locator('.workspace-block-card--conversation')).toBeVisible();
   });
 
-  test('renders image pins as borderless media with hover controls and zoom', async () => {
+  test('keeps image pins in a fixed viewport and zooms around the pointer', async () => {
     const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
       documents: Array<{ id: string }>;
     };
@@ -143,12 +180,174 @@ test.describe('PDF reader flow', () => {
     await page.reload();
     const card = page.locator('.workspace-block-card--image');
     await expect(card).toBeVisible();
-    await expect(card).toHaveCSS('border-top-width', '0px');
+    await expect(card).toHaveCSS('height', '220px');
     await card.hover();
     await expect(card.getByTitle('Copy image')).toBeVisible();
-    const zoom = card.getByLabel('Zoom image');
-    await zoom.fill('150');
-    await expect(card.locator('img')).toHaveAttribute('style', /width: 150%/);
+    const viewport = card.locator('.workspace-image__viewport');
+    await expect(viewport).toHaveCSS('overflow-x', 'auto');
+    await expect(viewport).toHaveCSS('scrollbar-width', 'none');
+    const box = await viewport.boundingBox();
+    expect(box).toBeTruthy();
+    await viewport.dispatchEvent('pointerdown', {
+      pointerId: 8,
+      pointerType: 'mouse',
+      button: 2,
+      buttons: 2,
+      clientX: box!.x + box!.width * 0.7,
+      clientY: box!.y + box!.height * 0.4
+    });
+    await viewport.dispatchEvent('wheel', {
+      deltaY: -120,
+      clientX: box!.x + box!.width * 0.7,
+      clientY: box!.y + box!.height * 0.4
+    });
+    await page.locator('body').dispatchEvent('pointerup', { pointerId: 8, button: 2, buttons: 0 });
+    await expect(card.locator('img')).toHaveAttribute('style', /width: 112%/);
+    await expect.poll(async () => {
+      const saved = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+        workspaceBlocks: Array<{ id: string; payload?: { zoom?: number } }>;
+      };
+      return saved.workspaceBlocks.find((block) => block.id === 'image_pin_fixture')?.payload?.zoom;
+    }).toBe(112);
+  });
+
+  test('adds a page-sized vector whiteboard and persists pressure-ready strokes', async () => {
+    test.setTimeout(90_000);
+    await expect(page.locator('.pdfViewer .page[data-page-number="1"]')).toBeVisible();
+    await page.getByRole('button', { name: 'Whiteboard', exact: true }).click();
+    await page.getByRole('button', { name: 'Add whiteboard on right' }).click();
+
+    const board = page.locator('.workspace-block-card--drawing');
+    const pdfPage = page.locator('.pdfViewer .page[data-page-number="1"]');
+    await expect(board).toBeVisible();
+    const boardBox = await board.boundingBox();
+    const pageBox = await pdfPage.boundingBox();
+    expect(boardBox).toBeTruthy();
+    expect(pageBox).toBeTruthy();
+    expect(Math.abs(boardBox!.width - pageBox!.width)).toBeLessThanOrEqual(2);
+    expect(Math.abs(boardBox!.height - pageBox!.height)).toBeLessThanOrEqual(2);
+
+    for (const zoomAction of [
+      'Zoom out', 'Zoom out', 'Zoom out', 'Zoom out',
+      'Zoom in', 'Zoom in'
+    ]) {
+      await page.getByTitle(zoomAction).click();
+      await page.waitForTimeout(1_000);
+      const [nextBoardBox, nextPageBox, viewport] = await Promise.all([
+        board.boundingBox(),
+        pdfPage.boundingBox(),
+        page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
+      ]);
+      expect(nextBoardBox).toBeTruthy();
+      expect(nextPageBox).toBeTruthy();
+      expect(nextBoardBox!.x).toBeLessThan(viewport.width);
+      expect(nextBoardBox!.x + nextBoardBox!.width).toBeGreaterThan(0);
+      expect(nextBoardBox!.y).toBeLessThan(viewport.height);
+      expect(nextBoardBox!.y + nextBoardBox!.height).toBeGreaterThan(0);
+      expect(Math.abs(nextBoardBox!.height - nextPageBox!.height)).toBeLessThanOrEqual(2);
+      expect(Math.abs(nextBoardBox!.width - nextPageBox!.width)).toBeLessThanOrEqual(2);
+      await expect(page.getByRole('textbox', { name: 'Page' })).toHaveValue('1');
+    }
+
+    const surface = board.locator('.workspace-drawing__surface');
+    await expect.poll(async () => {
+      const [box, viewport] = await Promise.all([
+        surface.boundingBox(),
+        page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
+      ]);
+      return Boolean(box && box.x < viewport.width && box.x + box.width > 0);
+    }).toBe(true);
+    const surfaceBox = await surface.boundingBox();
+    expect(surfaceBox).toBeTruthy();
+    const viewportSize = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+    const visibleLeft = Math.max(0, surfaceBox!.x);
+    const visibleRight = Math.min(viewportSize.width, surfaceBox!.x + surfaceBox!.width);
+    const visibleTop = Math.max(0, surfaceBox!.y);
+    const visibleBottom = Math.min(viewportSize.height, surfaceBox!.y + surfaceBox!.height);
+    const drawingX = visibleLeft + (visibleRight - visibleLeft) * 0.78;
+    const drawingY = visibleTop + (visibleBottom - visibleTop) * 0.58;
+    const drawingHit = await page.evaluate(({ x, y }) => {
+      const element = document.elementFromPoint(x, y);
+      return {
+        className: element?.getAttribute('class'),
+        tagName: element?.tagName,
+        x,
+        y,
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight
+      };
+    }, {
+      x: drawingX,
+      y: drawingY
+    });
+    expect(drawingHit.tagName).toBe('svg');
+    expect(drawingHit.className).toContain('workspace-drawing__surface');
+    await page.mouse.move(drawingX, drawingY);
+    await page.mouse.down();
+    await page.mouse.move(drawingX - 72, drawingY + 60, { steps: 8 });
+    await page.mouse.move(drawingX - 150, drawingY + 15, { steps: 8 });
+    await page.mouse.up();
+    await expect(surface.locator('path')).toHaveCount(1);
+
+    await board.getByRole('button', { name: 'Lasso tool' }).click();
+    await page.mouse.move(drawingX + 30, drawingY - 30);
+    await page.mouse.down();
+    await page.mouse.move(drawingX + 30, drawingY + 90, { steps: 5 });
+    await page.mouse.move(drawingX - 185, drawingY + 90, { steps: 7 });
+    await page.mouse.move(drawingX - 185, drawingY - 30, { steps: 5 });
+    await page.mouse.move(drawingX + 30, drawingY - 30, { steps: 7 });
+    await page.mouse.up();
+    await expect(surface.locator('path.is-selected')).toHaveCount(1);
+
+    await expect.poll(async () => {
+      const saved = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+        workspaceBlocks: Array<{ kind: string; payload?: { strokes?: Array<{ points?: number[][] }> } }>;
+      };
+      return saved.workspaceBlocks.find((block) => block.kind === 'drawing')?.payload?.strokes?.[0]?.points?.length;
+    }, { timeout: 8_000 }).toBeGreaterThan(3);
+
+    await page.reload();
+    await expect(page.locator('.workspace-block-card--drawing .workspace-drawing__surface path')).toHaveCount(1);
+  });
+
+  test('renames both conversation participants and persists their transcript labels', async () => {
+    const documentId = `pdf_${createHash('sha256').update(await readFile(pdfPath)).digest('hex')}`;
+    const now = new Date().toISOString();
+    await page.evaluate(async ({ documentId, now }) => {
+      await window.sidelight.saveConversation({
+        conversation: {
+          id: 'chat_participant_names_fixture',
+          documentId,
+          pageNumber: 1,
+          mode: 'ask',
+          agentKind: 'codex',
+          summary: { title: 'Participant names', brief: 'Editable participant name fixture.', keywords: [] },
+          messages: [
+            { id: 'msg_names_user', role: 'user', content: 'Question', createdAt: now },
+            { id: 'msg_names_assistant', role: 'assistant', content: 'Answer', createdAt: now }
+          ],
+          createdAt: now,
+          updatedAt: now
+        }
+      });
+    }, { documentId, now });
+
+    await page.reload();
+    await page.getByRole('button', { name: 'Rename conversation participants' }).click();
+    const assistantName = page.getByLabel('AI name');
+    const userName = page.getByLabel('My name');
+    await assistantName.fill('Atlas');
+    await assistantName.press('Enter');
+    await userName.fill('Lin');
+    await userName.press('Enter');
+    await expect(page.locator('.chat-message--assistant .chat-message__role')).toHaveText('Atlas');
+    await expect(page.locator('.chat-message--user .chat-message__role')).toHaveText('Lin');
+    await expect.poll(async () => {
+      const saved = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+        conversations: Array<{ id: string; participantNames?: { user: string; assistant: string } }>;
+      };
+      return saved.conversations.find((conversation) => conversation.id === 'chat_participant_names_fixture')?.participantNames;
+    }).toEqual({ user: 'Lin', assistant: 'Atlas' });
   });
 
   test('renders agent local images and local result links without routing through localhost', async () => {
@@ -373,6 +572,55 @@ test.describe('PDF reader flow', () => {
     }).toBe('full-access');
   });
 
+  test('restores per-conversation Codex controls for a chat created before Codex was enabled', async () => {
+    await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
+    const documentId = `pdf_${createHash('sha256').update(await readFile(pdfPath)).digest('hex')}`;
+    const now = new Date().toISOString();
+    await page.evaluate(async ({ documentId, now }) => {
+      const preferences = await window.sidelight.getAppPreferences();
+      await window.sidelight.saveAppPreferences({
+        ...preferences,
+        experimentalCodexAgent: {
+          ...preferences.experimentalCodexAgent,
+          enabled: true
+        }
+      });
+      await window.sidelight.saveConversation({
+        conversation: {
+          id: 'chat_codex_upgrade_fixture',
+          documentId,
+          pageNumber: 1,
+          mode: 'ask',
+          agentKind: 'default',
+          summary: { title: 'Existing chat', brief: 'Created before enabling Codex.', keywords: [] },
+          messages: [],
+          createdAt: now,
+          updatedAt: now
+        }
+      });
+    }, { documentId, now });
+
+    await page.reload();
+    const modelButton = page.getByRole('button', { name: 'Current chat model' });
+    await expect(modelButton).toBeVisible();
+    await modelButton.click();
+    await page.getByRole('option').filter({ hasText: 'GPT Test Mini' }).click();
+    await modelButton.click();
+    await page.getByRole('group', { name: 'Reasoning effort' }).getByRole('button', { name: 'Medium' }).click();
+
+    await expect.poll(async () => {
+      const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+        conversations: Array<{ id: string; agentKind?: string; codexSettings?: { model?: string; effort?: string } }>;
+      };
+      const conversation = store.conversations.find((candidate) => candidate.id === 'chat_codex_upgrade_fixture');
+      return {
+        agentKind: conversation?.agentKind,
+        model: conversation?.codexSettings?.model,
+        effort: conversation?.codexSettings?.effort
+      };
+    }).toEqual({ agentKind: 'codex', model: 'gpt-test-mini', effort: 'medium' });
+  });
+
   test('steers an active Codex turn and persists the guidance in the same chat', async () => {
     await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
     const documentId = `pdf_${createHash('sha256').update(await readFile(pdfPath)).digest('hex')}`;
@@ -487,8 +735,18 @@ test.describe('PDF reader flow', () => {
     await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
     await selectPdfText(page);
     await page.locator('.selection-toolbar').getByRole('button', { name: /^Translate$/i }).click();
-    await expect(page.locator('.transient-aid-panel')).toContainText('Translated quickly.');
-    await page.locator('.transient-aid-panel').getByTitle('Pin to learning space').click();
+    const translationPanel = page.locator('.transient-aid-panel');
+    await expect(translationPanel).toContainText('Translated quickly.');
+    const headerAlignment = await translationPanel.locator('> header').evaluate((header) => {
+      const title = header.querySelector('.transient-aid-panel__title')?.getBoundingClientRect();
+      const closeButton = header.querySelector('.panel-close-button')?.getBoundingClientRect();
+      if (!title || !closeButton) {
+        return Number.POSITIVE_INFINITY;
+      }
+      return Math.abs(title.top + title.height / 2 - (closeButton.top + closeButton.height / 2));
+    });
+    expect(headerAlignment).toBeLessThan(2);
+    await translationPanel.getByTitle('Pin to learning space').click();
     await expect(page.locator('.workspace-block-card--translation')).toBeVisible();
 
     await expect.poll(async () => {
@@ -619,10 +877,15 @@ test.describe('PDF reader flow', () => {
     await expect(composer).toHaveCSS('font-family', /Iowan|Charter|Georgia|serif/);
     expect(await composer.evaluate((textarea) => textarea.getBoundingClientRect().height)).toBeGreaterThanOrEqual(58);
     const composerGeometry = await page.locator('.chat-composer__row').evaluate((row) => {
-      const textarea = row.querySelector('textarea')!.getBoundingClientRect();
+      const textareaElement = row.querySelector('textarea')!;
+      const textarea = textareaElement.getBoundingClientRect();
+      const textareaStyle = getComputedStyle(textareaElement);
+      const lineHeight = Number.parseFloat(textareaStyle.lineHeight);
+      const placeholderCenterY = textarea.top + Number.parseFloat(textareaStyle.paddingTop) + lineHeight / 2;
       const buttons = Array.from(row.querySelectorAll<HTMLElement>('.p-button')).map((button) => button.getBoundingClientRect());
       return {
         textarea: { left: textarea.left, right: textarea.right, centerY: textarea.top + textarea.height / 2 },
+        placeholderCenterY,
         buttons: buttons.map((button) => ({ left: button.left, right: button.right, centerY: button.top + button.height / 2 }))
       };
     });
@@ -631,6 +894,7 @@ test.describe('PDF reader flow', () => {
     expect(composerGeometry.textarea.right).toBeLessThan(composerGeometry.buttons[1].left);
     expect(Math.abs(composerGeometry.buttons[0].centerY - composerGeometry.textarea.centerY)).toBeLessThan(2);
     expect(Math.abs(composerGeometry.buttons[1].centerY - composerGeometry.textarea.centerY)).toBeLessThan(2);
+    expect(Math.abs(composerGeometry.buttons[0].centerY - composerGeometry.placeholderCenterY)).toBeLessThan(2);
   });
 
   test('holds Space to pan the PDF canvas without triggering page navigation', async () => {
@@ -704,6 +968,32 @@ test.describe('PDF reader flow', () => {
     await expect.poll(() => page.evaluate(() => window.getSelection()?.toString() ?? '')).toContain('Reader fixture');
   });
 
+  test('keeps a very small PDF in the reading column instead of drifting into the dock', async () => {
+    const pageView = page.locator('.pdfViewer .page[data-page-number="1"]');
+    const viewport = page.locator('.pdf-viewport');
+    const dock = page.locator('.reader-dock-lane');
+    await expect(pageView.locator('.textLayer')).toContainText('Reader fixture quote Alpha Beta');
+
+    const zoomOut = page.getByTitle('Zoom out');
+    for (let index = 0; index < 20; index += 1) {
+      await zoomOut.click();
+    }
+    await expect(page.locator('.zoom-readout')).toHaveText('25%');
+
+    const geometry = await Promise.all([
+      pageView.boundingBox(),
+      viewport.boundingBox(),
+      dock.boundingBox()
+    ]);
+    const [pageBox, viewportBox, dockBox] = geometry;
+    expect(pageBox).toBeTruthy();
+    expect(viewportBox).toBeTruthy();
+    expect(dockBox).toBeTruthy();
+    expect(pageBox!.x).toBeGreaterThanOrEqual(viewportBox!.x);
+    expect(pageBox!.x + pageBox!.width).toBeLessThan(dockBox!.x);
+    expect(dockBox!.x - viewportBox!.x).toBeGreaterThan(viewportBox!.width * 0.5);
+  });
+
   test('gives Codex outline generation sampled PDF page evidence', async () => {
     await enableCodexReader(page);
     await expect(page.locator('.pdfViewer .page[data-page-number="1"] .textLayer')).toContainText('Reader fixture quote Alpha Beta');
@@ -721,6 +1011,86 @@ test.describe('PDF reader flow', () => {
     }).toBe(true);
   });
 });
+
+async function readReaderLayout(page: Page): Promise<{
+  contained: boolean;
+  left: number;
+  ordered: boolean;
+  width: number;
+}> {
+  return page.evaluate(() => {
+    const panel = document.querySelector<HTMLElement>('.left-panel');
+    const rowSelectors = [
+      '.left-panel__top',
+      '.panel-search',
+      '.reader-controls',
+      '.canvas-placement-menu',
+      '.panel-breadcrumb',
+      '.left-panel__body'
+    ];
+    if (!panel) {
+      return { contained: false, left: 0, ordered: false, width: 0 };
+    }
+    const panelRect = panel.getBoundingClientRect();
+    const rows = rowSelectors.flatMap((selector) => {
+      const row = panel.querySelector<HTMLElement>(selector);
+      return row ? [row.getBoundingClientRect()] : [];
+    });
+    return {
+      contained: rows.length === rowSelectors.length && rows.every((row) => (
+        row.left >= panelRect.left - 1 &&
+        row.right <= panelRect.right + 1 &&
+        row.top >= panelRect.top - 1 &&
+        row.bottom <= panelRect.bottom + 1
+      )),
+      left: panelRect.left,
+      ordered: rows.length === rowSelectors.length && rows.every((row, index) => (
+        index === 0 || rows[index - 1].bottom <= row.top + 1
+      )),
+      width: panelRect.width
+    };
+  });
+}
+
+async function readPdfViewportAnchor(
+  page: Page,
+  point?: { clientX: number; clientY: number }
+): Promise<{
+  clientX: number;
+  clientY: number;
+  pageNumber?: string;
+  xRatio: number;
+  yRatio: number;
+}> {
+  return page.evaluate((requestedPoint) => {
+    const viewport = document.querySelector<HTMLElement>('.pdf-viewport');
+    const pageElement = document.querySelector<HTMLElement>('.pdfViewer .page[data-page-number="1"]');
+    if (!viewport || !pageElement) {
+      return { clientX: 0, clientY: 0, pageNumber: undefined, xRatio: Number.NaN, yRatio: Number.NaN };
+    }
+    const viewportRect = viewport.getBoundingClientRect();
+    const pageRect = pageElement.getBoundingClientRect();
+    const defaultX = viewportRect.left + viewportRect.width / 2;
+    const defaultY = viewportRect.top + viewportRect.height / 2;
+    const clientX = requestedPoint?.clientX ?? (
+      defaultX >= pageRect.left && defaultX <= pageRect.right
+        ? defaultX
+        : (Math.max(pageRect.left, viewportRect.left) + Math.min(pageRect.right, viewportRect.right)) / 2
+    );
+    const clientY = requestedPoint?.clientY ?? (
+      defaultY >= pageRect.top && defaultY <= pageRect.bottom
+        ? defaultY
+        : (Math.max(pageRect.top, viewportRect.top) + Math.min(pageRect.bottom, viewportRect.bottom)) / 2
+    );
+    return {
+      clientX,
+      clientY,
+      pageNumber: pageElement.dataset.pageNumber,
+      xRatio: (clientX - pageRect.left) / pageRect.width,
+      yRatio: (clientY - pageRect.top) / pageRect.height
+    };
+  }, point);
+}
 
 async function createFixturePdf(filePath: string, options: { largeAttachment?: boolean } = {}): Promise<void> {
   const document = await PDFDocument.create();

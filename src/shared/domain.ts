@@ -14,14 +14,14 @@ export type SelectionColorRole = 'highlight' | 'underline' | 'chat' | 'note' | '
 export type ConversationAttachmentKind = 'image';
 export type DocumentFormat = 'pdf' | 'markdown' | 'text' | 'image' | 'html' | 'epub' | 'unknown';
 export type DocumentSourceKind = 'local-file' | 'cloud-file' | 'url';
-export type WorkspaceBlockKind = 'conversation' | 'translation' | 'note' | 'snapshot' | 'card' | 'quote' | 'image' | 'link' | 'embed';
+export type WorkspaceBlockKind = 'conversation' | 'translation' | 'note' | 'snapshot' | 'card' | 'quote' | 'image' | 'drawing' | 'link' | 'embed';
 export type WorkspaceBlockAnchor = 'page' | 'viewport' | 'document' | 'selection';
 export type WorkspaceBlockContentKind = 'markdown' | 'text' | 'image' | 'html' | 'external' | 'custom';
 export type UiLanguage = 'en' | 'zh-CN';
 export type AiPreferredLanguage = 'English' | 'Chinese' | 'Simplified Chinese';
 export type TranslationBackend = 'provider' | 'codex';
 export type TranslationStatus = 'pending' | 'completed' | 'error';
-export type AppUpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'not-available' | 'unsupported' | 'error';
+export type AppUpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'installing' | 'not-available' | 'unsupported' | 'error';
 
 export const pdfRangeChunkSize = 512 * 1024;
 
@@ -259,6 +259,11 @@ export interface ConversationSummary {
   keywords: string[];
 }
 
+export interface ConversationParticipantNames {
+  user: string;
+  assistant: string;
+}
+
 export interface Conversation {
   id: ConversationId;
   documentId: DocumentId;
@@ -268,6 +273,7 @@ export interface Conversation {
   agentKind?: ConversationAgentKind;
   codexThreadId?: string;
   codexSettings?: CodexConversationSettings;
+  participantNames?: ConversationParticipantNames;
   summary: ConversationSummary;
   messages: ConversationMessage[];
   createdAt: ISODate;

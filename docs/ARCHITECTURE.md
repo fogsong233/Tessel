@@ -1,6 +1,6 @@
 # Tessel Architecture
 
-Last updated: 2026-08-28
+Last updated: 2026-08-29
 
 ## Product Shape
 
@@ -24,6 +24,8 @@ preserves unknown JSON fields during normal reads and writes.
    - Owns PDF.js rendering, navigation, selection, marks, dock panels, and the
      spatial workspace canvas.
    - Emits persistence and AI intents through typed callbacks.
+   - Delegates page-relative zoom geometry to `reader/pdfZoom.ts` and the
+     pressure-aware whiteboard UI to `reader/WorkspaceDrawingBlock.tsx`.
 3. `src/preload/index.ts`
    - Exposes the narrow `window.sidelight` IPC bridge described by `TesselApi`.
    - Must not expose channels that have no main-process handler.
@@ -93,8 +95,17 @@ outlines, provider settings, or application preferences.
 - `.pdf-viewport` must remain absolutely positioned for PDF.js.
 - The PDF scrollbar stays at the far right of the reader window.
 - `.pdfViewer` reserves the active dock lane so text is not covered.
+- `.pdfViewer` keeps a minimum reading-column width at small zoom levels so the
+  dock does not drift left with a narrow PDF page.
 - `.workspace-canvas-spacer` must remain present because absolutely positioned
   blocks do not contribute their own horizontal scroll width.
+- Image blocks keep a fixed viewport. Their zoom and scroll position live in
+  `WorkspaceBlock.payload`; the image must not grow the spatial canvas card.
+- Drawing blocks use page-local logical coordinates and render strokes as SVG
+  paths. Their displayed width and height follow the attached PDF page, while
+  pressure points, colors, sizes, and lasso-editable strokes remain persisted.
+- Conversation participant display names are stored per conversation rather
+  than as global application preferences.
 - Loading the PDF document must not depend on workspace block state; pinning a
   block must not destroy and reload PDF.js.
 - Save a note before saving a newly created note block so two full-file Store

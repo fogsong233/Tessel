@@ -7434,11 +7434,29 @@ body.is-resizing-workspace-block * {
   background: #ffffff;
 }
 
+.transient-aid-panel > header {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .dock-chat-panel__title,
-.transient-aid-panel > header > div {
+.transient-aid-panel__title {
   display: grid;
   gap: 2px;
   min-width: 0;
+}
+
+.transient-aid-panel__actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.transient-aid-panel__actions > .p-badge,
+.transient-aid-panel__actions > .p-button {
+  flex: 0 0 auto;
+  margin: 0;
 }
 
 .dock-chat-panel > header span,
@@ -12068,4 +12086,604 @@ body.is-moving-dock .reader-float-dock.is-chat-open {
   .reader-settings__content-preview section {
     grid-template-columns: 1fr;
   }
+}
+
+/* Light directory selection: keep the current location clear without a heavy color slab. */
+.left-panel .outline-item.is-active {
+  color: var(--tessel-directory-ink);
+  border-color: color-mix(in srgb, var(--tessel-sidebar-active-color, #dcd19a) 28%, transparent);
+  background: color-mix(in srgb, var(--tessel-sidebar-active-color, #dcd19a) 18%, rgba(255, 255, 255, 0.72));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--tessel-directory-ink) 34%, transparent);
+}
+
+.left-panel .panel-breadcrumb button.is-active {
+  color: var(--tessel-directory-ink);
+  background: color-mix(in srgb, var(--tessel-sidebar-active-color, #dcd19a) 14%, rgba(255, 255, 255, 0.58));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tessel-sidebar-active-color, #dcd19a) 24%, transparent);
+}
+
+.drawing-placement-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding: 0 12px 10px;
+}
+
+.drawing-placement-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 9px;
+  overflow: hidden;
+  color: var(--tessel-directory-ink);
+  border: 1px solid rgba(86, 77, 39, 0.12);
+  border-radius: var(--tessel-control-radius);
+  background: rgba(255, 255, 255, 0.42);
+  font-size: 11px;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawing-placement-controls button:hover {
+  border-color: rgba(86, 77, 39, 0.2);
+  background: var(--tessel-directory-hover);
+}
+
+/* Images live in a fixed viewport: no layout growth and no visible native scrollbars. */
+.workspace-block-card--image {
+  overflow: hidden;
+  border: 1px solid rgba(28, 34, 30, 0.12);
+  border-radius: 8px;
+  background: #f0f1ef;
+  box-shadow: 0 10px 28px rgba(24, 29, 25, 0.12);
+}
+
+.workspace-image {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.workspace-image__viewport {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  cursor: grab;
+  scrollbar-width: none;
+}
+
+.workspace-image__viewport::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.workspace-image__viewport img {
+  display: block;
+  min-width: 0;
+  max-width: none;
+  max-height: none;
+  height: auto;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+
+body.is-moving-workspace-block .workspace-image__viewport {
+  cursor: grabbing;
+}
+
+.workspace-image__zoom {
+  position: absolute;
+  z-index: 3;
+  left: 8px;
+  bottom: 8px;
+  min-width: 40px;
+  padding: 4px 7px;
+  color: #343936;
+  border: 1px solid rgba(255, 255, 255, 0.76);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.12);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.workspace-block-card--image:hover .workspace-image__zoom {
+  opacity: 1;
+}
+
+/* A page-sized vector whiteboard lives beside its PDF page. */
+.workspace-block-card--drawing {
+  display: block;
+  min-height: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: #ffffff;
+  box-shadow: 0 2px 10px rgba(27, 31, 28, 0.1), 0 0 0 1px rgba(27, 31, 28, 0.08);
+  backdrop-filter: none;
+  transform: none;
+  animation: none;
+}
+
+.workspace-drawing {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.workspace-drawing__surface {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  background: #ffffff;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+
+.workspace-drawing__surface.is-lasso {
+  cursor: cell;
+}
+
+.workspace-drawing__surface path {
+  transition: opacity 100ms ease, filter 100ms ease;
+}
+
+.workspace-drawing__surface path.is-selected {
+  filter: drop-shadow(0 0 2px rgba(14, 116, 222, 0.94));
+  opacity: 0.72;
+}
+
+.workspace-drawing__lasso {
+  fill: rgba(37, 99, 235, 0.08);
+  stroke: #2563eb;
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.workspace-drawing__toolbar {
+  position: absolute;
+  z-index: 5;
+  top: 10px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 20px);
+  min-height: 38px;
+  padding: 4px;
+  overflow: hidden;
+  border: 1px solid rgba(37, 42, 39, 0.12);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 8px 24px rgba(22, 27, 23, 0.13);
+  backdrop-filter: blur(12px);
+  transform: translateX(-50%);
+}
+
+.workspace-drawing__toolbar button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 29px;
+  height: 29px;
+  padding: 0;
+  color: #414744;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.workspace-drawing__toolbar button:hover:not(:disabled),
+.workspace-drawing__toolbar button.is-active {
+  color: #17221d;
+  background: #edf1ee;
+}
+
+.workspace-drawing__toolbar button.is-danger:hover:not(:disabled) {
+  color: #b42318;
+  background: #fff0ed;
+}
+
+.workspace-drawing__toolbar button:disabled {
+  opacity: 0.34;
+}
+
+.workspace-drawing__divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 2px;
+  background: rgba(37, 42, 39, 0.12);
+}
+
+.workspace-drawing__spacer {
+  flex: 1 1 8px;
+  min-width: 2px;
+}
+
+.workspace-drawing__toolbar .workspace-drawing__color {
+  width: 20px;
+  height: 20px;
+  margin: 0 1px;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  background: var(--drawing-color);
+  box-shadow: 0 0 0 1px rgba(32, 37, 34, 0.16);
+}
+
+.workspace-drawing__toolbar .workspace-drawing__color.is-active {
+  box-shadow: 0 0 0 2px #ffffff, 0 0 0 3px #6b736e;
+}
+
+.workspace-drawing__custom-color {
+  position: relative;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  overflow: hidden;
+  border-radius: 999px;
+}
+
+.workspace-drawing__custom-color input {
+  position: absolute;
+  inset: -4px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+}
+
+.workspace-drawing__size {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 70px;
+}
+
+.workspace-drawing__size > span {
+  display: block;
+  flex: 0 0 auto;
+  max-width: 18px;
+  max-height: 18px;
+  border-radius: 999px;
+  background: #252a27;
+}
+
+.workspace-drawing__size input {
+  width: 48px;
+  accent-color: #313733;
+}
+
+/* Participant names are editable per conversation and stay visible in the transcript. */
+.dock-chat-panel > header {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.dock-chat-panel__participant-names {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.dock-chat-panel__participant-names label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 7px;
+  color: #777777;
+  border: 1px solid #e8e8e8;
+  border-radius: 7px;
+  background: #fafafa;
+}
+
+.dock-chat-panel__participant-names label > span {
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.dock-chat-panel__participant-names input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  color: #303331;
+  border: 0;
+  background: transparent;
+  outline: 0;
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.dock-chat-panel__participant-names label:focus-within {
+  border-color: #b7c4bd;
+  background: #ffffff;
+  box-shadow: 0 0 0 2px rgba(16, 163, 127, 0.08);
+}
+
+.chat-message--user .chat-message__role {
+  display: block;
+}
+
+/* Keep the PDF reading column stable when pages become narrower than the viewport. */
+.pdf-stage {
+  container-type: inline-size;
+}
+
+.pdfViewer {
+  flex: 0 0 auto;
+  min-width: max(
+    0px,
+    calc(
+      100cqw - var(--canvas-left-gutter) - var(--canvas-right-gutter) -
+      var(--dock-lane-width) - var(--dock-gap)
+    )
+  );
+}
+
+/* Center an empty two-line composer on the adjacent controls. Once text is
+   entered it returns to the top line, preserving the existing multiline flow. */
+.chat-composer > .chat-composer__row > textarea:placeholder-shown {
+  padding-top: 18px;
+  padding-bottom: 18px;
+}
+
+/* Stable reader geometry: asynchronous PDF sizing and zooming must not reflow
+   the sidebar or temporarily drop page-attached components. */
+.reader-splitter > .reader-left-panel {
+  min-width: 310px;
+  max-width: 440px;
+  transition: none;
+}
+
+.reader-splitter > .p-splitter-gutter {
+  transition: background 120ms ease;
+}
+
+.drawing-placement-controls button {
+  gap: 7px;
+  padding-inline: 8px;
+}
+
+.drawing-placement-controls button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-block-card,
+.workspace-drawing {
+  contain: layout paint;
+}
+
+.workspace-drawing {
+  container-type: inline-size;
+}
+
+.workspace-drawing__toolbar {
+  scrollbar-width: none;
+}
+
+.workspace-drawing__toolbar::-webkit-scrollbar {
+  display: none;
+}
+
+@container (max-width: 460px) {
+  .workspace-drawing__toolbar {
+    right: 8px;
+    left: 8px;
+    max-width: none;
+    overflow-x: auto;
+    transform: none;
+  }
+}
+
+/* Participant renaming is an independent, opt-in row. It no longer competes
+   with the model/reasoning controls or forces the chat header to wrap. */
+.dock-chat-panel {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.dock-chat-panel.has-anchor,
+.dock-chat-panel.has-participant-editor {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.dock-chat-panel.has-anchor.has-participant-editor {
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+}
+
+.dock-chat-panel > header {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.dock-chat-panel__actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dock-chat-panel__actions > .p-badge,
+.dock-chat-panel__actions > .p-button {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.dock-chat-panel__actions > .p-button,
+.dock-chat-panel .participant-editor-button.p-button,
+.dock-chat-panel .panel-close-button.p-button {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+}
+
+.dock-chat-panel__participant-editor {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid #eeeeee;
+  background: #fafafa;
+}
+
+.dock-chat-panel__participant-editor label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  color: #777777;
+  border: 1px solid #e4e6e4;
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.dock-chat-panel__participant-editor label > span {
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.dock-chat-panel__participant-editor input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  color: #303331;
+  border: 0;
+  background: transparent;
+  outline: 0;
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.dock-chat-panel__participant-editor label:focus-within {
+  border-color: #b7c4bd;
+  box-shadow: 0 0 0 2px rgba(16, 163, 127, 0.08);
+}
+
+@media (max-width: 1080px) {
+  .reader-splitter > .reader-left-panel {
+    min-width: 290px;
+  }
+}
+
+/* The left rail has six deliberate rows. Keeping the flexible directory body
+   last prevents a newly inserted tool from taking over the remaining height. */
+.left-panel {
+  grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
+}
+
+.canvas-placement-menu {
+  position: relative;
+  z-index: 8;
+  min-width: 0;
+  padding: 0 12px 9px;
+}
+
+.canvas-placement-menu button {
+  color: var(--tessel-directory-ink);
+  border: 1px solid rgba(86, 77, 39, 0.13);
+  background: var(--tessel-directory-surface);
+}
+
+.canvas-placement-menu__trigger {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 11px;
+  border-radius: var(--tessel-control-radius);
+  font-size: 11px;
+  font-weight: 690;
+  text-align: left;
+}
+
+.canvas-placement-menu__trigger > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-placement-menu__trigger > svg:last-child {
+  transition: transform 140ms ease;
+}
+
+.canvas-placement-menu__trigger[aria-expanded='true'] > svg:last-child {
+  transform: rotate(180deg);
+}
+
+.canvas-placement-menu__trigger:hover:not(:disabled),
+.canvas-placement-menu__options button:hover {
+  background: var(--tessel-directory-hover);
+}
+
+.canvas-placement-menu__trigger:disabled {
+  opacity: 0.5;
+}
+
+.canvas-placement-menu__options {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% - 4px);
+  right: 12px;
+  left: 12px;
+  display: grid;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid rgba(86, 77, 39, 0.16);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--tessel-sidebar-color) 88%, #ffffff);
+  box-shadow: 0 12px 28px rgba(49, 43, 20, 0.16);
+}
+
+.canvas-placement-menu__options button {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 9px;
+  border-color: transparent;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 650;
+  text-align: left;
+}
+
+.canvas-placement-menu__options button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
