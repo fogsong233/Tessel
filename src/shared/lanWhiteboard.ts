@@ -47,11 +47,20 @@ export interface LanWhiteboardAddress {
   url: string;
 }
 
+export interface LanWhiteboardSelectionShare {
+  canvasId: string;
+  documentId: DocumentId;
+  pageNumber: number;
+  strokes: LanDrawingStroke[];
+}
+
 export type LanWhiteboardClientMessage =
   | { type: 'ping'; sentAt: number }
   | { type: 'create-canvas'; requestId: string; documentId?: string; pageNumber?: number; side: LanWhiteboardSide }
   | { type: 'delete-canvas'; requestId: string; canvasId: string }
   | { type: 'move-canvas'; requestId: string; canvasId: string; side: LanWhiteboardSide }
+  | { type: 'set-pen-only'; requestId: string; canvasId: string; penOnly: boolean }
+  | { type: 'share-selection'; requestId: string; canvasId: string; strokes: LanDrawingStroke[] }
   | { type: 'stroke-begin'; canvasId: string; stroke: Omit<LanDrawingStroke, 'points'> & { points: LanDrawingPoint[] } }
   | { type: 'stroke-points'; canvasId: string; strokeId: string; points: LanDrawingPoint[] }
   | { type: 'stroke-cancel'; canvasId: string; strokeId: string }
@@ -63,6 +72,7 @@ export type LanWhiteboardServerMessage =
   | { type: 'context'; context?: LanWhiteboardContext }
   | { type: 'canvas-upsert'; block: WorkspaceBlock; revision: number }
   | { type: 'canvas-delete'; blockId: string; revision: number }
+  | { type: 'selection-share'; selection: LanWhiteboardSelectionShare }
   | { type: 'stroke-begin'; canvasId: string; stroke: Omit<LanDrawingStroke, 'points'> & { points: LanDrawingPoint[] } }
   | { type: 'stroke-points'; canvasId: string; strokeId: string; points: LanDrawingPoint[] }
   | { type: 'stroke-cancel'; canvasId: string; strokeId: string }

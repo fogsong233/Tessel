@@ -24,7 +24,7 @@ button { -webkit-tap-highlight-color: transparent; }
 
 .remote-app {
   --header-height: 64px;
-  --sidebar-width: 292px;
+  --sidebar-width: 276px;
   display: grid;
   grid-template: var(--header-height) minmax(0, 1fr) / 0 minmax(0, 1fr);
   width: 100%;
@@ -70,8 +70,8 @@ button { -webkit-tap-highlight-color: transparent; }
   height: 31px;
   place-items: center;
   color: #26271e;
-  border-radius: 10px;
-  background: #dce86d;
+  border-radius: 5px;
+  background: #e8db91;
 }
 
 .remote-header__logo svg { width: 16px; }
@@ -130,7 +130,7 @@ button { -webkit-tap-highlight-color: transparent; }
   overflow: hidden;
   flex-direction: column;
   border-right: 1px solid #d6d9d0;
-  background: #f6f7f3;
+  background: #f5e9a9;
   transform: translateX(-100%);
   transition: transform 180ms ease;
 }
@@ -202,8 +202,8 @@ button { -webkit-tap-highlight-color: transparent; }
   border-radius: inherit;
   background: transparent;
 }
-.remote-canvas-row:hover { background: #eceee8; }
-.remote-canvas-row.is-active { background: #e4e9c8; box-shadow: inset 0 0 0 1px #d4dc9f; }
+.remote-canvas-row:hover { background: rgba(255, 255, 255, 0.34); }
+.remote-canvas-row.is-active { background: rgba(255, 255, 255, 0.58); box-shadow: inset 3px 0 0 #655f3c; }
 .remote-canvas-row__preview {
   display: grid;
   width: 33px;
@@ -241,10 +241,10 @@ button { -webkit-tap-highlight-color: transparent; }
 .remote-sidebar__create {
   padding: 12px 14px max(14px, env(safe-area-inset-bottom));
   border-top: 1px solid #dde0d8;
-  background: #f9faf7;
+  background: rgba(255, 255, 255, 0.28);
 }
 .remote-sidebar__create small { display: block; margin: 0 2px 8px; color: #858a7e; font-size: 9px; }
-.remote-sidebar__create > div { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.remote-sidebar__create > button { width: 100%; }
 .remote-sidebar__create button,
 .remote-workspace__empty button {
   display: flex;
@@ -259,8 +259,7 @@ button { -webkit-tap-highlight-color: transparent; }
   font-size: 10px;
   font-weight: 650;
 }
-.remote-sidebar__create button:last-child,
-.remote-workspace__empty button:last-child { border-color: #ced995; background: #e3ecae; }
+.remote-workspace__empty button:last-child { border-color: #bdb58a; background: #f3e6a4; }
 .remote-sidebar__create button.is-occupied { color: #546027; border-color: #d3dcaa; background: #f0f4dc; }
 .remote-sidebar__create button:disabled,
 .remote-workspace__empty button:disabled { opacity: 0.42; }
@@ -302,9 +301,9 @@ button { -webkit-tap-highlight-color: transparent; }
   overflow-x: auto;
   color: #36392f;
   border: 1px solid rgba(207, 211, 200, 0.95);
-  border-radius: 15px;
-  background: rgba(250, 251, 247, 0.94);
-  box-shadow: 0 12px 34px rgba(36, 39, 31, 0.13), 0 2px 6px rgba(36, 39, 31, 0.06);
+  border-radius: 9px;
+  background: rgba(252, 252, 249, 0.97);
+  box-shadow: 0 5px 16px rgba(36, 39, 31, 0.1);
   transform: translateX(-50%);
   backdrop-filter: blur(18px);
   scrollbar-width: none;
@@ -359,9 +358,7 @@ button { -webkit-tap-highlight-color: transparent; }
   inset: 0;
   overflow: auto;
   overscroll-behavior: none;
-  background-color: #e8eae4;
-  background-image: radial-gradient(#cdd1c6 0.65px, transparent 0.65px);
-  background-size: 16px 16px;
+  background-color: #e5e6e1;
   scrollbar-width: none;
 }
 .remote-canvas__viewport::-webkit-scrollbar { display: none; }
@@ -371,9 +368,9 @@ button { -webkit-tap-highlight-color: transparent; }
   overflow: visible;
   touch-action: none;
   user-select: none;
-  border-radius: 2px;
+  border-radius: 0;
   background: #fff;
-  box-shadow: 0 20px 55px rgba(39, 42, 34, 0.18), 0 1px 4px rgba(39, 42, 34, 0.13);
+  box-shadow: 0 7px 22px rgba(39, 42, 34, 0.13), 0 0 0 1px rgba(39, 42, 34, 0.09);
 }
 .remote-canvas__paper.is-pen { cursor: crosshair; }
 .remote-canvas__paper.is-eraser { cursor: cell; }
@@ -383,6 +380,53 @@ button { -webkit-tap-highlight-color: transparent; }
 .remote-canvas__paper path { pointer-events: none; }
 .remote-canvas__paper path.is-selected { filter: drop-shadow(0 0 3px #4c8aff); opacity: 0.66; }
 .remote-canvas__lasso { fill: rgba(64, 113, 222, 0.09); stroke: #3975dc; stroke-dasharray: 6 5; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.remote-canvas__selection-box {
+  fill: rgba(47, 97, 209, 0.035);
+  stroke: #316bd2;
+  stroke-width: 1.5;
+  stroke-dasharray: 7 5;
+  vector-effect: non-scaling-stroke;
+  cursor: move;
+  pointer-events: all;
+}
+.remote-canvas__selection-handle { color: #fff; cursor: nwse-resize; pointer-events: all; }
+.remote-canvas__selection-handle circle { fill: #316bd2; stroke: #fff; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.remote-canvas__selection-handle svg { pointer-events: none; }
+
+.remote-selection-actions {
+  position: absolute;
+  z-index: 8;
+  display: flex;
+  min-height: 34px;
+  padding: 4px;
+  align-items: center;
+  gap: 3px;
+  color: #343832;
+  border: 1px solid #d7dad1;
+  border-radius: 8px;
+  background: rgba(252, 253, 249, 0.97);
+  box-shadow: 0 7px 20px rgba(30, 34, 27, 0.12);
+  transform: translateY(-42px);
+  backdrop-filter: blur(12px);
+}
+.remote-selection-actions > span { padding: 0 7px; color: #767c71; font-size: 9px; }
+.remote-selection-actions button { min-height: 26px; padding: 0 8px; color: #394037; border: 0; border-radius: 5px; background: #eef0e9; font-size: 9px; font-weight: 680; }
+.remote-selection-actions button.is-danger { color: #a43f39; background: #fff1ee; }
+.remote-selection-actions button:disabled { opacity: 0.42; }
+
+.remote-canvas__notice {
+  position: absolute;
+  z-index: 16;
+  bottom: 76px;
+  left: 50%;
+  padding: 9px 13px;
+  color: #f6f7f2;
+  border-radius: 7px;
+  background: #20231d;
+  box-shadow: 0 8px 24px rgba(25, 28, 22, 0.18);
+  font-size: 10px;
+  transform: translateX(-50%);
+}
 
 .remote-zoom {
   position: absolute;
@@ -394,7 +438,7 @@ button { -webkit-tap-highlight-color: transparent; }
   gap: 2px;
   padding: 4px;
   border: 1px solid #d2d6cb;
-  border-radius: 12px;
+  border-radius: 7px;
   background: rgba(250, 251, 247, 0.94);
   box-shadow: 0 8px 24px rgba(35, 38, 30, 0.12);
   backdrop-filter: blur(14px);
@@ -432,7 +476,7 @@ button { -webkit-tap-highlight-color: transparent; }
   gap: 3px;
   color: #4f5449;
   border: 1px solid #d2d6cb;
-  border-radius: 13px;
+  border-radius: 7px;
   background: rgba(250, 251, 247, 0.94);
   box-shadow: 0 8px 24px rgba(35, 38, 30, 0.12);
   backdrop-filter: blur(14px);
@@ -477,11 +521,11 @@ button { -webkit-tap-highlight-color: transparent; }
   flex-direction: column;
   text-align: center;
   border: 1px solid rgba(255, 255, 255, 0.82);
-  border-radius: 20px;
+  border-radius: 10px;
   background: #fbfcf8;
   box-shadow: 0 28px 80px rgba(20, 23, 17, 0.28);
 }
-.remote-dialog__icon { display: grid; width: 48px; height: 48px; place-items: center; color: #ad3d38; border-radius: 15px; background: #fff0ed; }
+.remote-dialog__icon { display: grid; width: 44px; height: 44px; place-items: center; color: #ad3d38; border-radius: 7px; background: #fff0ed; }
 .remote-dialog__icon svg { width: 20px; }
 .remote-dialog h2 { margin: 15px 0 6px; color: #282c23; font-size: 19px; letter-spacing: -0.025em; }
 .remote-dialog p { max-width: 310px; margin: 0; color: #74796d; font-size: 11px; line-height: 1.65; }

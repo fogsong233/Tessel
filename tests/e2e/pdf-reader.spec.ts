@@ -212,11 +212,11 @@ test.describe('PDF reader flow', () => {
     }).toBe(112);
   });
 
-  test('adds a page-sized vector whiteboard and persists pressure-ready strokes', async () => {
-    test.setTimeout(90_000);
+  test('uses a fixed multi-sheet notebook with stylus-only, editable selections, and AI image sharing', async () => {
+    test.setTimeout(120_000);
     await expect(page.locator('.pdfViewer .page[data-page-number="1"]')).toBeVisible();
-    await page.getByRole('button', { name: 'Whiteboard', exact: true }).click();
-    await page.getByRole('button', { name: 'Add whiteboard on right' }).click();
+    await page.getByRole('button', { name: 'Handwritten notes', exact: true }).click();
+    await page.getByRole('button', { name: 'Create handwritten notes' }).click();
 
     const board = page.locator('.workspace-block-card--drawing');
     const pdfPage = page.locator('.pdfViewer .page[data-page-number="1"]');
@@ -227,6 +227,13 @@ test.describe('PDF reader flow', () => {
     expect(pageBox).toBeTruthy();
     expect(Math.abs(boardBox!.width - pageBox!.width)).toBeLessThanOrEqual(2);
     expect(Math.abs(boardBox!.height - pageBox!.height)).toBeLessThanOrEqual(2);
+    expect(boardBox!.x + boardBox!.width).toBeLessThanOrEqual(pageBox!.x + 2);
+
+    await board.getByRole('button', { name: 'Move notebook to right' }).click();
+    await expect.poll(async () => {
+      const [nextBoardBox, nextPageBox] = await Promise.all([board.boundingBox(), pdfPage.boundingBox()]);
+      return Boolean(nextBoardBox && nextPageBox && nextBoardBox.x >= nextPageBox.x + nextPageBox.width - 2);
+    }).toBe(true);
 
     await selectPdfText(page);
     await page.locator('.selection-toolbar').getByRole('button', { name: /^Chat$/i }).click();
@@ -309,6 +316,72 @@ test.describe('PDF reader flow', () => {
     await page.mouse.up();
     await expect(surface.locator('path.is-selected')).toHaveCount(1);
 
+    const selectionBox = surface.locator('.workspace-drawing__selection-box');
+    const selectionBoxBefore = await selectionBox.boundingBox();
+    expect(selectionBoxBefore).toBeTruthy();
+    await selectionBox.dispatchEvent('pointerdown', {
+      pointerId: 41,
+      pointerType: 'mouse',
+      button: 0,
+      buttons: 1,
+      clientX: selectionBoxBefore!.x + selectionBoxBefore!.width / 2,
+      clientY: selectionBoxBefore!.y + selectionBoxBefore!.height / 2
+    });
+    await surface.dispatchEvent('pointermove', {
+      pointerId: 41,
+      pointerType: 'mouse',
+      button: 0,
+      buttons: 1,
+      clientX: selectionBoxBefore!.x + selectionBoxBefore!.width / 2 - 28,
+      clientY: selectionBoxBefore!.y + selectionBoxBefore!.height / 2 + 18
+    });
+    await surface.dispatchEvent('pointerup', {
+      pointerId: 41,
+      pointerType: 'mouse',
+      button: 0,
+      buttons: 0,
+      clientX: selectionBoxBefore!.x + selectionBoxBefore!.width / 2 - 28,
+      clientY: selectionBoxBefore!.y + selectionBoxBefore!.height / 2 + 18
+    });
+    await expect.poll(async () => (await selectionBox.boundingBox())?.x ?? Number.POSITIVE_INFINITY).toBeLessThan(selectionBoxBefore!.x - 15);
+
+    const resizeHandle = surface.locator('.workspace-drawing__selection-handle');
+    const handleBox = await resizeHandle.boundingBox();
+    const movedSelectionBox = await selectionBox.boundingBox();
+    expect(handleBox).toBeTruthy();
+    expect(movedSelectionBox).toBeTruthy();
+    await resizeHandle.dispatchEvent('pointerdown', {
+      pointerId: 42,
+      pointerType: 'mouse',
+      button: 0,
+      buttons: 1,
+      clientX: handleBox!.x + handleBox!.width / 2,
+      clientY: handleBox!.y + handleBox!.height / 2
+    });
+    await surface.dispatchEvent('pointermove', {
+      pointerId: 42,
+      pointerType: 'mouse',
+      button: 0,
+      buttons: 1,
+      clientX: handleBox!.x + handleBox!.width / 2 + 45,
+      clientY: handleBox!.y + handleBox!.height / 2 + 45
+    });
+    await surface.dispatchEvent('pointerup', {
+      pointerId: 42,
+      pointerType: 'mouse',
+      button: 0,
+      buttons: 0,
+      clientX: handleBox!.x + handleBox!.width / 2 + 45,
+      clientY: handleBox!.y + handleBox!.height / 2 + 45
+    });
+    await expect.poll(async () => (await selectionBox.boundingBox())?.width ?? 0).toBeGreaterThan(movedSelectionBox!.width + 20);
+
+    await page.locator('.dock-chat-panel').getByTitle('Collapse chat').click();
+    await expect(page.locator('.dock-chat-panel')).toHaveCount(0);
+    await board.getByRole('button', { name: 'Send to AI' }).click();
+    await expect(page.locator('.dock-chat-panel')).toBeVisible();
+    await expect(page.locator('.composer-attachment img')).toHaveAttribute('src', /^data:image\/png;base64,/);
+
     await expect.poll(async () => {
       const saved = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
         workspaceBlocks: Array<{ kind: string; payload?: { strokes?: Array<{ points?: number[][] }> } }>;
@@ -317,6 +390,26 @@ test.describe('PDF reader flow', () => {
     }, { timeout: 8_000 }).toBeGreaterThan(3);
 
     await board.getByRole('button', { name: 'Pen tool' }).click();
+    await board.getByRole('button', { name: 'Stylus only' }).click();
+    await expect(board.getByRole('button', { name: 'Stylus only' })).toHaveAttribute('aria-pressed', 'true');
+    await surface.dispatchEvent('pointerdown', {
+      pointerId: 30,
+      pointerType: 'mouse',
+      button: 0,
+      buttons: 1,
+      clientX: drawingX,
+      clientY: drawingY - 80
+    });
+    await surface.dispatchEvent('pointermove', {
+      pointerId: 30,
+      pointerType: 'mouse',
+      button: 0,
+      buttons: 1,
+      clientX: drawingX - 40,
+      clientY: drawingY - 60
+    });
+    await surface.dispatchEvent('pointerup', { pointerId: 30, pointerType: 'mouse', button: 0, buttons: 0 });
+    await expect(surface.locator('path')).toHaveCount(1);
     await surface.dispatchEvent('pointerdown', {
       pointerId: 31,
       pointerType: 'pen',
@@ -395,12 +488,17 @@ test.describe('PDF reader flow', () => {
     ).toBeGreaterThan(20);
     await expect(surface.locator('path')).toHaveCount(2);
 
+    await page.locator('.workspace-notebook__add-sheet').click();
+    await expect(page.locator('.workspace-block-card--notebook')).toHaveCount(1);
+    await expect(page.locator('.workspace-notebook__sheet')).toHaveCount(2);
+    await expect.poll(() => page.locator('.workspace-notebook__pages').evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
+
     await page.reload();
     await expect(page.locator('.workspace-block-card--drawing .workspace-drawing__surface path')).toHaveCount(2);
   });
 
-  test('streams tablet handwriting over the LAN page before the stroke is persisted', async () => {
-    test.setTimeout(60_000);
+  test('streams tablet handwriting and manages notebook sheets over the LAN page', async () => {
+    test.setTimeout(90_000);
     await expect(page.locator('.pdfViewer .page[data-page-number="1"]')).toBeVisible();
     const info = await expect.poll(async () => page.evaluate(() => window.sidelight.getLanWhiteboardInfo())).toMatchObject({
       running: true,
@@ -426,7 +524,7 @@ test.describe('PDF reader flow', () => {
     const tablet = await tabletWindow;
     await expect(tablet.locator('.remote-app')).toBeVisible();
     await expect(tablet.locator('.remote-status.is-connected')).toBeVisible();
-    await tablet.getByRole('button', { name: '新建右侧画布' }).click();
+    await tablet.getByRole('button', { name: '创建笔记' }).click();
 
     const tabletSurface = tablet.locator('.remote-canvas__paper');
     await expect(tabletSurface).toBeVisible();
@@ -455,27 +553,54 @@ test.describe('PDF reader flow', () => {
       return stored.workspaceBlocks.find((block) => block.kind === 'drawing')?.payload?.strokes?.[0]?.points?.length ?? 0;
     }).toBeGreaterThan(2);
 
-    await expect(tablet.getByRole('button', { name: '打开右侧' })).toBeVisible();
-    await tablet.getByRole('button', { name: '新建左侧' }).click();
-    await expect(tablet.locator('.remote-canvas-row')).toHaveCount(2);
-    await expect(tablet.getByTitle('当前页左右画布均已创建')).toBeDisabled();
-    await expect(tablet.getByTitle('另一侧已有画布')).toBeDisabled();
+    await tablet.getByRole('button', { name: '仅触控笔书写' }).click();
+    await expect(tablet.getByRole('button', { name: '仅触控笔书写' })).toHaveClass(/is-active/);
+    await tablet.mouse.move(startX + 20, startY + 120);
+    await tablet.mouse.down();
+    await tablet.mouse.move(startX + 90, startY + 150, { steps: 5 });
+    await tablet.mouse.up();
+    await expect(tabletSurface.locator('path')).toHaveCount(1);
 
-    const leftCanvasRow = tablet.locator('.remote-canvas-row').filter({ hasText: '第 1 页 · 左侧' });
-    await leftCanvasRow.getByRole('button', { name: '删除画布' }).click();
-    const deleteDialog = tablet.getByRole('dialog', { name: '删除这张画布？' });
+    await tablet.getByRole('button', { name: '圈选' }).click();
+    const lassoBox = await tabletSurface.boundingBox();
+    expect(lassoBox).toBeTruthy();
+    const lassoLeft = lassoBox!.x + 1;
+    const lassoRight = lassoBox!.x + lassoBox!.width + 8;
+    const lassoTop = lassoBox!.y + 1;
+    const lassoBottom = lassoBox!.y + lassoBox!.height + 8;
+    await tablet.mouse.move(lassoLeft, lassoTop);
+    await tablet.mouse.down();
+    await tablet.mouse.move(lassoRight, lassoTop, { steps: 4 });
+    await tablet.mouse.move(lassoRight, lassoBottom, { steps: 4 });
+    await tablet.mouse.move(lassoLeft, lassoBottom, { steps: 4 });
+    await tablet.mouse.move(lassoLeft, lassoTop, { steps: 4 });
+    await tablet.mouse.up();
+    await expect(tablet.locator('.remote-canvas__selection-box')).toBeVisible();
+    await tablet.locator('.remote-selection-actions').getByRole('button', { name: '发送到 AI' }).click();
+    await expect(page.locator('.dock-chat-panel')).toBeVisible();
+    await expect(page.locator('.composer-attachment img')).toHaveAttribute('src', /^data:image\/png;base64,/);
+
+    await tablet.getByRole('button', { name: '显示纸张列表' }).click();
+    await tablet.getByRole('button', { name: '新增纸张' }).click();
+    await expect(tablet.locator('.remote-canvas__identity')).toContainText('纸张 2/2');
+    await tablet.getByRole('button', { name: '显示纸张列表' }).click();
+    await expect(tablet.locator('.remote-canvas-row')).toHaveCount(2);
+
+    const firstSheetRow = tablet.locator('.remote-canvas-row').filter({ hasText: '纸张 1' });
+    await firstSheetRow.getByRole('button', { name: '删除纸张' }).click();
+    const deleteDialog = tablet.getByRole('dialog', { name: '删除这张纸？' });
     await expect(deleteDialog).toBeVisible();
-    await deleteDialog.getByRole('button', { name: '删除画布' }).click();
+    await deleteDialog.getByRole('button', { name: '删除纸张' }).click();
     await expect(tablet.locator('.remote-canvas-row')).toHaveCount(1);
 
-    await tablet.getByTitle('移到左侧').click();
-    await expect(tablet.locator('.remote-canvas-row')).toContainText('第 1 页 · 左侧');
+    await tablet.getByRole('button', { name: '隐藏纸张列表' }).click();
+    await tablet.getByTitle('把笔记窗口移到右侧').click();
     await expect.poll(async () => {
       const stored = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
         workspaceBlocks: Array<{ kind: string; payload?: { side?: string } }>;
       };
       return stored.workspaceBlocks.find((block) => block.kind === 'drawing')?.payload?.side;
-    }).toBe('left');
+    }).toBe('right');
     await tablet.close();
   });
 

@@ -14,8 +14,10 @@ import {
   Eraser,
   Hand,
   LocateFixed,
+  Maximize2,
   Minus,
   PenLine,
+  PenTool,
   Plus,
   Redo2,
   Trash2,
@@ -23,8 +25,15 @@ import {
 } from 'lucide-react';
 import type { WorkspaceBlock } from '../../../shared/domain';
 import type { LanDrawingPoint, LanDrawingStroke, LanWhiteboardClientMessage } from '../../../shared/lanWhiteboard';
+import {
+  drawingSelectionBounds,
+  drawingStrokePath,
+  strokeIntersectsPolygon,
+  transformDrawingSelection,
+  type DrawingBounds
+} from '../drawing/drawingGeometry';
 import { createStylusPressureState, normalizeStylusPressure, type StylusPressureState } from '../reader/drawingPressure';
-import { drawingStrokePath, remoteDrawingPayload, strokeIntersectsPolygon, strokeNearPoint } from './remoteDrawing';
+import { remoteDrawingPayload, strokeNearPoint } from './remoteDrawing';
 
 type DrawingTool = 'pen' | 'eraser' | 'lasso' | 'hand';
 
@@ -33,6 +42,8 @@ interface RemoteCanvasProps {
   canMove: boolean;
   connected: boolean;
   documentTitle: string;
+  sheetNumber: number;
+  totalSheets: number;
   remoteStrokes: LanDrawingStroke[];
   send(message: LanWhiteboardClientMessage): boolean;
   onDelete(): void;
@@ -56,10 +67,19 @@ interface PinchState {
   zoom: number;
 }
 
+interface SelectionGesture {
+  bounds: DrawingBounds;
+  mode: 'move' | 'resize';
+  originalStrokes: LanDrawingStroke[];
+  pointerId: number;
+  startX: number;
+  startY: number;
+}
+
 const colors = ['#171a16', '#2563eb', '#e0453b', '#16a36a', '#8b4bd6', '#e99620'];
 const canvasPadding = 56;
 
-export function RemoteCanvas({ block, canMove, connected, documentTitle, remoteStrokes, send, onDelete, onMove }: RemoteCanvasProps): ReactElement {
+export function RemoteCanvas({ block, canMove, connected, documentTitle, sheetNumber, totalSheets, remoteStrokes, send, onDelete, onMove }: RemoteCanvasProps): ReactElement {
   const payload = remoteDrawingPayload(block);
   const [strokes, setStrokes] = useState(payload.strokes);
   const strokesRef = useRef(payload.strokes);
@@ -71,7 +91,9 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, remoteS
   const [tool, setTool] = useState<DrawingTool>('pen');
   const [color, setColor] = useState(colors[0]);
   const [size, setSize] = useState(4);
+  const [penOnly, setPenOnly] = useState(payload.penOnly);
   const [zoom, setZoom] = useState(1);
+  const [selectionNotice, setSelectionNotice] = useState<string>();
   const zoomRef = useRef(1);
   const viewportRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -86,13 +108,18 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, remoteS
   const eraserChangedRef = useRef(false);
   const undoRef = useRef<LanDrawingStroke[][]>([]);
   const redoRef = useRef<LanDrawingStroke[][]>([]);
+  const selectionGestureRef = useRef<SelectionGesture>();
+  const deferredFitRef = useRef(false);
 
   useEffect(() => {
     if (activePointerRef.current === undefined) {
       strokesRef.current = payload.strokes;
       setStrokes(payload.strokes);
+      setPenOnly(payload.penOnly);
     }
   }, [block.updatedAt]);
+
+  const selectionBounds = drawingSelectionBounds(strokes, selectedStrokeIds);
 
   const applyStrokes = useCallback((next: LanDrawingStroke[], remember = true): void => {
     if (remember) {
@@ -209,6 +236,26 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, remoteS
     if (event.button !== 0 || activePointerRef.current !== undefined) {
       return;
     }
+    if (tool === 'pen' && penOnly && event.pointerType !== 'pen') {
+      if (event.pointerType !== 'touch') {
+        return;
+      }
+      event.preventDefault();
+      capturePointer(event);
+      activePointerRef.current = event.pointerId;
+      activePointerTypeRef.current = event.pointerType;
+      const viewport = viewportRef.current;
+      if (viewport) {
+        panRef.current = {
+          clientX: event.clientX,
+          clientY: event.clientY,
+          pointerId: event.pointerId,
+          scrollLeft: viewport.scrollLeft,
+          scrollTop: viewport.scrollTop
+        };
+      }
+      return;
+    }
     event.preventDefault();
     capturePointer(event);
     activePointerRef.current = event.pointerId;
@@ -275,12 +322,54 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, remoteS
         return;
       }
     }
+    const selectionGesture = selectionGestureRef.current;
+    if (selectionGesture?.pointerId === event.pointerId) {
+      event.preventDefault();
+      const [x, y] = canvasPoint(event.clientX, event.clientY, 0.5, true);
+      if (selectionGesture.mode === 'move') {
+        const next = transformDrawingSelection(selectionGesture.originalStrokes, selectedStrokeIds, {
+          originX: selectionGesture.bounds.x,
+          originY: selectionGesture.bounds.y,
+          scale: 1,
+          translateX: clamp(
+            x - selectionGesture.startX,
+            -selectionGesture.bounds.x,
+            payload.canvasWidth - selectionGesture.bounds.x - selectionGesture.bounds.width
+          ),
+          translateY: clamp(
+            y - selectionGesture.startY,
+            -selectionGesture.bounds.y,
+            payload.canvasHeight - selectionGesture.bounds.y - selectionGesture.bounds.height
+          )
+        }, payload.canvasWidth, payload.canvasHeight);
+        strokesRef.current = next;
+        setStrokes(next);
+      } else {
+        const scaleX = (x - selectionGesture.bounds.x) / selectionGesture.bounds.width;
+        const scaleY = (y - selectionGesture.bounds.y) / selectionGesture.bounds.height;
+        const maximumScale = Math.min(
+          (payload.canvasWidth - selectionGesture.bounds.x) / selectionGesture.bounds.width,
+          (payload.canvasHeight - selectionGesture.bounds.y) / selectionGesture.bounds.height,
+          8
+        );
+        const next = transformDrawingSelection(selectionGesture.originalStrokes, selectedStrokeIds, {
+          originX: selectionGesture.bounds.x,
+          originY: selectionGesture.bounds.y,
+          scale: clamp(Math.max(scaleX, scaleY), 0.2, maximumScale),
+          translateX: 0,
+          translateY: 0
+        }, payload.canvasWidth, payload.canvasHeight);
+        strokesRef.current = next;
+        setStrokes(next);
+      }
+      return;
+    }
     if (activePointerRef.current !== event.pointerId) {
       return;
     }
     event.preventDefault();
     const pan = panRef.current;
-    if (tool === 'hand' && pan?.pointerId === event.pointerId) {
+    if ((tool === 'hand' || (tool === 'pen' && penOnly)) && pan?.pointerId === event.pointerId) {
       const viewport = viewportRef.current;
       if (viewport) {
         viewport.scrollLeft = pan.scrollLeft - (event.clientX - pan.clientX);
@@ -313,6 +402,17 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, remoteS
       if (touchPointsRef.current.size < 2) {
         pinchRef.current = undefined;
       }
+    }
+    const selectionGesture = selectionGestureRef.current;
+    if (selectionGesture?.pointerId === event.pointerId) {
+      event.preventDefault();
+      releasePointer(event);
+      selectionGestureRef.current = undefined;
+      undoRef.current.push(selectionGesture.originalStrokes);
+      redoRef.current = [];
+      replaceStrokes(strokesRef.current, false);
+      finishDeferredFit();
+      return;
     }
     if (activePointerRef.current !== event.pointerId) {
       releasePointer(event);
@@ -353,6 +453,7 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, remoteS
       lassoPointsRef.current = [];
       setLassoPoints([]);
     }
+    finishDeferredFit();
   };
 
   const updatePinch = (): void => {
@@ -408,13 +509,27 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, remoteS
     });
   }, [payload.canvasHeight, payload.canvasWidth]);
 
+  const finishDeferredFit = (): void => {
+    if (!deferredFitRef.current) {
+      return;
+    }
+    deferredFitRef.current = false;
+    requestAnimationFrame(fitCanvas);
+  };
+
   useEffect(() => {
     fitCanvas();
     const viewport = viewportRef.current;
     if (!viewport || typeof ResizeObserver === 'undefined') {
       return;
     }
-    const observer = new ResizeObserver(() => fitCanvas());
+    const observer = new ResizeObserver(() => {
+      if (activePointerRef.current !== undefined || selectionGestureRef.current) {
+        deferredFitRef.current = true;
+        return;
+      }
+      fitCanvas();
+    });
     observer.observe(viewport);
     return () => observer.disconnect();
   }, [block.id, fitCanvas]);
@@ -445,6 +560,48 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, remoteS
     setSelectedStrokeIds(new Set());
   };
 
+  const beginSelectionGesture = (mode: SelectionGesture['mode'], event: ReactPointerEvent<SVGElement>): void => {
+    if (!selectionBounds || event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const [startX, startY] = canvasPoint(event.clientX, event.clientY, 0.5, true);
+    selectionGestureRef.current = {
+      bounds: selectionBounds,
+      mode,
+      originalStrokes: strokesRef.current,
+      pointerId: event.pointerId,
+      startX,
+      startY
+    };
+    try {
+      svgRef.current?.setPointerCapture(event.pointerId);
+    } catch {
+      // Synthetic test pointers do not always have an OS pointer to capture.
+    }
+  };
+
+  const togglePenOnly = (): void => {
+    const next = !penOnly;
+    setPenOnly(next);
+    send({ type: 'set-pen-only', requestId: createRemoteId('pen-only'), canvasId: block.id, penOnly: next });
+  };
+
+  const shareSelection = (): void => {
+    if (selectedStrokeIds.size === 0 || !connected) {
+      return;
+    }
+    send({
+      type: 'share-selection',
+      requestId: createRemoteId('share'),
+      canvasId: block.id,
+      strokes: strokesRef.current.filter((stroke) => selectedStrokeIds.has(stroke.id))
+    });
+    setSelectionNotice('已放入电脑端 AI 输入框');
+    window.setTimeout(() => setSelectionNotice(undefined), 2_200);
+  };
+
   const wheel = (event: ReactWheelEvent<HTMLDivElement>): void => {
     if (event.ctrlKey || event.metaKey) {
       event.preventDefault();
@@ -459,6 +616,7 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, remoteS
         <ToolButton active={tool === 'eraser'} label="橡皮" onClick={() => setTool('eraser')}><Eraser /></ToolButton>
         <ToolButton active={tool === 'lasso'} label="圈选" onClick={() => setTool('lasso')}><CircleDashed /></ToolButton>
         <ToolButton active={tool === 'hand'} label="移动" onClick={() => setTool('hand')}><Hand /></ToolButton>
+        <ToolButton active={penOnly} label="仅触控笔书写" onClick={togglePenOnly}><PenTool /></ToolButton>
         <span className="remote-tools__divider" />
         <div className="remote-color-row" aria-label="颜色">
           {colors.map((preset) => (
@@ -483,7 +641,6 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, remoteS
         <span className="remote-tools__spacer" />
         <ToolButton disabled={strokes.length === 0} label="撤销" onClick={undo}><Undo2 /></ToolButton>
         <ToolButton disabled={redoRef.current.length === 0} label="重做" onClick={redo}><Redo2 /></ToolButton>
-        {selectedStrokeIds.size > 0 && <ToolButton danger label={`删除所选 ${selectedStrokeIds.size} 条`} onClick={deleteSelection}><Trash2 /></ToolButton>}
       </div>
 
       <div className="remote-canvas__viewport" ref={viewportRef} onWheel={wheel}>
@@ -522,14 +679,49 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, remoteS
             {remoteStrokes.map((stroke) => <path key={`remote-${stroke.id}`} d={drawingStrokePath(stroke, true)} fill={stroke.color} opacity="0.78" />)}
             {activeStroke && <path d={drawingStrokePath(activeStroke, true)} fill={activeStroke.color} />}
             {lassoPoints.length > 1 && <polyline className="remote-canvas__lasso" points={lassoPoints.map((point) => point.join(',')).join(' ')} />}
+            {selectionBounds && (
+              <g className="remote-canvas__selection">
+                <rect
+                  className="remote-canvas__selection-box"
+                  x={selectionBounds.x}
+                  y={selectionBounds.y}
+                  width={selectionBounds.width}
+                  height={selectionBounds.height}
+                  aria-label="移动选区"
+                  onPointerDown={(event) => beginSelectionGesture('move', event)}
+                />
+                <g
+                  className="remote-canvas__selection-handle"
+                  aria-label="缩放选区"
+                  transform={`translate(${selectionBounds.x + selectionBounds.width} ${selectionBounds.y + selectionBounds.height})`}
+                  onPointerDown={(event) => beginSelectionGesture('resize', event)}
+                >
+                  <circle r="11" />
+                  <Maximize2 x={-6} y={-6} width="12" height="12" />
+                </g>
+              </g>
+            )}
           </svg>
+          {selectionBounds && (
+            <div
+              className="remote-selection-actions"
+              style={{
+                left: canvasPadding + (selectionBounds.x + 7) * zoom,
+                top: canvasPadding + (selectionBounds.y + 7) * zoom
+              }}
+            >
+              <span>{selectedStrokeIds.size} 条</span>
+              <button type="button" disabled={!connected} onClick={shareSelection}>发送到 AI</button>
+              <button type="button" className="is-danger" onClick={deleteSelection}>删除</button>
+            </div>
+          )}
         </div>
       </div>
 
       <div className="remote-canvas__identity">
-        <span><small title={documentTitle}>{documentTitle}</small><strong>第 {block.pageNumber ?? '—'} 页 · {payload.side === 'left' ? '左侧画布' : '右侧画布'}</strong></span>
-        <button type="button" disabled={!canMove} title={canMove ? `移到${payload.side === 'left' ? '右' : '左'}侧` : '另一侧已有画布'} onClick={onMove}><ArrowLeftRight />换侧</button>
-        <button type="button" className="is-danger" title="删除画布" onClick={onDelete}><Trash2 />删除</button>
+        <span><small title={documentTitle}>{documentTitle}</small><strong>PDF {block.pageNumber ?? '—'} · 纸张 {sheetNumber}/{totalSheets}</strong></span>
+        <button type="button" disabled={!canMove} title={`把笔记窗口移到${payload.side === 'left' ? '右' : '左'}侧`} onClick={onMove}><ArrowLeftRight />换侧</button>
+        <button type="button" className="is-danger" title="删除这张纸" onClick={onDelete}><Trash2 />删除</button>
       </div>
 
       <div className="remote-zoom">
@@ -539,6 +731,7 @@ export function RemoteCanvas({ block, canMove, connected, documentTitle, remoteS
         <button type="button" aria-label="适合屏幕" onClick={fitCanvas}><LocateFixed /></button>
       </div>
       {!connected && <div className="remote-canvas__offline">正在重新连接，笔迹会在连接恢复后继续同步</div>}
+      {selectionNotice && <div className="remote-canvas__notice" role="status">{selectionNotice}</div>}
     </section>
   );
 }

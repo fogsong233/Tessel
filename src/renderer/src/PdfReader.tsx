@@ -37,7 +37,6 @@ import tesselLogoUrl from '../../assets/icons/tessel-logo.png?url';
 import {
   BookOpen,
   ArrowLeft,
-  ArrowRight,
   Bookmark,
   BookmarkPlus,
   ChevronDown,
@@ -109,7 +108,8 @@ import { normalizeSelectionColors, selectionColorForRole } from '../../shared/se
 import { canOpenWorkspaceBlockSource, defaultWorkspaceBlockWidth, workspaceBlockSpec } from '../../shared/workspacePins';
 import { MarkdownView } from './MarkdownView';
 import { MarkdownNoteEditor } from './MarkdownNoteEditor';
-import { WorkspaceDrawingBlock, drawingBlockSide } from './reader/WorkspaceDrawingBlock';
+import { drawingBlockSide } from './reader/WorkspaceDrawingBlock';
+import { WorkspaceDrawingNotebook } from './reader/WorkspaceDrawingNotebook';
 import { WorkspaceImageBlock, imageBlockPayload } from './reader/WorkspaceImageBlock';
 import { readerText, type ReaderText } from './reader/readerText';
 import {
@@ -177,7 +177,12 @@ interface PdfReaderProps {
   activeConversationId?: string;
   notes: NoteDocument[];
   transientAid?: ReaderTransientAid;
-  composerPrefill?: { conversationId: string; text: string; nonce: string };
+  composerPrefill?: {
+    conversationId: string;
+    text?: string;
+    attachments?: ConversationAttachment[];
+    nonce: string;
+  };
   chatOpen: boolean;
   busy: boolean;
   canStopGeneration: boolean;
@@ -210,6 +215,7 @@ interface PdfReaderProps {
   onStopGeneration(): void;
   onSaveWorkspaceBlock(block: WorkspaceBlock): void | Promise<void>;
   onDeleteWorkspaceBlock(blockId: string): void;
+  onShareDrawingSelection(pageNumber: number, canvasId: string, strokes: LanDrawingStroke[]): void;
   onSaveNote(note: NoteDocument): void | Promise<void>;
   onDeleteNote(noteId: string): void;
   onGenerateNote(pageStart: number, pageEnd: number, pageText: string, toolContext?: AiDocumentToolContext): void;
@@ -351,6 +357,7 @@ export function PdfReader({
   onStopGeneration,
   onSaveWorkspaceBlock,
   onDeleteWorkspaceBlock,
+  onShareDrawingSelection,
   onSaveNote,
   onDeleteNote,
   onGenerateNote,
@@ -471,10 +478,27 @@ export function PdfReader({
   const pageConversationCount = conversations.filter((conversation) => conversation.pageNumber === activePage).length;
   const pageMarks = marks.filter((mark) => mark.pageNumber === activePage);
   const visibleNotes = notes.filter((note) => note.pageStart <= activePage && note.pageEnd >= activePage);
-  const activePageCanvasSides = useMemo(() => ({
-    left: effectiveWorkspaceBlocks.some((block) => block.kind === 'drawing' && block.pageNumber === activePage && drawingBlockSide(block) === 'left'),
-    right: effectiveWorkspaceBlocks.some((block) => block.kind === 'drawing' && block.pageNumber === activePage && drawingBlockSide(block) === 'right')
-  }), [activePage, effectiveWorkspaceBlocks]);
+  const activePageNotebook = useMemo(() => {
+    const sheets = effectiveWorkspaceBlocks.filter((block) => block.kind === 'drawing' && block.pageNumber === activePage).sort(compareDrawingSheets);
+    return {
+      count: sheets.length,
+      firstBlockId: sheets[0]?.id,
+      side: sheets[0] ? drawingBlockSide(sheets[0]) : 'left' as const
+    };
+  }, [activePage, effectiveWorkspaceBlocks]);
+  const drawingNotebookRepresentativeIds = useMemo(() => {
+    const groups = new Map<string, WorkspaceBlock[]>();
+    for (const block of effectiveWorkspaceBlocks) {
+      if (block.kind === 'drawing' && block.pageNumber) {
+        const key = `${block.documentId}:${block.pageNumber}`;
+        groups.set(key, [...(groups.get(key) ?? []), block]);
+      }
+    }
+    return new Set([...groups.values()].flatMap((group) => {
+      const first = [...group].sort(compareDrawingSheets)[0];
+      return first ? [first.id] : [];
+    }));
+  }, [effectiveWorkspaceBlocks]);
   useEffect(() => {
     if (!noteEditorNote) {
       return;
@@ -490,6 +514,9 @@ export function PdfReader({
       if (block.anchor !== 'page') {
         return maxTail;
       }
+      if (block.kind === 'drawing' && !drawingNotebookRepresentativeIds.has(block.id)) {
+        return maxTail;
+      }
 
       if (block.kind === 'drawing' && drawingBlockSide(block) === 'right') {
         const measuredPageWidth = workspaceBlockLayouts[block.id]?.pageWidth;
@@ -500,10 +527,13 @@ export function PdfReader({
 
       return Math.max(maxTail, block.x > 0 ? block.x + block.width + 180 : 0);
     }, 0);
-  }, [effectiveWorkspaceBlocks, scale, workspaceBlockLayouts]);
+  }, [drawingNotebookRepresentativeIds, effectiveWorkspaceBlocks, scale, workspaceBlockLayouts]);
   const workspaceLeftGutter = useMemo(() => {
     const neededGutter = effectiveWorkspaceBlocks.reduce((maxGutter, block) => {
       if (block.anchor !== 'page') {
+        return maxGutter;
+      }
+      if (block.kind === 'drawing' && !drawingNotebookRepresentativeIds.has(block.id)) {
         return maxGutter;
       }
 
@@ -522,7 +552,7 @@ export function PdfReader({
     }, 0);
 
     return neededGutter > 0 ? Math.max(560, neededGutter) : 0;
-  }, [effectiveWorkspaceBlocks, scale, workspaceBlockLayouts]);
+  }, [drawingNotebookRepresentativeIds, effectiveWorkspaceBlocks, scale, workspaceBlockLayouts]);
   const chatPanelOpen = chatOpen && Boolean(activeConversation);
   const hasTransientAid = Boolean(transientAid);
   const hasOpenDock = chatPanelOpen || hasTransientAid || Boolean(noteEditorNote);
@@ -1314,14 +1344,12 @@ export function PdfReader({
     }
 
     const pageNumber = currentWorkspacePageNumber();
-    const existing = workspaceBlocksForPlacement().find((block) => (
-      block.kind === 'drawing' && block.pageNumber === pageNumber && drawingBlockSide(block) === side
-    ));
-    if (existing) {
-      pendingRevealScrollTopRef.current = containerRef.current?.scrollTop;
-      setPendingRevealBlockId(existing.id);
-      return;
-    }
+    const notebookSheets = workspaceBlocksForPlacement().filter((block) => block.kind === 'drawing' && block.pageNumber === pageNumber);
+    const notebookSide = notebookSheets[0] ? drawingBlockSide(notebookSheets[0]) : side;
+    const sheetIndex = Math.max(
+      notebookSheets.length,
+      notebookSheets.reduce((maximum, block) => Math.max(maximum, Number(block.payload?.sheetIndex ?? 0)), 0)
+    ) + 1;
 
     const container = containerRef.current;
     const canvas = container?.querySelector<HTMLElement>('.pdf-canvas');
@@ -1339,16 +1367,17 @@ export function PdfReader({
       sourceKind: 'manual',
       contentKind: 'custom',
       pageNumber,
-      title: `${t.canvas} · p.${pageNumber}`,
+      title: `${t.notebook} · p.${pageNumber} · ${sheetIndex}`,
       payload: {
         version: 1,
-        side,
+        side: notebookSide,
+        sheetIndex,
         layoutScale,
         canvasWidth: width,
         canvasHeight: height,
         strokes: []
       },
-      x: side === 'left' ? -width - 28 : 28,
+      x: notebookSide === 'left' ? -width - 28 : 28,
       y: 0,
       width,
       height,
@@ -1370,9 +1399,17 @@ export function PdfReader({
     currentWorkspacePageScale,
     meta,
     onSaveWorkspaceBlock,
-    t.canvas,
+    t.notebook,
     workspaceBlocksForPlacement
   ]);
+
+  const openDrawingNotebook = useCallback((blockId?: string): void => {
+    if (!blockId) {
+      return;
+    }
+    pendingRevealScrollTopRef.current = containerRef.current?.scrollTop;
+    setPendingRevealBlockId(blockId);
+  }, []);
 
   useEffect(() => {
     if (!pageDraftFocused) {
@@ -2395,7 +2432,7 @@ export function PdfReader({
             activeDocumentId={meta?.id}
             activePage={activePage}
             bookmarks={bookmarks}
-            canvasSides={activePageCanvasSides}
+            notebook={activePageNotebook}
             leftTab={leftTab}
             loadProgress={loadProgress}
             outline={displayOutline}
@@ -2413,6 +2450,7 @@ export function PdfReader({
             totalPages={totalPages}
             onAddBookmark={() => onAddBookmark(activePage)}
             onAddCanvas={addDrawingToCanvas}
+            onOpenNotebook={openDrawingNotebook}
             onFindNext={() => executeSearch(true)}
             onFindPrevious={() => executeSearch(true, true)}
             onFitWidth={() => {
@@ -2482,7 +2520,9 @@ export function PdfReader({
                       translations={translations}
                       layouts={workspaceBlockLayouts}
                       text={t}
+                      onAddDrawing={addDrawingToCanvas}
                       onDelete={onDeleteWorkspaceBlock}
+                      onShareDrawingSelection={onShareDrawingSelection}
                       onOpenConversation={openDockConversation}
                       onOpenTranslation={onOpenTranslation}
                       onOpenNote={openDockNoteById}
@@ -2653,7 +2693,7 @@ function ReaderLeftPanel({
   activeDocumentId,
   activePage,
   bookmarks,
-  canvasSides,
+  notebook,
   leftTab,
   loadProgress,
   outline,
@@ -2671,6 +2711,7 @@ function ReaderLeftPanel({
   totalPages,
   onAddBookmark,
   onAddCanvas,
+  onOpenNotebook,
   onFindNext,
   onFindPrevious,
   onFitWidth,
@@ -2695,7 +2736,7 @@ function ReaderLeftPanel({
   activeDocumentId?: string;
   activePage: number;
   bookmarks: PdfUserBookmark[];
-  canvasSides: { left: boolean; right: boolean };
+  notebook: { count: number; firstBlockId?: string; side: 'left' | 'right' };
   leftTab: LeftTab;
   loadProgress: number;
   outline: PdfOutlineItem[];
@@ -2713,6 +2754,7 @@ function ReaderLeftPanel({
   totalPages: number;
   onAddBookmark(): void;
   onAddCanvas(side: 'left' | 'right'): void;
+  onOpenNotebook(blockId?: string): void;
   onFindNext(): void;
   onFindPrevious(): void;
   onFitWidth(): void;
@@ -2839,15 +2881,27 @@ function ReaderLeftPanel({
         </button>
         {canvasMenuOpen && (
           <div className="canvas-placement-menu__options">
-            <button type="button" title={canvasSides.left ? t.openCanvasLeft : t.addCanvasLeft} aria-label={canvasSides.left ? t.openCanvasLeft : t.addCanvasLeft} onClick={() => { setCanvasMenuOpen(false); onAddCanvas('left'); }}>
-              {canvasSides.left ? <Check size={14} /> : <ArrowLeft size={14} />}
-              <span>{canvasSides.left ? t.openCanvasLeft : t.addCanvasLeft}</span>
-            </button>
-            <button type="button" title={canvasSides.right ? t.openCanvasRight : t.addCanvasRight} aria-label={canvasSides.right ? t.openCanvasRight : t.addCanvasRight} onClick={() => { setCanvasMenuOpen(false); onAddCanvas('right'); }}>
-              {canvasSides.right ? <Check size={14} /> : <ArrowRight size={14} />}
-              <span>{canvasSides.right ? t.openCanvasRight : t.addCanvasRight}</span>
-            </button>
-            <small>{t.canvasLimit}</small>
+            {notebook.count > 0 ? (
+              <>
+                <button type="button" title={t.openNotebook} aria-label={t.openNotebook} onClick={() => { setCanvasMenuOpen(false); onOpenNotebook(notebook.firstBlockId); }}>
+                  <Check size={14} />
+                  <span>{t.openNotebook}</span>
+                </button>
+                <button type="button" title={t.addNotebookSheet} aria-label={t.addNotebookSheet} onClick={() => { setCanvasMenuOpen(false); onAddCanvas(notebook.side); }}>
+                  <Plus size={14} />
+                  <span>{t.addNotebookSheet}</span>
+                </button>
+                <small>{t.notebookSheetCount(notebook.count)}</small>
+              </>
+            ) : (
+              <>
+                <button type="button" title={t.createNotebook} aria-label={t.createNotebook} onClick={() => { setCanvasMenuOpen(false); onAddCanvas('left'); }}>
+                  <Plus size={14} />
+                  <span>{t.createNotebook}</span>
+                </button>
+                <small>{t.notebookDefaultSide}</small>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -3040,7 +3094,7 @@ function ReaderDock({
   busy: boolean;
   canStopGeneration: boolean;
   chatOpen: boolean;
-  composerPrefill?: { conversationId: string; text: string; nonce: string };
+  composerPrefill?: { conversationId: string; text?: string; attachments?: ConversationAttachment[]; nonce: string };
   conversations: Conversation[];
   allConversations: Conversation[];
   translations: TranslationEntry[];
@@ -3831,7 +3885,9 @@ function WorkspaceBlockLayer({
   translations,
   layouts,
   text,
+  onAddDrawing,
   onDelete,
+  onShareDrawingSelection,
   onOpenConversation,
   onOpenTranslation,
   onOpenNote,
@@ -3842,14 +3898,29 @@ function WorkspaceBlockLayer({
   translations: TranslationEntry[];
   layouts: Record<string, WorkspaceBlockLayout>;
   text: ReaderText;
+  onAddDrawing(side: 'left' | 'right'): void;
   onDelete(blockId: string): void;
+  onShareDrawingSelection(pageNumber: number, canvasId: string, strokes: LanDrawingStroke[]): void;
   onOpenConversation(conversationId: string): void;
   onOpenTranslation(translation: TranslationEntry): void;
   onOpenNote(noteId: string): void;
   onSave(block: WorkspaceBlock): void;
 }): ReactElement {
   const [drafts, setDrafts] = useState<Record<string, Partial<Pick<WorkspaceBlock, 'x' | 'y' | 'width'>>>>({});
-  const visibleBlocks = blocks.filter((block) => block.anchor === 'page' && layouts[block.id]);
+  const drawingGroups = new Map<string, WorkspaceBlock[]>();
+  for (const block of blocks) {
+    if (block.kind === 'drawing' && block.anchor === 'page' && block.pageNumber) {
+      const key = `${block.documentId}:${block.pageNumber}`;
+      drawingGroups.set(key, [...(drawingGroups.get(key) ?? []), block]);
+    }
+  }
+  const drawingRepresentatives = new Set([...drawingGroups.values()].flatMap((group) => {
+    const first = [...group].sort(compareDrawingSheets)[0];
+    return first ? [first.id] : [];
+  }));
+  const visibleBlocks = blocks.filter((block) => block.anchor === 'page'
+    && layouts[block.id]
+    && (block.kind !== 'drawing' || drawingRepresentatives.has(block.id)));
   const displayPlacements = new Map<string, { left: number; top: number; width: number }>();
   const placedByLane = new Map<string, Array<{ left: number; right: number; top: number; bottom: number }>>();
   const sortedVisibleBlocks = [...visibleBlocks].sort((a, b) => {
@@ -4023,6 +4094,7 @@ function WorkspaceBlockLayer({
         const imagePayload = imageBlockPayload(block);
         const isImage = block.kind === 'image' && Boolean(imagePayload?.dataUrl);
         const isDrawing = block.kind === 'drawing';
+        const drawingSheets = isDrawing ? drawingGroups.get(`${block.documentId}:${block.pageNumber}`) ?? [block] : [];
         const layout = layouts[block.id];
         return (
           <article
@@ -4030,7 +4102,7 @@ function WorkspaceBlockLayer({
             data-block-id={block.id}
             data-block-x={block.x}
             data-page-number={block.pageNumber}
-            className={`workspace-block-card workspace-block-card--${block.kind}`}
+            className={`workspace-block-card workspace-block-card--${block.kind}${isDrawing ? ' workspace-block-card--notebook' : ''}`}
             style={{
               left: placement?.left,
               top: placement?.top,
@@ -4058,27 +4130,26 @@ function WorkspaceBlockLayer({
                 onSave={onSave}
               />
             ) : isDrawing ? (
-              <WorkspaceDrawingBlock
-                block={block}
-                canMoveSide={!blocks.some((candidate) => candidate.id !== block.id
-                  && candidate.kind === 'drawing'
-                  && candidate.documentId === block.documentId
-                  && candidate.pageNumber === block.pageNumber
-                  && drawingBlockSide(candidate) !== drawingBlockSide(block))}
+              <WorkspaceDrawingNotebook
+                blocks={drawingSheets}
                 height={layout.pageHeight}
-                remoteStrokes={Object.values(lanWhiteboardStrokes[block.id] ?? {})}
+                remoteStrokes={lanWhiteboardStrokes}
                 text={text}
                 width={layout.pageWidth}
-                onDelete={() => onDelete(block.id)}
-                onMoveSide={() => {
-                  const side = drawingBlockSide(block) === 'left' ? 'right' : 'left';
-                  onSave({
-                    ...block,
-                    payload: { ...block.payload, side },
-                    x: side === 'left' ? -block.width - 28 : 28,
-                    updatedAt: new Date().toISOString()
-                  });
+                onAddSheet={onAddDrawing}
+                onDelete={onDelete}
+                onMoveSide={(side) => {
+                  const updatedAt = new Date().toISOString();
+                  for (const sheet of drawingSheets) {
+                    onSave({
+                      ...sheet,
+                      payload: { ...sheet.payload, side },
+                      x: side === 'left' ? -sheet.width - 28 : 28,
+                      updatedAt
+                    });
+                  }
                 }}
+                onShareSelection={onShareDrawingSelection}
                 onSave={onSave}
               />
             ) : (
@@ -4146,6 +4217,14 @@ function workspaceBlockLabel(block: WorkspaceBlock, text: ReaderText): string {
   return block.kind;
 }
 
+function compareDrawingSheets(a: WorkspaceBlock, b: WorkspaceBlock): number {
+  const aIndex = Number(a.payload?.sheetIndex ?? Number.MAX_SAFE_INTEGER);
+  const bIndex = Number(b.payload?.sheetIndex ?? Number.MAX_SAFE_INTEGER);
+  return aIndex - bIndex
+    || (drawingBlockSide(a) === 'left' ? -1 : 1) - (drawingBlockSide(b) === 'left' ? -1 : 1)
+    || a.createdAt.localeCompare(b.createdAt);
+}
+
 function DockChatPanel({
   busy,
   canStopGeneration,
@@ -4166,7 +4245,7 @@ function DockChatPanel({
   busy: boolean;
   canStopGeneration: boolean;
   conversation: Conversation;
-  composerPrefill?: { text: string; nonce: string };
+  composerPrefill?: { text?: string; attachments?: ConversationAttachment[]; nonce: string };
   pdfReadingSignal: number;
   uiLanguage: UiLanguage;
   codexEnabled: boolean;
@@ -4292,7 +4371,15 @@ function DockChatPanel({
     if (!composerPrefill) {
       return;
     }
-    setDraft((current) => current.trim() ? `${current.trimEnd()}\n\n${composerPrefill.text}` : composerPrefill.text);
+    if (composerPrefill.text) {
+      setDraft((current) => current.trim() ? `${current.trimEnd()}\n\n${composerPrefill.text}` : composerPrefill.text!);
+    }
+    if (composerPrefill.attachments?.length) {
+      setAttachments((current) => [
+        ...current,
+        ...composerPrefill.attachments!.filter((attachment) => !current.some((item) => item.id === attachment.id))
+      ]);
+    }
     window.requestAnimationFrame(() => textareaRef.current?.focus());
   }, [composerPrefill?.nonce]);
 

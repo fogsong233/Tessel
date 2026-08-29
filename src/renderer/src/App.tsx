@@ -73,6 +73,7 @@ import {
   type PdfSelectionPayload
 } from './PdfReader';
 import tesselLogoUrl from '../../assets/icons/tessel-logo.png?url';
+import { drawingSelectionPng } from './drawing/drawingGeometry';
 import { lanWhiteboardText } from './lanWhiteboardText';
 import { LanWhiteboardSettings } from './settings/LanWhiteboardSettings';
 
@@ -167,7 +168,12 @@ export function App(): ReactElement {
   const [readerLoadPending, setReaderLoadPending] = useState(false);
   const [readerLoadError, setReaderLoadError] = useState<string>();
   const [activeStream, setActiveStream] = useState<{ streamId: string; conversationId?: string }>();
-  const [quotedDraft, setQuotedDraft] = useState<{ conversationId: string; text: string; nonce: string }>();
+  const [quotedDraft, setQuotedDraft] = useState<{
+    conversationId: string;
+    text?: string;
+    attachments?: ConversationAttachment[];
+    nonce: string;
+  }>();
   const loadedReaderDocumentRef = useRef<string | undefined>(undefined);
   const readerLoadRequestRef = useRef<string | undefined>(undefined);
   const stoppedStreamIdsRef = useRef<Set<string>>(new Set());
@@ -295,8 +301,16 @@ export function App(): ReactElement {
         delete canvas[event.strokeId];
         return { ...current, [event.canvasId]: canvas };
       });
+      return;
     }
-  }), [activeDocument?.id]);
+    if (event.type === 'selection-share' && event.selection.documentId === activeDocument?.id) {
+      void attachDrawingSelectionToConversation(
+        event.selection.pageNumber,
+        event.selection.canvasId,
+        event.selection.strokes
+      );
+    }
+  }), [activeConversationId, activeDocument?.id, conversations, panelOpen]);
 
   useEffect(() => {
     document.title = settingsWindow ? 'Tessel Settings' : activeDocument?.title ? `${activeDocument.title} — Tessel` : 'Tessel';
@@ -442,8 +456,15 @@ export function App(): ReactElement {
   }
 
   async function createPageChat(pageNumber: number): Promise<void> {
+    const saved = await createPageConversation(pageNumber);
+    if (saved) {
+      focusConversation(saved.id);
+    }
+  }
+
+  async function createPageConversation(pageNumber: number): Promise<Conversation | undefined> {
     if (!activeDocument) {
-      return;
+      return undefined;
     }
 
     clearTransientForeground();
@@ -470,7 +491,43 @@ export function App(): ReactElement {
     };
 
     const saved = await saveConversationLocally(conversation);
-    focusConversation(saved.id);
+    return saved;
+  }
+
+  async function attachDrawingSelectionToConversation(
+    pageNumber: number,
+    canvasId: string,
+    strokes: LanDrawingStroke[]
+  ): Promise<void> {
+    if (!activeDocument || strokes.length === 0) {
+      return;
+    }
+    const selectedIds = new Set(strokes.map((stroke) => stroke.id));
+    const dataUrl = drawingSelectionPng(strokes, selectedIds);
+    if (!dataUrl) {
+      return;
+    }
+    const attachment: ConversationAttachment = {
+      id: createId('image'),
+      kind: 'image',
+      name: `handwritten-notes-p${pageNumber}-${canvasId.slice(-6)}.png`,
+      mimeType: 'image/png',
+      dataUrl,
+      createdAt: new Date().toISOString()
+    };
+    const expandedConversation = panelOpen
+      ? conversations.find((conversation) => conversation.id === activeConversationId)
+      : undefined;
+    const conversation = expandedConversation ?? await createPageConversation(pageNumber);
+    if (!conversation) {
+      return;
+    }
+    focusConversation(conversation.id);
+    setQuotedDraft({
+      conversationId: conversation.id,
+      attachments: [attachment],
+      nonce: createId('canvas-selection')
+    });
   }
 
   async function startAnchoredAction(mode: AiMode, selection: PdfSelectionPayload): Promise<void> {
@@ -1595,6 +1652,8 @@ export function App(): ReactElement {
         outlineGenerationProgress={outlineGenerationProgress}
         onSaveWorkspaceBlock={saveWorkspaceBlock}
         onDeleteWorkspaceBlock={(blockId) => void deleteWorkspaceBlock(blockId)}
+        onShareDrawingSelection={(pageNumber, canvasId, strokes) =>
+          void attachDrawingSelectionToConversation(pageNumber, canvasId, strokes)}
         onSaveNote={saveNote}
         onDeleteNote={(noteId) => void deleteNote(noteId)}
         onGenerateNote={(pageStart, pageEnd, pageText, toolContext) =>

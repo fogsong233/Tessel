@@ -6,6 +6,7 @@ export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'in
 interface SocketState {
   clientCount: number;
   latency?: number;
+  lastAcknowledgement?: { requestId: string; canvasId?: string };
   snapshot?: LanWhiteboardSnapshot;
   status: ConnectionStatus;
   transientStrokes: Record<string, Record<string, LanDrawingStroke>>;
@@ -111,6 +112,7 @@ function isDurableMessage(message: LanWhiteboardClientMessage): boolean {
   return message.type === 'create-canvas'
     || message.type === 'delete-canvas'
     || message.type === 'move-canvas'
+    || message.type === 'set-pen-only'
     || message.type === 'stroke-commit'
     || message.type === 'replace-strokes';
 }
@@ -145,6 +147,8 @@ function applyMessage(message: LanWhiteboardServerMessage, setState: React.Dispa
           canvases: current.snapshot.canvases.filter((block) => block.id !== message.blockId)
         }
       } : current);
+      return;
+    case 'selection-share':
       return;
     case 'stroke-begin':
       setState((current) => ({
@@ -196,6 +200,10 @@ function applyMessage(message: LanWhiteboardServerMessage, setState: React.Dispa
       console.warn(`Tessel whiteboard: ${message.message}`);
       return;
     case 'ack':
+      setState((current) => ({
+        ...current,
+        lastAcknowledgement: { requestId: message.requestId, canvasId: message.canvasId }
+      }));
       return;
   }
 }

@@ -6,10 +6,10 @@ import {
   Minimize,
   PanelLeftClose,
   PanelLeftOpen,
+  PenLine,
   Plus,
   Radio,
   RefreshCw,
-  Sparkles,
   Trash2,
   Wifi,
   WifiOff
@@ -22,7 +22,7 @@ import { useLanWhiteboardSocket } from './useLanWhiteboardSocket';
 
 export function RemoteWhiteboardApp(): ReactElement {
   const token = useMemo(() => new URLSearchParams(location.search).get('token') ?? '', []);
-  const { clientCount, latency, send, snapshot, status, transientStrokes } = useLanWhiteboardSocket(token);
+  const { clientCount, latency, lastAcknowledgement, send, snapshot, status, transientStrokes } = useLanWhiteboardSocket(token);
   const [selectedCanvasId, setSelectedCanvasId] = useState<string>();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [fullscreen, setFullscreen] = useState(Boolean(document.fullscreenElement));
@@ -32,8 +32,7 @@ export function RemoteWhiteboardApp(): ReactElement {
   const contextDocument = snapshot?.documents.find((document) => document.id === snapshot.context?.documentId);
   const contextCanvases = snapshot?.canvases.filter((block) => block.documentId === snapshot.context?.documentId
     && block.pageNumber === snapshot.context?.pageNumber) ?? [];
-  const leftCanvas = contextCanvases.find((block) => remoteDrawingPayload(block).side === 'left');
-  const rightCanvas = contextCanvases.find((block) => remoteDrawingPayload(block).side === 'right');
+  const notebookSide = contextCanvases[0] ? remoteDrawingPayload(contextCanvases[0]).side : 'left';
   const groupedCanvases = useMemo(() => groupCanvases(snapshot?.canvases ?? [], snapshot?.documents ?? []), [snapshot?.canvases, snapshot?.documents]);
 
   useEffect(() => {
@@ -46,18 +45,19 @@ export function RemoteWhiteboardApp(): ReactElement {
   }, [selectedCanvas, snapshot]);
 
   useEffect(() => {
+    if (lastAcknowledgement?.requestId.startsWith('canvas_') && lastAcknowledgement.canvasId) {
+      setSelectedCanvasId(lastAcknowledgement.canvasId);
+      setSidebarOpen(false);
+    }
+  }, [lastAcknowledgement]);
+
+  useEffect(() => {
     const listener = (): void => setFullscreen(Boolean(document.fullscreenElement));
     document.addEventListener('fullscreenchange', listener);
     return () => document.removeEventListener('fullscreenchange', listener);
   }, []);
 
   const createCanvas = (side: LanWhiteboardSide): void => {
-    const existing = side === 'left' ? leftCanvas : rightCanvas;
-    if (existing) {
-      setSelectedCanvasId(existing.id);
-      setSidebarOpen(false);
-      return;
-    }
     const requestId = remoteId('canvas');
     send({
       type: 'create-canvas',
@@ -103,13 +103,13 @@ export function RemoteWhiteboardApp(): ReactElement {
           <button
             type="button"
             className="remote-header__sidebar-toggle"
-            aria-label={sidebarOpen ? '隐藏画布列表' : '显示画布列表'}
+            aria-label={sidebarOpen ? '隐藏纸张列表' : '显示纸张列表'}
             onClick={() => setSidebarOpen((value) => !value)}
           >
             {sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
           </button>
-          <span className="remote-header__logo"><Sparkles /></span>
-          <span><strong>Tessel</strong><small>局域网手写板</small></span>
+          <span className="remote-header__logo"><PenLine /></span>
+          <span><strong>Tessel</strong><small>局域网手写</small></span>
         </div>
         <div className="remote-header__context">
           <FileText />
@@ -132,12 +132,12 @@ export function RemoteWhiteboardApp(): ReactElement {
 
       <aside className={`remote-sidebar${sidebarOpen ? ' is-open' : ''}`}>
         <div className="remote-sidebar__heading">
-          <div><span>画布</span><strong>{snapshot?.canvases.length ?? 0}</strong></div>
+          <div><span>纸张</span><strong>{snapshot?.canvases.length ?? 0}</strong></div>
           <button
             type="button"
-            title={leftCanvas && rightCanvas ? '当前页左右画布均已创建' : '在电脑当前页创建画布'}
-            onClick={() => createCanvas(rightCanvas ? 'left' : 'right')}
-            disabled={!snapshot?.context || Boolean(leftCanvas && rightCanvas)}
+            title="在电脑当前页新增一张纸"
+            onClick={() => createCanvas(notebookSide)}
+            disabled={!snapshot?.context}
           ><Plus /></button>
         </div>
         <div className="remote-sidebar__list">
@@ -153,12 +153,12 @@ export function RemoteWhiteboardApp(): ReactElement {
                         <Radio />
                       </span>
                       <span>
-                        <strong>第 {block.pageNumber ?? '—'} 页 · {payload.side === 'left' ? '左侧' : '右侧'}</strong>
+                        <strong>PDF 第 {block.pageNumber ?? '—'} 页 · 纸张 {sheetNumber(snapshot?.canvases ?? [], block)}</strong>
                         <small>{payload.strokes.length} 条笔迹</small>
                       </span>
                       <ChevronRight />
                     </button>
-                    <button type="button" className="remote-canvas-row__delete" aria-label="删除画布" onClick={() => setPendingDelete(block)}><Trash2 /></button>
+                    <button type="button" className="remote-canvas-row__delete" aria-label="删除纸张" onClick={() => setPendingDelete(block)}><Trash2 /></button>
                   </div>
                 );
               })}
@@ -167,26 +167,21 @@ export function RemoteWhiteboardApp(): ReactElement {
           {snapshot && snapshot.canvases.length === 0 && (
             <div className="remote-sidebar__empty">
               <span><PenIllustration /></span>
-              <strong>还没有画布</strong>
-              <p>在电脑当前 PDF 页的左侧或右侧创建一张。</p>
+              <strong>还没有手写笔记</strong>
+              <p>在电脑当前 PDF 页创建第一张纸。</p>
             </div>
           )}
           {!snapshot && <SidebarSkeleton />}
         </div>
         <div className="remote-sidebar__create">
-          <small>{snapshot?.context ? `电脑当前第 ${snapshot.context.pageNumber} 页` : '等待电脑端页面'}</small>
-          <div>
-            <button type="button" className={leftCanvas ? 'is-occupied' : ''} disabled={!snapshot?.context} onClick={() => createCanvas('left')}>
-              {leftCanvas ? <ChevronRight /> : <Plus />}{leftCanvas ? '打开左侧' : '新建左侧'}
-            </button>
-            <button type="button" className={rightCanvas ? 'is-occupied' : ''} disabled={!snapshot?.context} onClick={() => createCanvas('right')}>
-              {rightCanvas ? <ChevronRight /> : <Plus />}{rightCanvas ? '打开右侧' : '新建右侧'}
-            </button>
-          </div>
+          <small>{snapshot?.context ? `PDF 第 ${snapshot.context.pageNumber} 页 · ${contextCanvases.length} 张纸` : '等待电脑端页面'}</small>
+          <button type="button" disabled={!snapshot?.context} onClick={() => createCanvas(notebookSide)}>
+            <Plus />新增纸张
+          </button>
         </div>
       </aside>
 
-      {sidebarOpen && <button type="button" className="remote-sidebar-backdrop" aria-label="关闭画布列表" onClick={() => setSidebarOpen(false)} />}
+      {sidebarOpen && <button type="button" className="remote-sidebar-backdrop" aria-label="关闭纸张列表" onClick={() => setSidebarOpen(false)} />}
 
       <section className="remote-workspace">
         {selectedCanvas ? (
@@ -194,11 +189,10 @@ export function RemoteWhiteboardApp(): ReactElement {
             key={selectedCanvas.id}
             block={selectedCanvas}
             connected={status === 'connected'}
-            canMove={!(snapshot?.canvases.some((block) => block.id !== selectedCanvas.id
-              && block.documentId === selectedCanvas.documentId
-              && block.pageNumber === selectedCanvas.pageNumber
-              && remoteDrawingPayload(block).side !== remoteDrawingPayload(selectedCanvas).side) ?? false)}
+            canMove
             documentTitle={snapshot?.documents.find((document) => document.id === selectedCanvas.documentId)?.title ?? 'PDF'}
+            sheetNumber={sheetNumber(snapshot?.canvases ?? [], selectedCanvas)}
+            totalSheets={(snapshot?.canvases ?? []).filter((block) => block.documentId === selectedCanvas.documentId && block.pageNumber === selectedCanvas.pageNumber).length}
             remoteStrokes={Object.values(transientStrokes[selectedCanvas.id] ?? {})}
             send={send}
             onDelete={() => setPendingDelete(selectedCanvas)}
@@ -219,11 +213,11 @@ export function RemoteWhiteboardApp(): ReactElement {
         <div className="remote-dialog-backdrop" role="presentation" onPointerDown={() => setPendingDelete(undefined)}>
           <section className="remote-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-canvas-title" onPointerDown={(event) => event.stopPropagation()}>
             <span className="remote-dialog__icon"><Trash2 /></span>
-            <h2 id="delete-canvas-title">删除这张画布？</h2>
-            <p>第 {pendingDelete.pageNumber ?? '—'} 页 · {remoteDrawingPayload(pendingDelete).side === 'left' ? '左侧' : '右侧'}，其中全部笔迹会一起删除。</p>
+            <h2 id="delete-canvas-title">删除这张纸？</h2>
+            <p>PDF 第 {pendingDelete.pageNumber ?? '—'} 页的纸张 {sheetNumber(snapshot?.canvases ?? [], pendingDelete)}，其中全部笔迹会一起删除。</p>
             <div>
               <button type="button" onClick={() => setPendingDelete(undefined)}>取消</button>
-              <button type="button" className="is-danger" onClick={() => deleteCanvas(pendingDelete)}>删除画布</button>
+              <button type="button" className="is-danger" onClick={() => deleteCanvas(pendingDelete)}>删除纸张</button>
             </div>
           </section>
         </div>
@@ -245,11 +239,10 @@ function EmptyWorkspace({
     <div className="remote-workspace__empty">
       <span><PenIllustration /></span>
       <small>{contextDocument?.title ?? 'Tessel'}</small>
-      <h1>{pageNumber ? `为第 ${pageNumber} 页创建画布` : '在电脑上打开一份 PDF'}</h1>
-      <p>画布与 PDF 页面等宽，笔迹会实时出现在电脑端。</p>
+      <h1>{pageNumber ? `为 PDF 第 ${pageNumber} 页创建笔记` : '在电脑上打开一份 PDF'}</h1>
+      <p>笔记窗口默认位于 PDF 左侧，可以继续添加纸张并纵向滚动。</p>
       <div>
-        <button type="button" disabled={!pageNumber} onClick={() => onCreate('left')}><Plus />新建左侧画布</button>
-        <button type="button" disabled={!pageNumber} onClick={() => onCreate('right')}><Plus />新建右侧画布</button>
+        <button type="button" disabled={!pageNumber} onClick={() => onCreate('left')}><Plus />创建笔记</button>
       </div>
     </div>
   );
@@ -283,6 +276,15 @@ function groupCanvases(canvases: WorkspaceBlock[], documents: LanWhiteboardDocum
     document: documentById.get(documentId) ?? { id: documentId, title: 'PDF', currentPage: 1 },
     canvases: blocks
   }));
+}
+
+function sheetNumber(canvases: WorkspaceBlock[], block: WorkspaceBlock): number {
+  const sheets = canvases
+    .filter((candidate) => candidate.documentId === block.documentId && candidate.pageNumber === block.pageNumber)
+    .sort((a, b) => Number(a.payload?.sheetIndex ?? Number.MAX_SAFE_INTEGER) - Number(b.payload?.sheetIndex ?? Number.MAX_SAFE_INTEGER)
+      || (remoteDrawingPayload(a).side === 'left' ? -1 : 1) - (remoteDrawingPayload(b).side === 'left' ? -1 : 1)
+      || a.createdAt.localeCompare(b.createdAt));
+  return Math.max(1, sheets.findIndex((candidate) => candidate.id === block.id) + 1);
 }
 
 function remoteId(prefix: string): string {

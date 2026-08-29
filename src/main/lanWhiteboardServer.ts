@@ -32,7 +32,9 @@ interface LanWhiteboardServerOptions {
 interface DrawingPayload {
   version?: number;
   side: LanWhiteboardSide;
+  sheetIndex?: number;
   layoutScale?: number;
+  penOnly?: boolean;
   canvasWidth: number;
   canvasHeight: number;
   strokes: LanDrawingStroke[];
@@ -272,6 +274,37 @@ export class LanWhiteboardServer {
         send(socket, { type: 'ack', requestId: cleanRequestId(message.requestId), revision: this.revision, canvasId: saved.id });
         return;
       }
+      case 'set-pen-only': {
+        const canvasId = requiredCanvasId(message.canvasId, this.canvases);
+        const saved = await this.setPenOnly(canvasId, message.penOnly === true);
+        send(socket, { type: 'ack', requestId: cleanRequestId(message.requestId), revision: this.revision, canvasId: saved.id });
+        return;
+      }
+      case 'share-selection': {
+        const canvasId = requiredCanvasId(message.canvasId, this.canvases);
+        const block = this.canvases.get(canvasId)!;
+        const payload = drawingPayload(block)!;
+        if (!Array.isArray(message.strokes) || !message.strokes.every(isLanDrawingStroke)) {
+          throw new Error('Invalid shared selection.');
+        }
+        enforceCanvasPointLimit(message.strokes);
+        const availableIds = new Set(payload.strokes.map((stroke) => stroke.id));
+        const strokes = message.strokes.filter((stroke) => availableIds.has(stroke.id));
+        if (strokes.length === 0) {
+          throw new Error('Select at least one stroke before sharing.');
+        }
+        this.publishToRenderers({
+          type: 'selection-share',
+          selection: {
+            canvasId,
+            documentId: block.documentId,
+            pageNumber: block.pageNumber ?? 1,
+            strokes
+          }
+        });
+        send(socket, { type: 'ack', requestId: cleanRequestId(message.requestId), revision: this.revision, canvasId });
+        return;
+      }
       case 'stroke-begin': {
         const canvasId = requiredCanvasId(message.canvasId, this.canvases);
         if (!isLanDrawingStroke(message.stroke)) {
@@ -332,12 +365,13 @@ export class LanWhiteboardServer {
       1,
       Math.max(1, document?.pageCount ?? 100_000)
     );
-    const existing = [...this.canvases.values()].find((block) => block.documentId === selectedDocumentId
-      && block.pageNumber === selectedPage
-      && drawingPayload(block)?.side === side);
-    if (existing) {
-      return existing;
-    }
+    const notebookSheets = [...this.canvases.values()].filter((block) => block.documentId === selectedDocumentId
+      && block.pageNumber === selectedPage);
+    const notebookSide = notebookSheets[0] ? drawingPayload(notebookSheets[0])?.side ?? side : side;
+    const sheetIndex = Math.max(
+      notebookSheets.length,
+      notebookSheets.reduce((maximum, block) => Math.max(maximum, drawingPayload(block)?.sheetIndex ?? 0), 0)
+    ) + 1;
 
     const { width, height } = await this.readPageSize(selectedDocumentId, selectedPage);
     const now = new Date().toISOString();
@@ -349,16 +383,17 @@ export class LanWhiteboardServer {
       sourceKind: 'manual',
       contentKind: 'custom',
       pageNumber: selectedPage,
-      title: `Whiteboard · p.${selectedPage}`,
+      title: `Notebook · p.${selectedPage} · ${sheetIndex}`,
       payload: {
         version: 1,
-        side,
+        side: notebookSide,
+        sheetIndex,
         layoutScale: 1,
         canvasWidth: width,
         canvasHeight: height,
         strokes: []
       },
-      x: side === 'left' ? -width - 28 : 28,
+      x: notebookSide === 'left' ? -width - 28 : 28,
       y: 0,
       width,
       height,
@@ -388,20 +423,39 @@ export class LanWhiteboardServer {
     if (!block || !payload) {
       throw new Error('Canvas not found');
     }
-    if (payload.side === side) {
+    const notebookSheets = [...this.canvases.values()].filter((candidate) => candidate.documentId === block.documentId
+      && candidate.pageNumber === block.pageNumber);
+    if (notebookSheets.every((candidate) => drawingPayload(candidate)?.side === side)) {
       return block;
     }
-    const occupied = [...this.canvases.values()].some((candidate) => candidate.id !== canvasId
-      && candidate.documentId === block.documentId
-      && candidate.pageNumber === block.pageNumber
-      && drawingPayload(candidate)?.side === side);
-    if (occupied) {
-      throw new Error(`The ${side} canvas slot is already occupied.`);
+    const updatedAt = new Date().toISOString();
+    const savedSheets = await this.runMutation(async () => {
+      const saved: WorkspaceBlock[] = [];
+      for (const sheet of notebookSheets) {
+        saved.push(await this.store.saveWorkspaceBlock({
+          ...sheet,
+          payload: { ...sheet.payload, side },
+          x: side === 'left' ? -sheet.width - 28 : 28,
+          updatedAt
+        }));
+      }
+      return saved;
+    });
+    for (const saved of savedSheets) {
+      this.handleWorkspaceBlockUpsert(saved);
+    }
+    return savedSheets.find((saved) => saved.id === canvasId) ?? savedSheets[0] ?? block;
+  }
+
+  private async setPenOnly(canvasId: string, penOnly: boolean): Promise<WorkspaceBlock> {
+    const block = this.canvases.get(canvasId);
+    const payload = block && drawingPayload(block);
+    if (!block || !payload) {
+      throw new Error('Canvas not found');
     }
     const saved = await this.runMutation(() => this.store.saveWorkspaceBlock({
       ...block,
-      payload: { ...block.payload, side },
-      x: side === 'left' ? -block.width - 28 : 28,
+      payload: { ...block.payload, penOnly },
       updatedAt: new Date().toISOString()
     }));
     this.handleWorkspaceBlockUpsert(saved);
@@ -534,7 +588,9 @@ function drawingPayload(block: WorkspaceBlock): DrawingPayload | undefined {
   return {
     version: Number(value?.version ?? 1),
     side,
+    sheetIndex: Number.isFinite(Number(value?.sheetIndex)) ? Math.max(1, Math.floor(Number(value?.sheetIndex))) : undefined,
     layoutScale: Number(value?.layoutScale ?? 1),
+    penOnly: value?.penOnly === true,
     canvasWidth,
     canvasHeight,
     strokes
@@ -675,6 +731,7 @@ function interfaceScore(name: string, address: string): number {
 function compareCanvases(a: WorkspaceBlock, b: WorkspaceBlock): number {
   return a.documentId.localeCompare(b.documentId)
     || (a.pageNumber ?? 0) - (b.pageNumber ?? 0)
+    || (drawingPayload(a)?.sheetIndex ?? Number.MAX_SAFE_INTEGER) - (drawingPayload(b)?.sheetIndex ?? Number.MAX_SAFE_INTEGER)
     || drawingSideOrder(a) - drawingSideOrder(b)
     || a.createdAt.localeCompare(b.createdAt);
 }
