@@ -9,8 +9,11 @@ export interface LanWhiteboardText {
   keepRunning: string;
   sameWifi: string;
   openAddress: string;
+  scanTitle: string;
+  scanDescription: string;
   lanAddress: string;
   localhost: string;
+  otherAddresses: string;
   copyAddress: string;
   copy: string;
   copied: string;
@@ -29,8 +32,11 @@ const zhCN: LanWhiteboardText = {
   keepRunning: '保持 Tessel 在电脑上运行',
   sameWifi: '平板连接同一个 Wi-Fi',
   openAddress: '在平板浏览器打开下面地址',
+  scanTitle: '用平板扫码打开',
+  scanDescription: '二维码完全在本机生成，不会上传连接地址。',
   lanAddress: '局域网地址（推荐）',
   localhost: '本机地址',
+  otherAddresses: '其他网络地址',
   copyAddress: '复制地址',
   copy: '复制',
   copied: '已复制',
@@ -49,8 +55,11 @@ const en: LanWhiteboardText = {
   keepRunning: 'Keep Tessel running',
   sameWifi: 'Join the same Wi-Fi',
   openAddress: 'Open an address below',
+  scanTitle: 'Scan with your tablet',
+  scanDescription: 'The QR code is generated locally; the connection address is never uploaded.',
   lanAddress: 'LAN address (recommended)',
   localhost: 'Localhost',
+  otherAddresses: 'Other network addresses',
   copyAddress: 'Copy address',
   copy: 'Copy',
   copied: 'Copied',

@@ -9,6 +9,7 @@ import {
   useState
 } from 'react';
 import {
+  ArrowLeftRight,
   CircleDashed,
   Eraser,
   Hand,
@@ -29,9 +30,13 @@ type DrawingTool = 'pen' | 'eraser' | 'lasso' | 'hand';
 
 interface RemoteCanvasProps {
   block: WorkspaceBlock;
+  canMove: boolean;
   connected: boolean;
+  documentTitle: string;
   remoteStrokes: LanDrawingStroke[];
   send(message: LanWhiteboardClientMessage): boolean;
+  onDelete(): void;
+  onMove(): void;
 }
 
 interface PanState {
@@ -54,7 +59,7 @@ interface PinchState {
 const colors = ['#171a16', '#2563eb', '#e0453b', '#16a36a', '#8b4bd6', '#e99620'];
 const canvasPadding = 56;
 
-export function RemoteCanvas({ block, connected, remoteStrokes, send }: RemoteCanvasProps): ReactElement {
+export function RemoteCanvas({ block, canMove, connected, documentTitle, remoteStrokes, send, onDelete, onMove }: RemoteCanvasProps): ReactElement {
   const payload = remoteDrawingPayload(block);
   const [strokes, setStrokes] = useState(payload.strokes);
   const strokesRef = useRef(payload.strokes);
@@ -519,6 +524,12 @@ export function RemoteCanvas({ block, connected, remoteStrokes, send }: RemoteCa
             {lassoPoints.length > 1 && <polyline className="remote-canvas__lasso" points={lassoPoints.map((point) => point.join(',')).join(' ')} />}
           </svg>
         </div>
+      </div>
+
+      <div className="remote-canvas__identity">
+        <span><small title={documentTitle}>{documentTitle}</small><strong>第 {block.pageNumber ?? '—'} 页 · {payload.side === 'left' ? '左侧画布' : '右侧画布'}</strong></span>
+        <button type="button" disabled={!canMove} title={canMove ? `移到${payload.side === 'left' ? '右' : '左'}侧` : '另一侧已有画布'} onClick={onMove}><ArrowLeftRight />换侧</button>
+        <button type="button" className="is-danger" title="删除画布" onClick={onDelete}><Trash2 />删除</button>
       </div>
 
       <div className="remote-zoom">

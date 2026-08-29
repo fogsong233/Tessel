@@ -116,10 +116,18 @@ export class LanWhiteboardServer {
 
   getInfo(): LanWhiteboardServerInfo {
     const port = this.port;
+    const candidates = port ? lanAddressCandidates() : [];
+    const recommendedAddress = candidates.find((candidate) => !candidate.loopback)?.address;
+    const addresses = candidates.map((candidate) => ({
+      ...candidate,
+      recommended: candidate.address === recommendedAddress,
+      url: `http://${candidate.address}:${port}/remote.html?token=${this.token}`
+    }));
     return {
       running: Boolean(this.server?.listening && port),
       port,
-      urls: port ? lanAddresses().map((address) => `http://${address}:${port}/remote.html?token=${this.token}`) : [],
+      urls: addresses.map((item) => item.url),
+      addresses,
       clientCount: this.webSocketServer?.clients.size ?? 0
     };
   }
@@ -244,7 +252,7 @@ export class LanWhiteboardServer {
       case 'create-canvas': {
         const side = message.side === 'left' ? 'left' : 'right';
         const saved = await this.createCanvas(message.documentId, message.pageNumber, side);
-        send(socket, { type: 'ack', requestId: cleanRequestId(message.requestId), revision: this.revision });
+        send(socket, { type: 'ack', requestId: cleanRequestId(message.requestId), revision: this.revision, canvasId: saved.id });
         if (!this.canvases.has(saved.id)) {
           this.handleWorkspaceBlockUpsert(saved);
         }
@@ -255,6 +263,13 @@ export class LanWhiteboardServer {
         await this.runMutation(() => this.store.deleteWorkspaceBlock(canvasId));
         this.handleWorkspaceBlockDelete(canvasId);
         send(socket, { type: 'ack', requestId: cleanRequestId(message.requestId), revision: this.revision });
+        return;
+      }
+      case 'move-canvas': {
+        const canvasId = requiredCanvasId(message.canvasId, this.canvases);
+        const side = message.side === 'left' ? 'left' : 'right';
+        const saved = await this.moveCanvas(canvasId, side);
+        send(socket, { type: 'ack', requestId: cleanRequestId(message.requestId), revision: this.revision, canvasId: saved.id });
         return;
       }
       case 'stroke-begin': {
@@ -365,6 +380,32 @@ export class LanWhiteboardServer {
     enforceCanvasPointLimit(strokes);
     await this.saveCanvasStrokes(block, payload, strokes);
     this.publishTransient({ type: 'stroke-cancel', canvasId, strokeId: stroke.id });
+  }
+
+  private async moveCanvas(canvasId: string, side: LanWhiteboardSide): Promise<WorkspaceBlock> {
+    const block = this.canvases.get(canvasId);
+    const payload = block && drawingPayload(block);
+    if (!block || !payload) {
+      throw new Error('Canvas not found');
+    }
+    if (payload.side === side) {
+      return block;
+    }
+    const occupied = [...this.canvases.values()].some((candidate) => candidate.id !== canvasId
+      && candidate.documentId === block.documentId
+      && candidate.pageNumber === block.pageNumber
+      && drawingPayload(candidate)?.side === side);
+    if (occupied) {
+      throw new Error(`The ${side} canvas slot is already occupied.`);
+    }
+    const saved = await this.runMutation(() => this.store.saveWorkspaceBlock({
+      ...block,
+      payload: { ...block.payload, side },
+      x: side === 'left' ? -block.width - 28 : 28,
+      updatedAt: new Date().toISOString()
+    }));
+    this.handleWorkspaceBlockUpsert(saved);
+    return saved;
   }
 
   private async replaceStrokes(canvasId: string, strokes: LanDrawingStroke[]): Promise<void> {
@@ -581,16 +622,54 @@ function send(socket: WebSocket, message: LanWhiteboardServerMessage): void {
   }
 }
 
-function lanAddresses(): string[] {
-  const addresses = new Set<string>(['127.0.0.1']);
-  for (const entries of Object.values(networkInterfaces())) {
+function lanAddressCandidates(): Array<{ address: string; interfaceName: string; loopback: boolean }> {
+  const candidates = new Map<string, { address: string; interfaceName: string; loopback: boolean; score: number }>();
+  for (const [interfaceName, entries] of Object.entries(networkInterfaces())) {
+    if (isVirtualInterface(interfaceName)) {
+      continue;
+    }
     for (const entry of entries ?? []) {
-      if (entry.family === 'IPv4' && !entry.internal && !entry.address.startsWith('169.254.')) {
-        addresses.add(entry.address);
+      if (entry.family !== 'IPv4' || entry.internal || !isUsablePrivateAddress(entry.address)) {
+        continue;
+      }
+      const candidate = {
+        address: entry.address,
+        interfaceName,
+        loopback: false,
+        score: interfaceScore(interfaceName, entry.address)
+      };
+      if (!candidates.has(entry.address) || candidates.get(entry.address)!.score < candidate.score) {
+        candidates.set(entry.address, candidate);
       }
     }
   }
-  return [...addresses].sort((a, b) => a === '127.0.0.1' ? 1 : b === '127.0.0.1' ? -1 : a.localeCompare(b));
+  const sorted = [...candidates.values()].sort((a, b) => b.score - a.score || a.address.localeCompare(b.address));
+  return [
+    ...sorted.map(({ score: _score, ...candidate }) => candidate),
+    { address: '127.0.0.1', interfaceName: 'Localhost', loopback: true }
+  ];
+}
+
+function isVirtualInterface(name: string): boolean {
+  return /(vethernet|wsl|docker|hyper-v|vmware|virtualbox|loopback|clash|mihomo|tun|tap|tailscale|zerotier)/i.test(name);
+}
+
+function isUsablePrivateAddress(address: string): boolean {
+  if (address.startsWith('169.254.') || address.startsWith('198.18.') || address.startsWith('198.19.')) {
+    return false;
+  }
+  if (address.startsWith('10.') || address.startsWith('192.168.')) {
+    return true;
+  }
+  const match = /^172\.(\d+)\./.exec(address);
+  const second = Number(match?.[1]);
+  return Boolean(match && second >= 16 && second <= 31);
+}
+
+function interfaceScore(name: string, address: string): number {
+  const namedPhysical = /(wi-?fi|wireless|wlan|ethernet|以太网|无线)/i.test(name) ? 100 : 0;
+  const commonHomeRange = address.startsWith('192.168.') ? 40 : address.startsWith('10.') ? 30 : 20;
+  return namedPhysical + commonHomeRange;
 }
 
 function compareCanvases(a: WorkspaceBlock, b: WorkspaceBlock): number {

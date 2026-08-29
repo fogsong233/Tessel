@@ -159,6 +159,7 @@ button { -webkit-tap-highlight-color: transparent; }
   background: #fff;
 }
 .remote-sidebar__heading button svg { width: 15px; }
+.remote-sidebar__heading button:disabled { opacity: 0.38; }
 
 .remote-sidebar__list {
   min-height: 0;
@@ -223,7 +224,7 @@ button { -webkit-tap-highlight-color: transparent; }
   position: absolute;
   top: 50%;
   right: 8px;
-  display: none;
+  display: grid;
   width: 28px;
   height: 28px;
   padding: 0;
@@ -231,10 +232,10 @@ button { -webkit-tap-highlight-color: transparent; }
   color: #a94c47;
   border: 0;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.82);
   transform: translateY(-50%);
 }
-.remote-canvas-row:hover .remote-canvas-row__delete { display: grid; }
+.remote-canvas-row__delete:hover { color: #8f2825; background: #fff0ed; }
 .remote-canvas-row__delete svg { width: 13px; }
 
 .remote-sidebar__create {
@@ -260,6 +261,7 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 .remote-sidebar__create button:last-child,
 .remote-workspace__empty button:last-child { border-color: #ced995; background: #e3ecae; }
+.remote-sidebar__create button.is-occupied { color: #546027; border-color: #d3dcaa; background: #f0f4dc; }
 .remote-sidebar__create button:disabled,
 .remote-workspace__empty button:disabled { opacity: 0.42; }
 .remote-sidebar__create svg,
@@ -417,6 +419,76 @@ button { -webkit-tap-highlight-color: transparent; }
   transform: translateX(50%);
 }
 
+.remote-canvas__identity {
+  position: absolute;
+  z-index: 11;
+  left: 16px;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  display: flex;
+  max-width: calc(100% - 270px);
+  min-height: 46px;
+  padding: 5px;
+  align-items: center;
+  gap: 3px;
+  color: #4f5449;
+  border: 1px solid #d2d6cb;
+  border-radius: 13px;
+  background: rgba(250, 251, 247, 0.94);
+  box-shadow: 0 8px 24px rgba(35, 38, 30, 0.12);
+  backdrop-filter: blur(14px);
+}
+.remote-canvas__identity > span { display: flex; min-width: 110px; max-width: 220px; padding: 0 9px; flex-direction: column; }
+.remote-canvas__identity small,
+.remote-canvas__identity strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-canvas__identity small { color: #8a8f84; font-size: 8px; }
+.remote-canvas__identity strong { color: #3e4339; font-size: 10px; }
+.remote-canvas__identity button {
+  display: inline-flex;
+  min-height: 34px;
+  padding: 0 9px;
+  align-items: center;
+  gap: 5px;
+  color: #5d6257;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  font-size: 9px;
+}
+.remote-canvas__identity button:hover { background: #eceee7; }
+.remote-canvas__identity button:disabled { opacity: 0.35; }
+.remote-canvas__identity button.is-danger { color: #ad3d38; }
+.remote-canvas__identity button svg { width: 14px; }
+
+.remote-dialog-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  padding: 22px;
+  place-items: center;
+  background: rgba(20, 22, 18, 0.38);
+  backdrop-filter: blur(5px);
+}
+.remote-dialog {
+  display: flex;
+  width: min(390px, 100%);
+  padding: 24px;
+  align-items: center;
+  flex-direction: column;
+  text-align: center;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 20px;
+  background: #fbfcf8;
+  box-shadow: 0 28px 80px rgba(20, 23, 17, 0.28);
+}
+.remote-dialog__icon { display: grid; width: 48px; height: 48px; place-items: center; color: #ad3d38; border-radius: 15px; background: #fff0ed; }
+.remote-dialog__icon svg { width: 20px; }
+.remote-dialog h2 { margin: 15px 0 6px; color: #282c23; font-size: 19px; letter-spacing: -0.025em; }
+.remote-dialog p { max-width: 310px; margin: 0; color: #74796d; font-size: 11px; line-height: 1.65; }
+.remote-dialog > div { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; margin-top: 21px; }
+.remote-dialog button { min-height: 40px; color: #4f5549; border: 1px solid #d9ddd2; border-radius: 11px; background: #fff; font-size: 11px; font-weight: 680; }
+.remote-dialog button.is-danger { color: #fff; border-color: #ad3d38; background: #ad3d38; }
+
 .remote-workspace__empty,
 .remote-workspace__loading { position: absolute; inset: 0; padding: 28px; }
 .remote-workspace__empty small { margin-top: 18px; color: #858a7e; font-size: 10px; }
@@ -480,6 +552,8 @@ button { -webkit-tap-highlight-color: transparent; }
   .remote-size { width: 86px; }
   .remote-size output { display: none; }
   .remote-zoom { right: 10px; bottom: max(10px, env(safe-area-inset-bottom)); }
+  .remote-canvas__identity { right: 10px; bottom: 54px; left: 10px; max-width: none; }
+  .remote-canvas__identity > span { flex: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -601,3 +601,10 @@ body.is-moving-workspace-block .workspace-image__viewport {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.canvas-placement-menu__options > small {
+  padding: 4px 9px 3px;
+  color: var(--tessel-directory-muted);
+  font-size: 9px;
+  line-height: 1.35;
+}

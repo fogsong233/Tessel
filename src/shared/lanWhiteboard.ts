@@ -35,13 +35,23 @@ export interface LanWhiteboardServerInfo {
   running: boolean;
   port?: number;
   urls: string[];
+  addresses: LanWhiteboardAddress[];
   clientCount: number;
+}
+
+export interface LanWhiteboardAddress {
+  address: string;
+  interfaceName: string;
+  loopback: boolean;
+  recommended: boolean;
+  url: string;
 }
 
 export type LanWhiteboardClientMessage =
   | { type: 'ping'; sentAt: number }
   | { type: 'create-canvas'; requestId: string; documentId?: string; pageNumber?: number; side: LanWhiteboardSide }
   | { type: 'delete-canvas'; requestId: string; canvasId: string }
+  | { type: 'move-canvas'; requestId: string; canvasId: string; side: LanWhiteboardSide }
   | { type: 'stroke-begin'; canvasId: string; stroke: Omit<LanDrawingStroke, 'points'> & { points: LanDrawingPoint[] } }
   | { type: 'stroke-points'; canvasId: string; strokeId: string; points: LanDrawingPoint[] }
   | { type: 'stroke-cancel'; canvasId: string; strokeId: string }
@@ -56,7 +66,7 @@ export type LanWhiteboardServerMessage =
   | { type: 'stroke-begin'; canvasId: string; stroke: Omit<LanDrawingStroke, 'points'> & { points: LanDrawingPoint[] } }
   | { type: 'stroke-points'; canvasId: string; strokeId: string; points: LanDrawingPoint[] }
   | { type: 'stroke-cancel'; canvasId: string; strokeId: string }
-  | { type: 'ack'; requestId: string; revision: number }
+  | { type: 'ack'; requestId: string; revision: number; canvasId?: string }
   | { type: 'pong'; sentAt: number; serverAt: number }
   | { type: 'presence'; clientCount: number }
   | { type: 'error'; requestId?: string; message: string };

@@ -110,6 +110,7 @@ export function useLanWhiteboardSocket(token: string): SocketState & { send(mess
 function isDurableMessage(message: LanWhiteboardClientMessage): boolean {
   return message.type === 'create-canvas'
     || message.type === 'delete-canvas'
+    || message.type === 'move-canvas'
     || message.type === 'stroke-commit'
     || message.type === 'replace-strokes';
 }

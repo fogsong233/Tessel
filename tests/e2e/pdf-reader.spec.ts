@@ -228,6 +228,15 @@ test.describe('PDF reader flow', () => {
     expect(Math.abs(boardBox!.width - pageBox!.width)).toBeLessThanOrEqual(2);
     expect(Math.abs(boardBox!.height - pageBox!.height)).toBeLessThanOrEqual(2);
 
+    await selectPdfText(page);
+    await page.locator('.selection-toolbar').getByRole('button', { name: /^Chat$/i }).click();
+    const dock = page.locator('.reader-dock-lane');
+    await expect(dock).toBeVisible();
+    await expect.poll(async () => {
+      const [nextBoardBox, dockBox] = await Promise.all([board.boundingBox(), dock.boundingBox()]);
+      return Boolean(nextBoardBox && dockBox && nextBoardBox.x + nextBoardBox.width <= dockBox.x + 1);
+    }).toBe(true);
+
     for (const zoomAction of [
       'Zoom out', 'Zoom out', 'Zoom out', 'Zoom out',
       'Zoom in', 'Zoom in'
@@ -417,7 +426,7 @@ test.describe('PDF reader flow', () => {
     const tablet = await tabletWindow;
     await expect(tablet.locator('.remote-app')).toBeVisible();
     await expect(tablet.locator('.remote-status.is-connected')).toBeVisible();
-    await tablet.getByRole('button', { name: '放在右侧' }).click();
+    await tablet.getByRole('button', { name: '新建右侧画布' }).click();
 
     const tabletSurface = tablet.locator('.remote-canvas__paper');
     await expect(tabletSurface).toBeVisible();
@@ -445,6 +454,28 @@ test.describe('PDF reader flow', () => {
       };
       return stored.workspaceBlocks.find((block) => block.kind === 'drawing')?.payload?.strokes?.[0]?.points?.length ?? 0;
     }).toBeGreaterThan(2);
+
+    await expect(tablet.getByRole('button', { name: '打开右侧' })).toBeVisible();
+    await tablet.getByRole('button', { name: '新建左侧' }).click();
+    await expect(tablet.locator('.remote-canvas-row')).toHaveCount(2);
+    await expect(tablet.getByTitle('当前页左右画布均已创建')).toBeDisabled();
+    await expect(tablet.getByTitle('另一侧已有画布')).toBeDisabled();
+
+    const leftCanvasRow = tablet.locator('.remote-canvas-row').filter({ hasText: '第 1 页 · 左侧' });
+    await leftCanvasRow.getByRole('button', { name: '删除画布' }).click();
+    const deleteDialog = tablet.getByRole('dialog', { name: '删除这张画布？' });
+    await expect(deleteDialog).toBeVisible();
+    await deleteDialog.getByRole('button', { name: '删除画布' }).click();
+    await expect(tablet.locator('.remote-canvas-row')).toHaveCount(1);
+
+    await tablet.getByTitle('移到左侧').click();
+    await expect(tablet.locator('.remote-canvas-row')).toContainText('第 1 页 · 左侧');
+    await expect.poll(async () => {
+      const stored = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+        workspaceBlocks: Array<{ kind: string; payload?: { side?: string } }>;
+      };
+      return stored.workspaceBlocks.find((block) => block.kind === 'drawing')?.payload?.side;
+    }).toBe('left');
     await tablet.close();
   });
 

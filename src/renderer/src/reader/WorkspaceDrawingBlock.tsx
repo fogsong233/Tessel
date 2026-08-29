@@ -6,7 +6,7 @@ import {
   useRef,
   useState
 } from 'react';
-import { CircleDashed, PenLine, Trash2, Undo2, X } from 'lucide-react';
+import { ArrowLeftRight, CircleDashed, PenLine, Trash2, Undo2, X } from 'lucide-react';
 import { getStroke } from 'perfect-freehand';
 import type { WorkspaceBlock } from '../../../shared/domain';
 import { createId } from '../../../shared/ids';
@@ -35,17 +35,22 @@ export interface WorkspaceDrawingLabels {
   drawingColor: string;
   drawingSize: string;
   lassoTool: string;
+  moveCanvasToLeft: string;
+  moveCanvasToRight: string;
+  canvasSideOccupied: string;
   penTool: string;
   undoStroke: string;
 }
 
 interface WorkspaceDrawingBlockProps {
   block: WorkspaceBlock;
+  canMoveSide: boolean;
   height: number;
   remoteStrokes?: LanDrawingStroke[];
   text: WorkspaceDrawingLabels;
   width: number;
   onDelete(): void;
+  onMoveSide(): void;
   onSave(block: WorkspaceBlock): void;
 }
 
@@ -53,11 +58,13 @@ const drawingColors = ['#171717', '#2563eb', '#dc2626', '#16a34a', '#9333ea'];
 
 export function WorkspaceDrawingBlock({
   block,
+  canMoveSide,
   height,
   remoteStrokes = [],
   text,
   width,
   onDelete,
+  onMoveSide,
   onSave
 }: WorkspaceDrawingBlockProps): ReactElement {
   const payload = drawingBlockPayload(block);
@@ -238,6 +245,15 @@ export function WorkspaceDrawingBlock({
           <input type="range" min="1" max="28" step="1" value={size} aria-label={text.drawingSize} onChange={(event) => setSize(Number(event.target.value))} />
         </label>
         <span className="workspace-drawing__spacer" />
+        <button
+          type="button"
+          title={canMoveSide ? (payload.side === 'left' ? text.moveCanvasToRight : text.moveCanvasToLeft) : text.canvasSideOccupied}
+          aria-label={payload.side === 'left' ? text.moveCanvasToRight : text.moveCanvasToLeft}
+          disabled={!canMoveSide}
+          onClick={onMoveSide}
+        >
+          <ArrowLeftRight size={15} />
+        </button>
         <button type="button" title={text.undoStroke} aria-label={text.undoStroke} disabled={strokes.length === 0} onClick={() => saveStrokes(strokes.slice(0, -1))}>
           <Undo2 size={15} />
         </button>

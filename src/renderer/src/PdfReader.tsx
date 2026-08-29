@@ -471,6 +471,10 @@ export function PdfReader({
   const pageConversationCount = conversations.filter((conversation) => conversation.pageNumber === activePage).length;
   const pageMarks = marks.filter((mark) => mark.pageNumber === activePage);
   const visibleNotes = notes.filter((note) => note.pageStart <= activePage && note.pageEnd >= activePage);
+  const activePageCanvasSides = useMemo(() => ({
+    left: effectiveWorkspaceBlocks.some((block) => block.kind === 'drawing' && block.pageNumber === activePage && drawingBlockSide(block) === 'left'),
+    right: effectiveWorkspaceBlocks.some((block) => block.kind === 'drawing' && block.pageNumber === activePage && drawingBlockSide(block) === 'right')
+  }), [activePage, effectiveWorkspaceBlocks]);
   useEffect(() => {
     if (!noteEditorNote) {
       return;
@@ -488,14 +492,15 @@ export function PdfReader({
       }
 
       if (block.kind === 'drawing' && drawingBlockSide(block) === 'right') {
+        const measuredPageWidth = workspaceBlockLayouts[block.id]?.pageWidth;
         const coordinateScale = workspaceBlockCoordinateScale(block, scale);
-        const renderedWidth = block.width * (scale / coordinateScale);
-        return Math.max(maxTail, renderedWidth + 208);
+        const renderedWidth = measuredPageWidth ?? block.width * (scale / coordinateScale);
+        return Math.max(maxTail, renderedWidth + 56);
       }
 
       return Math.max(maxTail, block.x > 0 ? block.x + block.width + 180 : 0);
     }, 0);
-  }, [effectiveWorkspaceBlocks, scale]);
+  }, [effectiveWorkspaceBlocks, scale, workspaceBlockLayouts]);
   const workspaceLeftGutter = useMemo(() => {
     const neededGutter = effectiveWorkspaceBlocks.reduce((maxGutter, block) => {
       if (block.anchor !== 'page') {
@@ -503,8 +508,9 @@ export function PdfReader({
       }
 
       if (block.kind === 'drawing' && drawingBlockSide(block) === 'left') {
+        const measuredPageWidth = workspaceBlockLayouts[block.id]?.pageWidth;
         const coordinateScale = workspaceBlockCoordinateScale(block, scale);
-        const renderedWidth = block.width * (scale / coordinateScale);
+        const renderedWidth = measuredPageWidth ?? block.width * (scale / coordinateScale);
         return Math.max(maxGutter, renderedWidth + 76);
       }
 
@@ -516,7 +522,7 @@ export function PdfReader({
     }, 0);
 
     return neededGutter > 0 ? Math.max(560, neededGutter) : 0;
-  }, [effectiveWorkspaceBlocks, scale]);
+  }, [effectiveWorkspaceBlocks, scale, workspaceBlockLayouts]);
   const chatPanelOpen = chatOpen && Boolean(activeConversation);
   const hasTransientAid = Boolean(transientAid);
   const hasOpenDock = chatPanelOpen || hasTransientAid || Boolean(noteEditorNote);
@@ -2389,6 +2395,7 @@ export function PdfReader({
             activeDocumentId={meta?.id}
             activePage={activePage}
             bookmarks={bookmarks}
+            canvasSides={activePageCanvasSides}
             leftTab={leftTab}
             loadProgress={loadProgress}
             outline={displayOutline}
@@ -2482,6 +2489,7 @@ export function PdfReader({
                       onSave={onSaveWorkspaceBlock}
                     />
 
+                    <div className="workspace-canvas-spacer" aria-hidden="true" style={{ flexBasis: workspaceCanvasTail }} />
                     <div className="reader-dock-lane">
                       <ReaderDock
                         activeConversation={activeConversation}
@@ -2550,7 +2558,6 @@ export function PdfReader({
                         onPointerDown={startDockResize}
                       />
                     </div>
-                    <div className="workspace-canvas-spacer" aria-hidden="true" style={{ flexBasis: workspaceCanvasTail }} />
                   </div>
 
                   {status !== 'ready' && (
@@ -2646,6 +2653,7 @@ function ReaderLeftPanel({
   activeDocumentId,
   activePage,
   bookmarks,
+  canvasSides,
   leftTab,
   loadProgress,
   outline,
@@ -2687,6 +2695,7 @@ function ReaderLeftPanel({
   activeDocumentId?: string;
   activePage: number;
   bookmarks: PdfUserBookmark[];
+  canvasSides: { left: boolean; right: boolean };
   leftTab: LeftTab;
   loadProgress: number;
   outline: PdfOutlineItem[];
@@ -2830,14 +2839,15 @@ function ReaderLeftPanel({
         </button>
         {canvasMenuOpen && (
           <div className="canvas-placement-menu__options">
-            <button type="button" title={t.addCanvasLeft} aria-label={t.addCanvasLeft} onClick={() => { setCanvasMenuOpen(false); onAddCanvas('left'); }}>
-              <ArrowLeft size={14} />
-              <span>{t.addCanvasLeft}</span>
+            <button type="button" title={canvasSides.left ? t.openCanvasLeft : t.addCanvasLeft} aria-label={canvasSides.left ? t.openCanvasLeft : t.addCanvasLeft} onClick={() => { setCanvasMenuOpen(false); onAddCanvas('left'); }}>
+              {canvasSides.left ? <Check size={14} /> : <ArrowLeft size={14} />}
+              <span>{canvasSides.left ? t.openCanvasLeft : t.addCanvasLeft}</span>
             </button>
-            <button type="button" title={t.addCanvasRight} aria-label={t.addCanvasRight} onClick={() => { setCanvasMenuOpen(false); onAddCanvas('right'); }}>
-              <ArrowRight size={14} />
-              <span>{t.addCanvasRight}</span>
+            <button type="button" title={canvasSides.right ? t.openCanvasRight : t.addCanvasRight} aria-label={canvasSides.right ? t.openCanvasRight : t.addCanvasRight} onClick={() => { setCanvasMenuOpen(false); onAddCanvas('right'); }}>
+              {canvasSides.right ? <Check size={14} /> : <ArrowRight size={14} />}
+              <span>{canvasSides.right ? t.openCanvasRight : t.addCanvasRight}</span>
             </button>
+            <small>{t.canvasLimit}</small>
           </div>
         )}
       </div>
@@ -4050,11 +4060,25 @@ function WorkspaceBlockLayer({
             ) : isDrawing ? (
               <WorkspaceDrawingBlock
                 block={block}
+                canMoveSide={!blocks.some((candidate) => candidate.id !== block.id
+                  && candidate.kind === 'drawing'
+                  && candidate.documentId === block.documentId
+                  && candidate.pageNumber === block.pageNumber
+                  && drawingBlockSide(candidate) !== drawingBlockSide(block))}
                 height={layout.pageHeight}
                 remoteStrokes={Object.values(lanWhiteboardStrokes[block.id] ?? {})}
                 text={text}
                 width={layout.pageWidth}
                 onDelete={() => onDelete(block.id)}
+                onMoveSide={() => {
+                  const side = drawingBlockSide(block) === 'left' ? 'right' : 'left';
+                  onSave({
+                    ...block,
+                    payload: { ...block.payload, side },
+                    x: side === 'left' ? -block.width - 28 : 28,
+                    updatedAt: new Date().toISOString()
+                  });
+                }}
                 onSave={onSave}
               />
             ) : (

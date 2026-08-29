@@ -51,6 +51,12 @@ test('opens a focused start page and launches settings in its own window', async
     await expect(page.locator('.reader-settings')).toHaveCount(0);
     await expect(settingsPage.locator('.reader-settings--window')).toBeVisible();
 
+    await settingsPage.getByRole('button', { name: 'Tablet whiteboard' }).click();
+    const qrCode = settingsPage.locator('.reader-settings__lan-qr img');
+    await expect(qrCode).toBeVisible();
+    await expect(qrCode).toHaveAttribute('src', /^data:image\/png;base64,/);
+    await expect(settingsPage.locator('.reader-settings__lan-primary-address code')).toContainText(/^http:\/\//);
+
     await settingsPage.getByRole('button', { name: 'Codex' }).click();
     await expect(settingsPage.getByLabel('Chat model')).toBeVisible();
     await expect(settingsPage.getByLabel('Chat reasoning')).toBeVisible();

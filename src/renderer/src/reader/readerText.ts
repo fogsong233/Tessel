@@ -3,6 +3,12 @@ import type { UiLanguage } from '../../../shared/domain';
 export function readerText(language: UiLanguage) {
   if (language === 'zh-CN') {
     return {
+      openCanvasLeft: '打开左侧白板',
+      openCanvasRight: '打开右侧白板',
+      canvasLimit: '每页左、右各一张',
+      moveCanvasToLeft: '移到左侧',
+      moveCanvasToRight: '移到右侧',
+      canvasSideOccupied: '另一侧已有白板',
       addCanvasLeft: '在左侧添加白板',
       addCanvasRight: '在右侧添加白板',
       assistantDisplayName: 'AI 名称',
@@ -154,6 +160,12 @@ export function readerText(language: UiLanguage) {
   return {
     addCanvasLeft: 'Add whiteboard on left',
     addCanvasRight: 'Add whiteboard on right',
+    openCanvasLeft: 'Open left whiteboard',
+    openCanvasRight: 'Open right whiteboard',
+    canvasLimit: 'One canvas per side and page',
+    moveCanvasToLeft: 'Move canvas to left',
+    moveCanvasToRight: 'Move canvas to right',
+    canvasSideOccupied: 'The other side already has a canvas',
     assistantDisplayName: 'AI name',
     canvas: 'Whiteboard',
     clearCanvas: 'Clear whiteboard',
