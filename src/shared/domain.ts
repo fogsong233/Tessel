@@ -654,7 +654,7 @@ export interface TesselApi {
   checkForAppUpdates(): Promise<AppUpdateState>;
   downloadAppUpdate(): Promise<AppUpdateState>;
   dismissAppUpdate(): Promise<AppUpdateState>;
-  installAppUpdate(): Promise<void>;
+  installAppUpdate(): Promise<AppUpdateState>;
   onAppUpdateState(listener: (state: AppUpdateState) => void): () => void;
   onWindowChromeState(listener: (state: WindowChromeState) => void): () => void;
   onSettingsChanged(listener: () => void): () => void;

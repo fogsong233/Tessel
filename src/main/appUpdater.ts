@@ -1,8 +1,10 @@
 import { app } from 'electron';
-import electronUpdater, { type ProgressInfo, type UpdateInfo } from 'electron-updater';
+import electronUpdater, { type ProgressInfo, type UpdateDownloadedEvent, type UpdateInfo } from 'electron-updater';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { AppUpdateState } from '../shared/domain';
+import { normalizeUpdateReleaseNotes } from './updateReleaseNotes';
+import { launchWindowsUpdateHelper } from './windowsUpdateHelper';
 
 const { autoUpdater } = electronUpdater;
 const updateIntervalMs = 6 * 60 * 60 * 1000;
@@ -16,6 +18,8 @@ export class AppUpdateService {
   private checking = false;
   private installing = false;
   private operation: 'check' | 'download' | undefined;
+  private downloadedInstallerPath?: string;
+  private installTimer?: ReturnType<typeof setTimeout>;
 
   constructor(private readonly publish: (state: AppUpdateState) => void) {}
 
@@ -46,31 +50,40 @@ export class AppUpdateService {
     }
 
     configureUpdaterLogging();
-    // Download in the background, apply silently on a normal quit, and reopen after
-    // an explicit "restart to update". Pin NSIS to the running executable's folder
-    // so stale registry entries cannot redirect an update away from a custom path.
+    // Keep installation explicit. The restart helper below launches the exact
+    // executable that initiated the update, so a stale Start Menu shortcut cannot
+    // reopen another copy after updating a custom installation directory.
     autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
-    autoUpdater.autoRunAppAfterInstall = true;
+    autoUpdater.autoInstallOnAppQuit = false;
+    autoUpdater.autoRunAppAfterInstall = false;
     (autoUpdater as typeof autoUpdater & { installDirectory?: string }).installDirectory = dirname(process.execPath);
     autoUpdater.allowPrerelease = app.getVersion().includes('-');
     autoUpdater.on('checking-for-update', () => this.setState({ status: 'checking' }));
-    autoUpdater.on('update-available', (info) => this.setState({
-      status: 'available',
-      availableVersion: info.version,
-      releaseNotes: releaseNotes(info)
-    }));
-    autoUpdater.on('update-not-available', (info) => this.setState({
-      status: 'not-available',
-      availableVersion: info.version
-    }));
+    autoUpdater.on('update-available', (info) => {
+      this.downloadedInstallerPath = undefined;
+      this.setState({
+        status: 'available',
+        availableVersion: info.version,
+        releaseNotes: releaseNotes(info)
+      });
+    });
+    autoUpdater.on('update-not-available', (info) => {
+      this.downloadedInstallerPath = undefined;
+      this.setState({
+        status: 'not-available',
+        availableVersion: info.version
+      });
+    });
     autoUpdater.on('download-progress', (progress) => this.handleDownloadProgress(progress));
-    autoUpdater.on('update-downloaded', (info) => this.setState({
-      status: 'ready',
-      availableVersion: info.version,
-      releaseNotes: releaseNotes(info),
-      downloadPercent: 100
-    }));
+    autoUpdater.on('update-downloaded', (info: UpdateDownloadedEvent) => {
+      this.downloadedInstallerPath = info.downloadedFile;
+      this.setState({
+        status: 'ready',
+        availableVersion: info.version,
+        releaseNotes: releaseNotes(info),
+        downloadPercent: 100
+      });
+    });
     autoUpdater.on('error', (error) => this.handleError(error));
 
     setTimeout(() => void this.check(), 2_000).unref();
@@ -102,9 +115,9 @@ export class AppUpdateService {
     return this.state;
   }
 
-  install(): void {
+  async install(): Promise<AppUpdateState> {
     if (this.state.status !== 'ready' || this.installing) {
-      return;
+      return this.state;
     }
     const readyState = this.state;
     this.installing = true;
@@ -115,7 +128,21 @@ export class AppUpdateService {
       downloadPercent: 100
     });
     try {
-      autoUpdater.quitAndInstall(true, true);
+      if (!this.downloadedInstallerPath) {
+        throw new Error('The downloaded installer path is unavailable. Check for updates again.');
+      }
+      const installDirectory = dirname(process.execPath);
+      await launchWindowsUpdateHelper({
+        installerPath: this.downloadedInstallerPath,
+        installDirectory,
+        targetExecutablePath: process.execPath,
+        currentProcessId: process.pid,
+        logPath: join(app.getPath('logs'), 'update-restart.log')
+      });
+      this.installTimer = setTimeout(() => {
+        this.installTimer = undefined;
+        app.quit();
+      }, 900);
     } catch (error) {
       this.installing = false;
       const detail = error instanceof Error && error.message ? error.message : String(error || 'Unknown error');
@@ -127,6 +154,7 @@ export class AppUpdateService {
         message: `Install could not start: ${detail}`
       });
     }
+    return this.state;
   }
 
   async download(): Promise<AppUpdateState> {
@@ -238,21 +266,5 @@ function configureUpdaterLogging(): void {
 }
 
 function releaseNotes(info: UpdateInfo): string | undefined {
-  const notes = typeof info.releaseNotes === 'string'
-    ? info.releaseNotes
-    : Array.isArray(info.releaseNotes)
-      ? info.releaseNotes.map((note) => note.note).filter(Boolean).join('\n\n')
-      : '';
-  const normalized = notes
-    .replace(/<\s*br\s*\/?>/gi, '\n')
-    .replace(/<\s*\/p\s*>/gi, '\n\n')
-    .replace(/<\s*li\s*>/gi, '\n- ')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-  return normalized || undefined;
+  return normalizeUpdateReleaseNotes(info.releaseNotes);
 }

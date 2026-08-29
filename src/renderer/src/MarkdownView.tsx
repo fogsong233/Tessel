@@ -6,11 +6,12 @@ import remarkMath from 'remark-math';
 
 interface MarkdownViewProps {
   children: string;
+  visualLinkPreviews?: boolean;
 }
 
-export function MarkdownView({ children }: MarkdownViewProps): ReactElement {
+export function MarkdownView({ children, visualLinkPreviews = true }: MarkdownViewProps): ReactElement {
   const markdown = normalizeLatexDelimiters(normalizeLocalMarkdownLinks(cleanStoredAiError(children)));
-  const showVisualLinkPreviews = messageRequestsVisual(markdown);
+  const showVisualLinkPreviews = visualLinkPreviews && messageRequestsVisual(markdown);
 
   return (
     <div className="markdown-view">

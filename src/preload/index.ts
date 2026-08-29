@@ -79,7 +79,7 @@ const api: TesselApi = {
   checkForAppUpdates: (): Promise<AppUpdateState> => ipcRenderer.invoke('app:update:check'),
   downloadAppUpdate: (): Promise<AppUpdateState> => ipcRenderer.invoke('app:update:download'),
   dismissAppUpdate: (): Promise<AppUpdateState> => ipcRenderer.invoke('app:update:dismiss'),
-  installAppUpdate: (): Promise<void> => ipcRenderer.invoke('app:update:install'),
+  installAppUpdate: (): Promise<AppUpdateState> => ipcRenderer.invoke('app:update:install'),
   onAppUpdateState: (listener: (state: AppUpdateState) => void) => {
     const channelListener = (_event: Electron.IpcRendererEvent, payload: AppUpdateState): void => listener(payload);
     ipcRenderer.on('app:update:state', channelListener);

@@ -6734,8 +6734,7 @@ body.is-resizing-workspace-block * {
 }
 
 .reader-settings__fields input:not([type="checkbox"]),
-.reader-settings__fields select,
-.reader-settings__notes textarea {
+.reader-settings__fields select {
   width: 100%;
   min-width: 0;
   min-height: 40px;
@@ -6751,8 +6750,7 @@ body.is-resizing-workspace-block * {
 }
 
 .reader-settings__fields input:not([type="checkbox"]):focus,
-.reader-settings__fields select:focus,
-.reader-settings__notes textarea:focus {
+.reader-settings__fields select:focus {
   border-color: #4b8e6d;
   box-shadow: 0 0 0 3px rgba(76, 146, 112, 0.14);
 }
@@ -6941,8 +6939,7 @@ body.is-resizing-workspace-block * {
   background: #f7faf6;
 }
 
-.reader-settings__update-summary span,
-.reader-settings__notes {
+.reader-settings__update-summary span {
   color: #647068;
   font-size: 11px;
   font-weight: 700;
@@ -6958,16 +6955,187 @@ body.is-resizing-workspace-block * {
   text-overflow: ellipsis;
 }
 
-.reader-settings__notes {
-  display: grid;
-  gap: 7px;
+.reader-settings__release-notes {
+  overflow: hidden;
+  border: 1px solid #dfe4df;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(27, 42, 32, 0.03);
 }
 
-.reader-settings__notes textarea {
+.reader-settings__release-notes > header {
+  padding: 11px 15px;
+  color: #59645c;
+  border-bottom: 1px solid #e7ebe7;
+  background: #f7f9f7;
+  font-size: 11px;
+  font-weight: 760;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.reader-settings__release-notes-body {
+  max-height: min(360px, 42vh);
+  overflow: auto;
+  padding: 16px 18px 18px;
+  color: #303532;
+  scrollbar-color: #b9c2bb transparent;
+  scrollbar-width: thin;
+}
+
+.reader-settings__release-notes-body::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+.reader-settings__release-notes-body::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #aeb9b1;
+  background-clip: padding-box;
+}
+
+.reader-settings__release-notes-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.reader-settings__release-notes-body .markdown-view {
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.reader-settings__release-notes-body .markdown-view > :first-child {
+  margin-top: 0;
+}
+
+.reader-settings__release-notes-body .markdown-view > :last-child {
+  margin-bottom: 0;
+}
+
+.reader-settings__release-notes-body h1,
+.reader-settings__release-notes-body h2,
+.reader-settings__release-notes-body h3 {
+  margin: 18px 0 8px;
+  color: #202622;
+  line-height: 1.3;
+}
+
+.reader-settings__release-notes-body h1 {
+  font-size: 18px;
+}
+
+.reader-settings__release-notes-body h2 {
+  padding-bottom: 7px;
+  border-bottom: 1px solid #edf0ed;
+  font-size: 16px;
+}
+
+.reader-settings__release-notes-body h3 {
+  font-size: 14px;
+}
+
+.reader-settings__release-notes-body p,
+.reader-settings__release-notes-body ul,
+.reader-settings__release-notes-body ol,
+.reader-settings__release-notes-body blockquote,
+.reader-settings__release-notes-body pre,
+.reader-settings__release-notes-body table {
+  margin: 9px 0;
+}
+
+.reader-settings__release-notes-body ul,
+.reader-settings__release-notes-body ol {
+  padding-left: 21px;
+}
+
+.reader-settings__release-notes-body li + li {
+  margin-top: 5px;
+}
+
+.reader-settings__release-notes-body a {
+  color: #287253;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.reader-settings__release-notes-body blockquote {
+  padding: 2px 0 2px 12px;
+  color: #616a63;
+  border-left: 3px solid #b8cec0;
+}
+
+.reader-settings__release-notes-body code {
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: #f0f3f0;
+  font-size: 0.92em;
+}
+
+.reader-settings__release-notes-body pre {
+  overflow: auto;
+  padding: 12px 13px;
+  border: 1px solid #e4e8e4;
+  border-radius: 8px;
+  background: #f7f8f7;
+}
+
+.reader-settings__release-notes-body pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.reader-settings__release-notes-body table {
   width: 100%;
-  min-height: 96px;
-  padding: 10px 11px;
-  resize: vertical;
+  border-collapse: collapse;
+}
+
+.reader-settings__release-notes-body th,
+.reader-settings__release-notes-body td {
+  padding: 7px 9px;
+  border: 1px solid #e3e7e3;
+  text-align: left;
+}
+
+.reader-settings__release-notes-body th {
+  background: #f5f7f5;
+  font-weight: 720;
+}
+
+.reader-settings__installing {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px 14px;
+  color: #28513e;
+  border: 1px solid #cfe0d5;
+  border-radius: 10px;
+  background: #f3f9f5;
+}
+
+.reader-settings__installing > svg {
+  flex: 0 0 auto;
+  animation: reader-settings-update-spin 900ms linear infinite;
+}
+
+.reader-settings__installing > div {
+  display: grid;
+  gap: 2px;
+}
+
+.reader-settings__installing strong {
+  font-size: 13px;
+}
+
+.reader-settings__installing span {
+  color: #5f7468;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+@keyframes reader-settings-update-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 640px) {
@@ -11220,8 +11388,7 @@ body.is-moving-dock .reader-float-dock.is-chat-open {
 }
 
 .reader-settings__fields input:not([type="checkbox"]),
-.reader-settings__fields select,
-.reader-settings__notes textarea {
+.reader-settings__fields select {
   min-height: 36px;
   border-color: #dfe1e2;
   border-radius: 7px;
@@ -11229,8 +11396,7 @@ body.is-moving-dock .reader-float-dock.is-chat-open {
 }
 
 .reader-settings__fields input:not([type="checkbox"]):focus,
-.reader-settings__fields select:focus,
-.reader-settings__notes textarea:focus {
+.reader-settings__fields select:focus {
   border-color: #aeb8be;
   box-shadow: 0 0 0 3px rgba(80, 105, 120, 0.08);
 }
@@ -11373,13 +11539,14 @@ body.is-moving-dock .reader-float-dock.is-chat-open {
 
 .reader-settings__search,
 .reader-settings__fields,
-.reader-settings__update-summary {
+.reader-settings__update-summary,
+.reader-settings__release-notes,
+.reader-settings__installing {
   border-radius: var(--tessel-control-radius);
 }
 
 .reader-settings__fields input:not([type="checkbox"]),
 .reader-settings__fields select,
-.reader-settings__notes textarea,
 .reader-settings__color-control input[type="color"],
 .reader-settings__color-control .quiet-button,
 .reader-settings__model .quiet-button,
