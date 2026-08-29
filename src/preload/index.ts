@@ -19,6 +19,7 @@ import {
   TesselApi,
   WindowChromeState
 } from '../shared/domain';
+import type { LanWhiteboardRendererEvent } from '../shared/lanWhiteboard';
 
 const api: TesselApi = {
   openPdf: () => ipcRenderer.invoke('pdf:open'),
@@ -51,6 +52,8 @@ const api: TesselApi = {
   listWorkspaceBlocks: (documentId) => ipcRenderer.invoke('workspaceBlock:list', documentId),
   saveWorkspaceBlock: (input: SaveWorkspaceBlockInput) => ipcRenderer.invoke('workspaceBlock:save', input),
   deleteWorkspaceBlock: (blockId) => ipcRenderer.invoke('workspaceBlock:delete', blockId),
+  getLanWhiteboardInfo: () => ipcRenderer.invoke('lanWhiteboard:getInfo'),
+  getLanWhiteboardSnapshot: () => ipcRenderer.invoke('lanWhiteboard:getSnapshot'),
   openLocalPath: (path) => ipcRenderer.invoke('shell:openLocalPath', path),
   resolveRemoteImage: (url) => ipcRenderer.invoke('media:resolveRemoteImage', url),
   getAiProvider: () => ipcRenderer.invoke('settings:getAiProvider'),
@@ -96,6 +99,11 @@ const api: TesselApi = {
     const channelListener = (_event: Electron.IpcRendererEvent, payload: AiStreamEvent): void => listener(payload);
     ipcRenderer.on('ai:stream:event', channelListener);
     return () => ipcRenderer.removeListener('ai:stream:event', channelListener);
+  },
+  onLanWhiteboardEvent: (listener: (event: LanWhiteboardRendererEvent) => void) => {
+    const channelListener = (_event: Electron.IpcRendererEvent, payload: LanWhiteboardRendererEvent): void => listener(payload);
+    ipcRenderer.on('lanWhiteboard:event', channelListener);
+    return () => ipcRenderer.removeListener('lanWhiteboard:event', channelListener);
   }
 };
 

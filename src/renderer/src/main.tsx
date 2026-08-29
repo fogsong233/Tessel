@@ -5,6 +5,7 @@ import 'primereact/resources/primereact.min.css';
 import 'primeicons/primeicons.css';
 import 'pdfjs-dist/web/pdf_viewer.css';
 import './styles.css';
+import './reader/reader-overrides.css';
 import { App } from './App';
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(

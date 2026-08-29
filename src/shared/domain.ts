@@ -627,6 +627,8 @@ export interface TesselApi {
   listWorkspaceBlocks(documentId: DocumentId): Promise<WorkspaceBlock[]>;
   saveWorkspaceBlock(input: SaveWorkspaceBlockInput): Promise<WorkspaceBlock>;
   deleteWorkspaceBlock(blockId: WorkspaceBlockId): Promise<void>;
+  getLanWhiteboardInfo(): Promise<import('./lanWhiteboard').LanWhiteboardServerInfo>;
+  getLanWhiteboardSnapshot(): Promise<import('./lanWhiteboard').LanWhiteboardSnapshot>;
   openLocalPath(path: string): Promise<void>;
   resolveRemoteImage(url: string): Promise<string | undefined>;
   getAiProvider(): Promise<SafeAiProviderConfig>;
@@ -657,6 +659,7 @@ export interface TesselApi {
   onWindowChromeState(listener: (state: WindowChromeState) => void): () => void;
   onSettingsChanged(listener: () => void): () => void;
   onAiStreamEvent(listener: (event: AiStreamEvent) => void): () => void;
+  onLanWhiteboardEvent(listener: (event: import('./lanWhiteboard').LanWhiteboardRendererEvent) => void): () => void;
 }
 
 export const defaultAiProvider: SafeAiProviderConfig = {

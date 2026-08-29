@@ -6,11 +6,9 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
   type PointerEvent as ReactPointerEvent,
-  type WheelEvent as ReactWheelEvent,
   type SetStateAction,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -47,7 +45,6 @@ import {
   ChevronsRight,
   Check,
   Command,
-  Copy,
   Cpu,
   Gauge,
   ArrowUp,
@@ -106,12 +103,15 @@ import {
   pdfRangeChunkSize
 } from '../../shared/domain';
 import { createId } from '../../shared/ids';
+import type { LanDrawingStroke } from '../../shared/lanWhiteboard';
 import { isPendingGeneratedNoteDraft } from '../../shared/notes';
 import { normalizeSelectionColors, selectionColorForRole } from '../../shared/selectionColors';
 import { canOpenWorkspaceBlockSource, defaultWorkspaceBlockWidth, workspaceBlockSpec } from '../../shared/workspacePins';
 import { MarkdownView } from './MarkdownView';
 import { MarkdownNoteEditor } from './MarkdownNoteEditor';
 import { WorkspaceDrawingBlock, drawingBlockSide } from './reader/WorkspaceDrawingBlock';
+import { WorkspaceImageBlock, imageBlockPayload } from './reader/WorkspaceImageBlock';
+import { readerText, type ReaderText } from './reader/readerText';
 import {
   type ZoomAnchor,
   prepareZoomScrollSpace,
@@ -171,6 +171,7 @@ interface PdfReaderProps {
   conversations: Conversation[];
   translations: TranslationEntry[];
   workspaceBlocks: WorkspaceBlock[];
+  lanWhiteboardStrokes?: Record<string, Record<string, LanDrawingStroke>>;
   generatedOutline?: PdfGeneratedOutline | null;
   activeConversation?: Conversation;
   activeConversationId?: string;
@@ -285,307 +286,6 @@ interface WorkspaceBlockLayout {
   top: number;
 }
 
-function readerText(language: UiLanguage) {
-  if (language === 'zh-CN') {
-    return {
-      addCanvasLeft: '在左侧添加白板',
-      addCanvasRight: '在右侧添加白板',
-      assistantDisplayName: 'AI 名称',
-      canvas: '白板',
-      clearCanvas: '清空白板',
-      deleteSelection: '删除圈选内容',
-      drawingColor: '笔触颜色',
-      drawingSize: '笔触大小',
-      lassoTool: '圈选工具',
-      penTool: '画笔工具',
-      resetImageZoom: '重置图片缩放',
-      undoStroke: '撤销笔触',
-      userDisplayName: '我的名称',
-      addBookmark: '添加书签',
-      aiDraft: 'AI 草稿',
-      aiNote: 'AI 笔记',
-      askAboutPage: '询问这个页面。',
-      askAboutSelection: '询问选中的内容。',
-      attachImages: '上传图片',
-      bookmarkCurrentPage: '收藏当前页',
-      bookmarkPage: '收藏页面',
-      bookmarks: '书签',
-      chat: '对话',
-      chats: '对话',
-      translationHistory: '翻译记录',
-      noTranslations: '还没有翻译记录。',
-      close: '关闭',
-      collapseChat: '收起对话',
-      conversation: '对话',
-      codexModel: '当前对话模型',
-      codexReasoning: '推理强度',
-      codexPermissions: '权限',
-      codexDefaultModel: 'Codex 默认模型',
-      codexDefaultEffort: '阅读器默认（低）',
-      default: '默认',
-      permissionReadOnly: '只读',
-      permissionWorkspace: 'PDF 工作区',
-      permissionFullAccess: '完整访问',
-      permissionReadOnlyDescription: '阅读 PDF 和搜索内容，不会修改本机文件',
-      permissionWorkspaceDescription: '只在此 PDF 的私有分析目录中工作',
-      permissionFullAccessDescription: '可访问和修改这台电脑上的任意文件',
-      fullAccessWarning: '当前对话可以访问并修改本机任意文件。',
-      slashCommands: '对话命令',
-      slashStatus: '显示模型、推理强度和权限',
-      slashPs: '显示此对话中的活动任务',
-      slashStop: '停止当前 Codex 对话',
-      guideActiveTurn: '引导当前 Codex 对话',
-      messageCodex: '给 Codex 发消息，或输入 / 查看命令',
-      sendGuidance: '发送引导',
-      useSettingsModel: '使用“设置”中选择的模型',
-      delete: '删除',
-      deleteImage: '删除图片',
-      deleteMark: '删除标注',
-      deleteNote: '删除笔记',
-      editing: '编辑中',
-      fitWidth: '适应宽度',
-      from: '从',
-      generateAiOutline: 'AI 自动生成 PDF 目录',
-      generateAiNote: '生成 AI 笔记',
-      generatedOutline: 'AI 生成目录',
-      generateFromSources: '从 PDF、标注和对话生成',
-      generating: '生成中...',
-      generatingOutline: '正在分析 PDF...',
-      outlineProgressPreparing: '正在准备 PDF 上下文',
-      outlineProgressConnecting: '正在启动 AI',
-      outlineProgressReading: '正在抽取并阅读代表性页面',
-      outlineProgressGenerating: '正在组织目录结构',
-      outlineProgressValidating: '正在校验页码与层级',
-      outlineProgressSaving: '正在保存目录',
-      outlineProgressComplete: '目录已完成',
-      highlight: '高亮',
-      highlights: '高亮',
-      hideSidebar: '隐藏侧边栏',
-      image: '图片',
-      loadingPdf: '正在加载 PDF',
-      localPdfWorkspace: '本地 PDF 工作区',
-      manual: '手动',
-      messageSidelight: '给 Tessel 发消息',
-      newPageChat: '新建页面对话',
-      newPageNote: '新建页面笔记',
-      noConversations: '这个文档还没有对话。',
-      noHighlights: '当前页还没有高亮。',
-      noNoteCoversPage: '当前页没有可见笔记',
-      noNoteVisible: '这里没有可见笔记',
-      noNoteVisibleHelp: '创建页面笔记、生成 AI 笔记，或移动到已有笔记覆盖的页面。',
-      noSearchResults: '没有匹配结果。',
-      noOutline: '这个 PDF 没有目录。',
-	      noPdfOpen: '未打开 PDF',
-	      noBookmarks: '还没有页面书签。',
-	      notes: '笔记',
-	      notePreview: '预览',
-	      emptyNotePreview: '暂无内容',
-      openChat: '打开对话',
-      openNote: '打开笔记',
-      openPdf: '打开 PDF',
-      outline: '目录',
-      page: '页',
-      pageNotes: '页面笔记',
-      pdfFailed: 'PDF 加载失败',
-      pdfFailedHelp: 'PDF.js 无法读取这个文档。',
-      readingOutline: '正在读取 PDF 目录...',
-      readingSidePanel: '阅读侧边栏',
-      quote: '引用',
-      quoteSelection: '引用到当前对话',
-      removeBookmark: '移除书签',
-      removeImage: '移除图片',
-      moveSidePanel: '移动侧边工具',
-      resizeSidePanel: '调整侧边栏宽度',
-      save: '保存',
-      search: '搜索',
-      searchAll: '全部',
-      searchChats: '问答',
-      searchNotes: '笔记',
-      searchNotesAndChats: '搜索笔记和问答',
-      searchPlaceholder: '搜索内容、标题或摘要',
-      scopedByPageRange: '按页码范围显示',
-      searchInPdf: '搜索 PDF',
-      send: '发送',
-      settings: '设置',
-      showSidebar: '显示侧边栏',
-	      stopGenerating: '停止回答',
-	      toolCompleted: '已完成',
-	      toolFailed: '失败',
-	      toolReading: '读取中',
-	      toolReadPdf: '读取 PDF',
-	      toolReadOutline: '查看目录',
-      pinToCanvas: '贴到学习空间',
-      pinImageToCanvas: '贴图片到学习空间',
-      copyImage: '复制图片',
-      moveBlock: '移动卡片',
-      resizeBlock: '调整卡片宽度',
-      unpinFromCanvas: '从学习空间移除',
-      summary: '总结',
-      temporaryReadingAid: '临时阅读辅助',
-      thinking: '思考中...',
-      title: '标题',
-      to: '到',
-      translate: '翻译',
-      translation: '翻译',
-      underline: '下划线',
-      visibleNotes: '可见笔记',
-      visibleOnPage: (count: number) => `${count} 条在当前页可见`,
-      zoomIn: '放大',
-      zoomImage: '缩放图片',
-      zoomOut: '缩小'
-    };
-  }
-
-  return {
-    addCanvasLeft: 'Add whiteboard on left',
-    addCanvasRight: 'Add whiteboard on right',
-    assistantDisplayName: 'AI name',
-    canvas: 'Whiteboard',
-    clearCanvas: 'Clear whiteboard',
-    deleteSelection: 'Delete selected strokes',
-    drawingColor: 'Stroke color',
-    drawingSize: 'Stroke size',
-    lassoTool: 'Lasso tool',
-    penTool: 'Pen tool',
-    resetImageZoom: 'Reset image zoom',
-    undoStroke: 'Undo stroke',
-    userDisplayName: 'My name',
-    addBookmark: 'Add bookmark',
-    aiDraft: 'AI draft',
-    aiNote: 'AI note',
-    askAboutPage: 'Ask about this page.',
-    askAboutSelection: 'Ask about the selected passage.',
-    attachImages: 'Attach images',
-    bookmarkCurrentPage: 'Bookmark current page',
-    bookmarkPage: 'Bookmark page',
-    bookmarks: 'Bookmarks',
-    chat: 'Chat',
-    chats: 'Chats',
-    translationHistory: 'Translations',
-    noTranslations: 'No translations for this document yet.',
-    close: 'Close',
-    collapseChat: 'Collapse chat',
-    conversation: 'Conversation',
-    codexModel: 'Current chat model',
-    codexReasoning: 'Reasoning effort',
-    codexPermissions: 'Permissions',
-    codexDefaultModel: 'Codex default model',
-    codexDefaultEffort: 'Reader default (Low)',
-    default: 'Default',
-    permissionReadOnly: 'Read only',
-    permissionWorkspace: 'PDF workspace',
-    permissionFullAccess: 'Full access',
-    permissionReadOnlyDescription: 'Read the PDF and search without changing local files',
-    permissionWorkspaceDescription: "Work only inside this PDF's private analysis folder",
-    permissionFullAccessDescription: 'Access and modify files anywhere on this computer',
-    fullAccessWarning: 'This conversation can access and modify any local file.',
-    slashCommands: 'Chat commands',
-    slashStatus: 'Show model, reasoning, and permissions',
-    slashPs: 'Show active tasks in this conversation',
-    slashStop: 'Stop the active Codex turn',
-    guideActiveTurn: 'Guide the active Codex turn',
-    messageCodex: 'Message Codex or type / for commands',
-    sendGuidance: 'Send guidance',
-    useSettingsModel: 'Use the model selected in Settings',
-    delete: 'Delete',
-    deleteImage: 'Delete image',
-    deleteMark: 'Delete mark',
-    deleteNote: 'Delete note',
-    editing: 'Editing',
-      fitWidth: 'Fit to width',
-      from: 'From',
-      generateAiOutline: 'AI-generate PDF outline',
-      generateAiNote: 'Generate AI note',
-      generatedOutline: 'AI-generated outline',
-      generateFromSources: 'Generate from PDF, highlights, and chats',
-      generating: 'Generating...',
-      generatingOutline: 'Analyzing PDF...',
-      outlineProgressPreparing: 'Preparing PDF context',
-      outlineProgressConnecting: 'Starting AI',
-      outlineProgressReading: 'Reading representative pages',
-      outlineProgressGenerating: 'Structuring the outline',
-      outlineProgressValidating: 'Validating pages and levels',
-      outlineProgressSaving: 'Saving the outline',
-      outlineProgressComplete: 'Outline complete',
-    highlight: 'Highlight',
-    highlights: 'Highlights',
-    hideSidebar: 'Hide sidebar',
-    image: 'Image',
-    loadingPdf: 'Loading PDF',
-    localPdfWorkspace: 'Local PDF workspace',
-    manual: 'Manual',
-    messageSidelight: 'Message Tessel',
-    newPageChat: 'New page chat',
-    newPageNote: 'New page note',
-    noConversations: 'No conversations on this document yet.',
-    noHighlights: 'No highlights on this page yet.',
-    noNoteCoversPage: 'No note covers this page',
-      noNoteVisible: 'No note is visible here',
-      noNoteVisibleHelp: 'Create a page note, generate an AI note, or move to a page covered by an existing note.',
-      noSearchResults: 'No matching results.',
-      noOutline: 'No outline in this PDF.',
-	    noPdfOpen: 'No PDF open',
-	    noBookmarks: 'No page bookmarks yet.',
-	    notes: 'Notes',
-	    notePreview: 'Preview',
-	    emptyNotePreview: 'No content',
-      openChat: 'Open chat',
-      openNote: 'Open note',
-      openPdf: 'Open PDF',
-    outline: 'Outline',
-    page: 'Page',
-    pageNotes: 'Page notes',
-    pdfFailed: 'PDF failed to load',
-    pdfFailedHelp: 'The document could not be read by PDF.js.',
-    readingOutline: 'Reading PDF outline...',
-    readingSidePanel: 'Reading side panel',
-    quote: 'Quote',
-    quoteSelection: 'Quote in current chat',
-    removeBookmark: 'Remove bookmark',
-      removeImage: 'Remove image',
-    moveSidePanel: 'Move reading dock',
-    resizeSidePanel: 'Resize side panel',
-    save: 'Save',
-      search: 'Search',
-      searchAll: 'All',
-      searchChats: 'Q&A',
-      searchNotes: 'Notes',
-      searchNotesAndChats: 'Search notes and Q&A',
-      searchPlaceholder: 'Search content, titles, or summaries',
-      scopedByPageRange: 'Scoped by page range',
-    searchInPdf: 'Search in PDF',
-    send: 'Send',
-    settings: 'Settings',
-	    showSidebar: 'Show sidebar',
-	    stopGenerating: 'Stop generating',
-	    toolCompleted: 'Done',
-	    toolFailed: 'Failed',
-	    toolReading: 'Reading',
-	    toolReadPdf: 'Read PDF',
-	    toolReadOutline: 'Read outline',
-    pinToCanvas: 'Pin to learning space',
-    pinImageToCanvas: 'Pin image to learning space',
-    copyImage: 'Copy image',
-    moveBlock: 'Move block',
-    resizeBlock: 'Resize block',
-    unpinFromCanvas: 'Remove from learning space',
-    summary: 'Summary',
-    temporaryReadingAid: 'Temporary reading aid',
-    thinking: 'Thinking...',
-    title: 'Title',
-    to: 'To',
-    translate: 'Translate',
-    translation: 'Translation',
-    underline: 'Underline',
-    visibleNotes: 'Visible notes',
-    visibleOnPage: (count: number) => `${count} visible on this page`,
-    zoomIn: 'Zoom in',
-    zoomImage: 'Zoom image',
-    zoomOut: 'Zoom out'
-  };
-}
-
-type ReaderText = ReturnType<typeof readerText>;
 
 function outlineProgressLabel(phase: OutlineGenerationPhase, text: ReaderText): string {
   switch (phase) {
@@ -617,6 +317,7 @@ export function PdfReader({
   conversations,
   translations,
   workspaceBlocks,
+  lanWhiteboardStrokes = {},
   generatedOutline,
   activeConversation,
   activeConversationId,
@@ -2581,7 +2282,12 @@ export function PdfReader({
       event.currentTarget.focus({ preventScroll: true });
     }
 
-    if (!canvasDragEnabled || event.button !== 0 || shouldIgnoreCanvasDragMode(event.target)) {
+    const modifierPan = (event.ctrlKey || event.metaKey) && isDrawingSurfaceTarget(event.target);
+    if (
+      (!canvasDragEnabled && !modifierPan) ||
+      event.button !== 0 ||
+      (!modifierPan && shouldIgnoreCanvasDragMode(event.target))
+    ) {
       return;
     }
 
@@ -2765,6 +2471,7 @@ export function PdfReader({
                     <div className="pdfViewer" ref={viewerRef} />
                     <WorkspaceBlockLayer
                       blocks={effectiveWorkspaceBlocks}
+                      lanWhiteboardStrokes={lanWhiteboardStrokes}
                       translations={translations}
                       layouts={workspaceBlockLayouts}
                       text={t}
@@ -4110,6 +3817,7 @@ function DockSearchPanel({
 
 function WorkspaceBlockLayer({
   blocks,
+  lanWhiteboardStrokes,
   translations,
   layouts,
   text,
@@ -4120,6 +3828,7 @@ function WorkspaceBlockLayer({
   onSave
 }: {
   blocks: WorkspaceBlock[];
+  lanWhiteboardStrokes: Record<string, Record<string, LanDrawingStroke>>;
   translations: TranslationEntry[];
   layouts: Record<string, WorkspaceBlockLayout>;
   text: ReaderText;
@@ -4342,6 +4051,7 @@ function WorkspaceBlockLayer({
               <WorkspaceDrawingBlock
                 block={block}
                 height={layout.pageHeight}
+                remoteStrokes={Object.values(lanWhiteboardStrokes[block.id] ?? {})}
                 text={text}
                 width={layout.pageWidth}
                 onDelete={() => onDelete(block.id)}
@@ -4410,182 +4120,6 @@ function workspaceBlockLabel(block: WorkspaceBlock, text: ReaderText): string {
   }
 
   return block.kind;
-}
-
-interface WorkspaceImagePayload {
-  dataUrl?: string;
-  name?: string;
-  panX: number;
-  panY: number;
-  zoom: number;
-}
-
-function imageBlockPayload(block: WorkspaceBlock): WorkspaceImagePayload | undefined {
-  if (block.kind !== 'image' || !block.payload) {
-    return undefined;
-  }
-
-  const dataUrl = typeof block.payload.dataUrl === 'string' ? block.payload.dataUrl : undefined;
-  const name = typeof block.payload.name === 'string' ? block.payload.name : undefined;
-  const zoom = typeof block.payload.zoom === 'number' ? clamp(block.payload.zoom, 25, 800) : 100;
-  const panX = typeof block.payload.panX === 'number' ? Math.max(0, block.payload.panX) : 0;
-  const panY = typeof block.payload.panY === 'number' ? Math.max(0, block.payload.panY) : 0;
-  return { dataUrl, name, panX, panY, zoom };
-}
-
-function WorkspaceImageBlock({
-  block,
-  payload,
-  text,
-  onCopy,
-  onDelete,
-  onMove,
-  onSave
-}: {
-  block: WorkspaceBlock;
-  payload: WorkspaceImagePayload;
-  text: ReaderText;
-  onCopy(): void;
-  onDelete(): void;
-  onMove(event: ReactMouseEvent<HTMLElement>): void;
-  onSave(block: WorkspaceBlock): void;
-}): ReactElement {
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const rightButtonHeldRef = useRef(false);
-  const persistTimerRef = useRef<number>();
-  const [zoom, setZoom] = useState(payload.zoom);
-
-  const persistView = useCallback((nextZoom: number, panX: number, panY: number): void => {
-    if (persistTimerRef.current) {
-      window.clearTimeout(persistTimerRef.current);
-    }
-    persistTimerRef.current = window.setTimeout(() => {
-      onSave({
-        ...block,
-        payload: {
-          ...block.payload,
-          zoom: Math.round(nextZoom),
-          panX: Math.round(Math.max(0, panX)),
-          panY: Math.round(Math.max(0, panY))
-        },
-        updatedAt: new Date().toISOString()
-      });
-    }, 180);
-  }, [block, onSave]);
-
-  useLayoutEffect(() => {
-    const viewport = viewportRef.current;
-    if (!viewport) {
-      return;
-    }
-    viewport.scrollLeft = payload.panX;
-    viewport.scrollTop = payload.panY;
-  }, [block.id]);
-
-  useEffect(() => () => {
-    if (persistTimerRef.current) {
-      window.clearTimeout(persistTimerRef.current);
-    }
-  }, []);
-
-  useEffect(() => {
-    const releaseRightButton = (): void => {
-      rightButtonHeldRef.current = false;
-    };
-    window.addEventListener('pointerup', releaseRightButton);
-    window.addEventListener('blur', releaseRightButton);
-    return () => {
-      window.removeEventListener('pointerup', releaseRightButton);
-      window.removeEventListener('blur', releaseRightButton);
-    };
-  }, []);
-
-  const resetZoom = (): void => {
-    const viewport = viewportRef.current;
-    setZoom(100);
-    if (viewport) {
-      viewport.scrollTo({ left: 0, top: 0 });
-      persistView(100, 0, 0);
-    }
-  };
-
-  const zoomAroundPointer = (event: ReactWheelEvent<HTMLDivElement>): void => {
-    if (!rightButtonHeldRef.current) {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-    const viewport = viewportRef.current;
-    if (!viewport) {
-      return;
-    }
-
-    const rect = viewport.getBoundingClientRect();
-    const pointerX = event.clientX - rect.left;
-    const pointerY = event.clientY - rect.top;
-    const contentX = viewport.scrollLeft + pointerX;
-    const contentY = viewport.scrollTop + pointerY;
-    const step = event.deltaY < 0 ? 1.12 : 1 / 1.12;
-    const nextZoom = clamp(zoom * step, 25, 800);
-    const ratio = nextZoom / zoom;
-    setZoom(nextZoom);
-
-    window.requestAnimationFrame(() => {
-      viewport.scrollLeft = contentX * ratio - pointerX;
-      viewport.scrollTop = contentY * ratio - pointerY;
-      persistView(nextZoom, viewport.scrollLeft, viewport.scrollTop);
-    });
-  };
-
-  return (
-    <div className="workspace-image">
-      <div
-        ref={viewportRef}
-        className="workspace-image__viewport"
-        onContextMenu={(event) => event.preventDefault()}
-        onMouseDown={(event) => {
-          if (event.button === 0) {
-            onMove(event);
-          }
-        }}
-        onPointerDown={(event) => {
-          if (event.button === 2) {
-            event.preventDefault();
-            event.stopPropagation();
-            rightButtonHeldRef.current = true;
-          }
-        }}
-        onPointerCancel={() => {
-          rightButtonHeldRef.current = false;
-        }}
-        onScroll={(event) => {
-          const viewport = event.currentTarget;
-          persistView(zoom, viewport.scrollLeft, viewport.scrollTop);
-        }}
-        onWheel={zoomAroundPointer}
-      >
-        <img
-          src={payload.dataUrl}
-          alt={payload.name ?? block.title}
-          draggable={false}
-          style={{ width: `${zoom}%` }}
-        />
-      </div>
-      <span className="workspace-image__zoom" aria-live="polite">{Math.round(zoom)}%</span>
-      <div className="workspace-block-card__image-actions">
-        <button type="button" title={text.resetImageZoom} aria-label={text.resetImageZoom} onClick={resetZoom}>
-          <Move size={13} />
-        </button>
-        <button type="button" title={text.copyImage} aria-label={text.copyImage} onClick={onCopy}>
-          <Copy size={13} />
-        </button>
-        <button type="button" title={text.deleteImage} aria-label={text.deleteImage} onClick={onDelete}>
-          <Trash2 size={13} />
-        </button>
-      </div>
-    </div>
-  );
 }
 
 function DockChatPanel({
@@ -6359,6 +5893,10 @@ function shouldIgnoreCanvasDragMode(target: EventTarget | null): boolean {
       ].join(', ')
     )
   );
+}
+
+function isDrawingSurfaceTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest('.workspace-drawing__surface'));
 }
 
 function shouldIgnoreImagePinPaste(target: EventTarget | null): boolean {

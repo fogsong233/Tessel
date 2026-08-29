@@ -184,6 +184,13 @@ export class JsonWorkspaceStore {
     })));
   }
 
+  async listDocuments(): Promise<PdfDocumentMeta[]> {
+    const store = await this.read();
+    return [...store.documents]
+      .sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt))
+      .map((document) => withReadingState(document, store.readingStates));
+  }
+
   async getStorageOverview(): Promise<WorkspaceStorageOverview> {
     const store = await this.read();
     const documents = await Promise.all([...store.documents]
@@ -452,6 +459,11 @@ export class JsonWorkspaceStore {
         const pageDelta = (a.pageNumber ?? 0) - (b.pageNumber ?? 0);
         return pageDelta || a.y - b.y || a.x - b.x || a.createdAt.localeCompare(b.createdAt);
       });
+  }
+
+  async listAllWorkspaceBlocks(): Promise<WorkspaceBlock[]> {
+    const store = await this.read();
+    return [...store.workspaceBlocks];
   }
 
   async saveWorkspaceBlock(block: WorkspaceBlock): Promise<WorkspaceBlock> {

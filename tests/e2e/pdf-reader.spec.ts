@@ -48,6 +48,7 @@ test.describe('PDF reader flow', () => {
         FAKE_CODEX_LOG: fakeCodexLog,
         FAKE_CODEX_AUTH: useExecTransport ? 'api-key' : 'chatgpt',
         TESSEL_CODEX_TRANSPORT: testInfo.title.includes('exec checkpoint') ? 'exec' : '',
+        TESSEL_LAN_WHITEBOARD_PORT: '0',
         SIDELIGHT_E2E_PDF_LOAD_DELAY_MS: testInfo.title.includes('stable while loading') ? '900' : '',
         SIDELIGHT_USER_DATA_DIR: userDataDir,
         SIDELIGHT_E2E_HIDE_WINDOWS: '1',
@@ -306,8 +307,145 @@ test.describe('PDF reader flow', () => {
       return saved.workspaceBlocks.find((block) => block.kind === 'drawing')?.payload?.strokes?.[0]?.points?.length;
     }, { timeout: 8_000 }).toBeGreaterThan(3);
 
+    await board.getByRole('button', { name: 'Pen tool' }).click();
+    await surface.dispatchEvent('pointerdown', {
+      pointerId: 31,
+      pointerType: 'pen',
+      button: 0,
+      buttons: 1,
+      clientX: drawingX - 20,
+      clientY: drawingY - 40,
+      pressure: 0
+    });
+    for (const [offsetX, offsetY, pressure] of [
+      [-40, -28, 0.1],
+      [-64, -12, 0.45],
+      [-90, 8, 0.9]
+    ]) {
+      await surface.dispatchEvent('pointermove', {
+        pointerId: 31,
+        pointerType: 'pen',
+        button: 0,
+        buttons: 1,
+        clientX: drawingX + offsetX,
+        clientY: drawingY + offsetY,
+        pressure
+      });
+    }
+    await surface.dispatchEvent('pointerup', {
+      pointerId: 31,
+      pointerType: 'pen',
+      button: 0,
+      buttons: 0,
+      clientX: drawingX - 90,
+      clientY: drawingY + 8,
+      pressure: 0
+    });
+    await expect(surface.locator('path')).toHaveCount(2);
+    await expect.poll(async () => {
+      const saved = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+        workspaceBlocks: Array<{
+          kind: string;
+          payload?: { strokes?: Array<{ points?: number[][]; simulatePressure?: boolean }> };
+        }>;
+      };
+      const penStroke = saved.workspaceBlocks
+        .find((block) => block.kind === 'drawing')
+        ?.payload?.strokes?.find((stroke) => stroke.simulatePressure === false);
+      const pressures = penStroke?.points?.map((point) => point[2]) ?? [];
+      return {
+        count: pressures.length,
+        lightStart: (pressures[0] ?? 1) < 0.1,
+        expressiveRange: pressures.length
+          ? Math.max(...pressures) - Math.min(...pressures) > 0.5
+          : false
+      };
+    }, { timeout: 8_000 }).toEqual({ count: 4, lightStart: true, expressiveRange: true });
+
+    const pdfViewport = page.locator('.pdf-viewport');
+    const scrollBeforeModifierPan = await pdfViewport.evaluate((node) => ({
+      left: node.scrollLeft,
+      top: node.scrollTop
+    }));
+    await page.keyboard.down('Control');
+    try {
+      await page.mouse.move(drawingX, drawingY);
+      await page.mouse.down();
+      await page.mouse.move(drawingX - 80, drawingY - 55, { steps: 5 });
+      await page.mouse.up();
+    } finally {
+      await page.keyboard.up('Control');
+    }
+    const scrollAfterModifierPan = await pdfViewport.evaluate((node) => ({
+      left: node.scrollLeft,
+      top: node.scrollTop
+    }));
+    expect(
+      Math.abs(scrollAfterModifierPan.left - scrollBeforeModifierPan.left) +
+      Math.abs(scrollAfterModifierPan.top - scrollBeforeModifierPan.top)
+    ).toBeGreaterThan(20);
+    await expect(surface.locator('path')).toHaveCount(2);
+
     await page.reload();
+    await expect(page.locator('.workspace-block-card--drawing .workspace-drawing__surface path')).toHaveCount(2);
+  });
+
+  test('streams tablet handwriting over the LAN page before the stroke is persisted', async () => {
+    test.setTimeout(60_000);
+    await expect(page.locator('.pdfViewer .page[data-page-number="1"]')).toBeVisible();
+    const info = await expect.poll(async () => page.evaluate(() => window.sidelight.getLanWhiteboardInfo())).toMatchObject({
+      running: true,
+      clientCount: 0
+    });
+    void info;
+    const serverInfo = await page.evaluate(() => window.sidelight.getLanWhiteboardInfo());
+    const url = serverInfo.urls.find((candidate) => candidate.includes('127.0.0.1')) ?? serverInfo.urls[0];
+    expect(url).toBeTruthy();
+    const html = await fetch(url!).then((response) => response.text());
+    expect(html).toContain('Tessel 手写板');
+
+    const tabletWindow = app.waitForEvent('window');
+    await app.evaluate(({ BrowserWindow }, remoteUrl) => {
+      const tablet = new BrowserWindow({
+        width: 1024,
+        height: 768,
+        show: false,
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
+      });
+      void tablet.loadURL(remoteUrl);
+    }, url!);
+    const tablet = await tabletWindow;
+    await expect(tablet.locator('.remote-app')).toBeVisible();
+    await expect(tablet.locator('.remote-status.is-connected')).toBeVisible();
+    await tablet.getByRole('button', { name: '放在右侧' }).click();
+
+    const tabletSurface = tablet.locator('.remote-canvas__paper');
+    await expect(tabletSurface).toBeVisible();
+    await expect(page.locator('.workspace-block-card--drawing')).toBeVisible();
+    const surfaceBox = await tabletSurface.boundingBox();
+    expect(surfaceBox).toBeTruthy();
+    const startX = surfaceBox!.x + surfaceBox!.width * 0.35;
+    const startY = surfaceBox!.y + surfaceBox!.height * 0.35;
+    await tablet.mouse.move(startX, startY);
+    await tablet.mouse.down();
+    await tablet.mouse.move(startX + 120, startY + 65, { steps: 7 });
+
+    // The desktop receives frame-batched preview points while the pointer is
+    // still down; persistence is deliberately deferred until pointerup.
     await expect(page.locator('.workspace-block-card--drawing .workspace-drawing__surface path')).toHaveCount(1);
+    const beforePointerUp = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+      workspaceBlocks: Array<{ kind: string; payload?: { strokes?: unknown[] } }>;
+    };
+    expect(beforePointerUp.workspaceBlocks.find((block) => block.kind === 'drawing')?.payload?.strokes ?? []).toHaveLength(0);
+
+    await tablet.mouse.up();
+    await expect.poll(async () => {
+      const stored = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
+        workspaceBlocks: Array<{ kind: string; payload?: { strokes?: Array<{ points?: unknown[] }> } }>;
+      };
+      return stored.workspaceBlocks.find((block) => block.kind === 'drawing')?.payload?.strokes?.[0]?.points?.length ?? 0;
+    }).toBeGreaterThan(2);
+    await tablet.close();
   });
 
   test('renames both conversation participants and persists their transcript labels', async () => {

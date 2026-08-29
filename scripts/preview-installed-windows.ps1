@@ -103,6 +103,20 @@ function Copy-DirectoryContents([string]$Source, [string]$Destination) {
     }
 }
 
+function Copy-PreviewRuntimeDependency([string]$PackageName) {
+    $source = Join-Path (Join-Path $projectRoot 'node_modules') $PackageName
+    $destination = Join-Path (Join-Path $previewStaging 'node_modules') $PackageName
+    if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+        throw "Runtime dependency was not installed: $PackageName"
+    }
+    $destinationParent = Split-Path -Parent $destination
+    [void](New-Item -ItemType Directory -Path $destinationParent -Force)
+    if (Test-Path -LiteralPath $destination -PathType Container) {
+        Remove-Item -LiteralPath $destination -Recurse -Force
+    }
+    Copy-Item -LiteralPath $source -Destination $destination -Recurse -Force
+}
+
 function Build-PreviewPackage {
     Write-Host 'Type-checking...' -ForegroundColor Cyan
     Invoke-CheckedCommand $typeScript @('-b', '--noEmit')
@@ -124,6 +138,11 @@ function Build-PreviewPackage {
     Copy-Item -LiteralPath (Join-Path $projectRoot 'out') -Destination $previewStaging -Recurse -Force
 
     Copy-Item -LiteralPath (Join-Path $projectRoot 'package.json') -Destination (Join-Path $previewStaging 'package.json') -Force
+
+    # Preview installs are based on the currently installed asar. Copy runtime
+    # packages introduced by this source tree so externalized main-process
+    # imports are available before the next full installer is produced.
+    Copy-PreviewRuntimeDependency 'ws'
 
     $iconSource = Join-Path $projectRoot 'src\assets\icons\icon_256x256.png'
     if (Test-Path -LiteralPath $iconSource -PathType Leaf) {

@@ -15,6 +15,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  Tablet,
   X
 } from 'lucide-react';
 import {
@@ -63,6 +64,7 @@ import {
   WorkspaceBlock
 } from '../../shared/domain';
 import { createId } from '../../shared/ids';
+import type { LanDrawingStroke } from '../../shared/lanWhiteboard';
 import { mergeNoteDocuments as mergeNotes } from '../../shared/notes';
 import { normalizeSelectionColors } from '../../shared/selectionColors';
 import {
@@ -71,6 +73,8 @@ import {
   type PdfSelectionPayload
 } from './PdfReader';
 import tesselLogoUrl from '../../assets/icons/tessel-logo.png?url';
+import { lanWhiteboardText } from './lanWhiteboardText';
+import { LanWhiteboardSettings } from './settings/LanWhiteboardSettings';
 
 type TransientAidMode = Extract<AiMode, 'summarize' | 'translate'>;
 
@@ -141,6 +145,7 @@ export function App(): ReactElement {
   const [bookmarks, setBookmarks] = useState<PdfUserBookmark[]>([]);
   const [notes, setNotes] = useState<NoteDocument[]>([]);
   const [workspaceBlocks, setWorkspaceBlocks] = useState<WorkspaceBlock[]>([]);
+  const [lanWhiteboardStrokes, setLanWhiteboardStrokes] = useState<Record<string, Record<string, LanDrawingStroke>>>({});
   const [generatedOutline, setGeneratedOutline] = useState<PdfGeneratedOutline | null>(null);
   const [aiProvider, setAiProvider] = useState<SafeAiProviderConfig>();
   const [webDavSync, setWebDavSync] = useState<SafeWebDavSyncConfig>();
@@ -239,6 +244,59 @@ export function App(): ReactElement {
   useEffect(() => window.sidelight.onSettingsChanged(() => {
     void refreshSettings();
   }), []);
+
+  useEffect(() => window.sidelight.onLanWhiteboardEvent((event) => {
+    if (event.type === 'canvas-upsert') {
+      if (event.block.documentId === activeDocument?.id) {
+        setWorkspaceBlocks((current) => [
+          event.block,
+          ...current.filter((block) => block.id !== event.block.id)
+        ]);
+      }
+      return;
+    }
+    if (event.type === 'canvas-delete') {
+      setWorkspaceBlocks((current) => current.filter((block) => block.id !== event.blockId));
+      setLanWhiteboardStrokes((current) => {
+        const { [event.blockId]: _deleted, ...rest } = current;
+        return rest;
+      });
+      return;
+    }
+    if (event.type === 'stroke-begin') {
+      setLanWhiteboardStrokes((current) => ({
+        ...current,
+        [event.canvasId]: {
+          ...current[event.canvasId],
+          [event.stroke.id]: event.stroke
+        }
+      }));
+      return;
+    }
+    if (event.type === 'stroke-points') {
+      setLanWhiteboardStrokes((current) => {
+        const stroke = current[event.canvasId]?.[event.strokeId];
+        if (!stroke) {
+          return current;
+        }
+        return {
+          ...current,
+          [event.canvasId]: {
+            ...current[event.canvasId],
+            [event.strokeId]: { ...stroke, points: [...stroke.points, ...event.points] }
+          }
+        };
+      });
+      return;
+    }
+    if (event.type === 'stroke-cancel') {
+      setLanWhiteboardStrokes((current) => {
+        const canvas = { ...current[event.canvasId] };
+        delete canvas[event.strokeId];
+        return { ...current, [event.canvasId]: canvas };
+      });
+    }
+  }), [activeDocument?.id]);
 
   useEffect(() => {
     document.title = settingsWindow ? 'Tessel Settings' : activeDocument?.title ? `${activeDocument.title} — Tessel` : 'Tessel';
@@ -1500,6 +1558,7 @@ export function App(): ReactElement {
         conversations={conversations}
         translations={translations}
         workspaceBlocks={workspaceBlocks}
+        lanWhiteboardStrokes={lanWhiteboardStrokes}
         generatedOutline={generatedOutline}
         activeConversationId={activeConversationId}
         activeConversation={activeConversation}
@@ -1582,7 +1641,7 @@ function WindowChrome({
   );
 }
 
-type ReaderSettingsSection = 'provider' | 'codex' | 'sync' | 'storage' | 'appearance' | 'language' | 'updates';
+type ReaderSettingsSection = 'provider' | 'codex' | 'sync' | 'lan' | 'storage' | 'appearance' | 'language' | 'updates';
 
 function ReaderSettingsPanel({
   provider,
@@ -1631,11 +1690,13 @@ function ReaderSettingsPanel({
   const [codexChatEffort, setCodexChatEffort] = useState(preferences.experimentalCodexAgent.chatReasoningEffort ?? '');
   const [codexTranslationEffort, setCodexTranslationEffort] = useState(preferences.experimentalCodexAgent.translationReasoningEffort ?? '');
   const t = readerSettingsText(uiLanguage);
+  const lanText = lanWhiteboardText(uiLanguage);
   const resolvedSettingsSidebarTheme = sidebarTheme(sidebarColor || defaultAppPreferences.sidebarColor);
   const settingsItems: Array<{ id: ReaderSettingsSection; label: string; icon: typeof Bot }> = [
     { id: 'provider', label: t.provider, icon: Bot },
     { id: 'codex', label: 'Codex', icon: Sparkles },
     { id: 'sync', label: t.sync, icon: Cloud },
+    { id: 'lan', label: lanText.sectionLabel, icon: Tablet },
     { id: 'storage', label: t.storage, icon: Database },
     { id: 'appearance', label: t.appearance, icon: Palette },
     { id: 'language', label: t.language, icon: LanguagesIcon },
@@ -1870,6 +1931,9 @@ function ReaderSettingsPanel({
                 <label className="reader-settings__wide">{t.password}<input type="password" value={webDavPassword} placeholder={webDavSync.hasPassword ? t.storedPassword : ''} onChange={(event) => setWebDavPassword(event.target.value)} /></label>
               </div>
             </section>
+            )}
+            {settingsSection === 'lan' && (
+              <LanWhiteboardSettings language={uiLanguage} />
             )}
             {settingsSection === 'language' && (
             <section className="reader-settings__section">

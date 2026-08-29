@@ -31,6 +31,7 @@ import { JsonWorkspaceStore } from './store';
 import { CodexAgent } from './codexAgent';
 import { AppUpdateService } from './appUpdater';
 import { MetadataSyncScheduler } from './metadataSyncScheduler';
+import { LanWhiteboardServer } from './lanWhiteboardServer';
 
 if (process.env.SIDELIGHT_REMOTE_DEBUG_PORT) {
   app.commandLine.appendSwitch('remote-debugging-port', process.env.SIDELIGHT_REMOTE_DEBUG_PORT);
@@ -182,7 +183,13 @@ function openSettingsWindow(): BrowserWindow {
   return settingsWindow;
 }
 
-function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent: CodexAgent, appUpdater: AppUpdateService): void {
+function registerIpc(
+  store: JsonWorkspaceStore,
+  aiService: AiService,
+  codexAgent: CodexAgent,
+  appUpdater: AppUpdateService,
+  lanWhiteboardServer: LanWhiteboardServer
+): void {
   const activeAiStreams = new Map<string, AbortController>();
   const metadataSyncScheduler = new MetadataSyncScheduler(
     runStoreMutation,
@@ -256,6 +263,7 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
       .catch((error: unknown) => {
         console.warn(`Could not update last-opened state for PDF ${documentId}`, error);
       });
+    lanWhiteboardServer.handleDocumentOpened(openedDocument);
 
     return {
       document: openedDocument,
@@ -292,6 +300,7 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
   ipcMain.handle('pdf:getReadingState', (_event, documentId: string) => store.getReadingState(documentId));
   ipcMain.handle('pdf:saveReadingState', async (_event, state: PdfReadingState) => {
     const saved = await runStoreMutation(() => store.saveReadingState(state));
+    lanWhiteboardServer.setContext({ documentId: saved.documentId, pageNumber: saved.lastPage });
     metadataSyncScheduler.schedule(saved.documentId);
     return saved;
   });
@@ -323,11 +332,16 @@ function registerIpc(store: JsonWorkspaceStore, aiService: AiService, codexAgent
   });
   ipcMain.handle('workspaceBlock:list', (_event, documentId: string) => store.listWorkspaceBlocks(documentId));
   ipcMain.handle('workspaceBlock:save', async (_event, input: { block: WorkspaceBlock }) => {
-    return runStoreMutation(() => store.saveWorkspaceBlock(input.block));
+    const saved = await runStoreMutation(() => store.saveWorkspaceBlock(input.block));
+    lanWhiteboardServer.handleWorkspaceBlockUpsert(saved);
+    return saved;
   });
   ipcMain.handle('workspaceBlock:delete', async (_event, blockId: string) => {
     await runStoreMutation(() => store.deleteWorkspaceBlock(blockId));
+    lanWhiteboardServer.handleWorkspaceBlockDelete(blockId);
   });
+  ipcMain.handle('lanWhiteboard:getInfo', () => lanWhiteboardServer.getInfo());
+  ipcMain.handle('lanWhiteboard:getSnapshot', () => lanWhiteboardServer.getSnapshot());
   ipcMain.handle('shell:openLocalPath', async (_event, path: string) => {
     const localPath = normalizeLocalResourcePath(path);
     if (!localPath) {
@@ -630,10 +644,24 @@ if (hasSingleInstanceLock) {
         sendToRenderer(window.webContents, 'app:update:state', state);
       }
     });
-    registerIpc(store, aiService, codexAgent, appUpdater);
+    const lanWhiteboardServer = new LanWhiteboardServer({
+      rendererDirectory: join(__dirname, '../renderer'),
+      store,
+      runMutation: runStoreMutation,
+      publishToRenderers: (event) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          sendToRenderer(window.webContents, 'lanWhiteboard:event', event);
+        }
+      }
+    });
+    await lanWhiteboardServer.start().catch((error: unknown) => {
+      console.warn('[lan-whiteboard] service could not start', error);
+    });
+    registerIpc(store, aiService, codexAgent, appUpdater, lanWhiteboardServer);
     appUpdater.start();
     app.once('before-quit', () => {
       void codexAgent.shutdown();
+      void lanWhiteboardServer.stop();
     });
     const startupPdfPaths = pdfPathsFromArgv(process.argv);
     const queuedPdfPaths = [...pendingSystemPdfPaths, ...startupPdfPaths];

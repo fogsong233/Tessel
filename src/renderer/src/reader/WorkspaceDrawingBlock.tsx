@@ -10,18 +10,16 @@ import { CircleDashed, PenLine, Trash2, Undo2, X } from 'lucide-react';
 import { getStroke } from 'perfect-freehand';
 import type { WorkspaceBlock } from '../../../shared/domain';
 import { createId } from '../../../shared/ids';
+import type { LanDrawingPoint, LanDrawingStroke } from '../../../shared/lanWhiteboard';
+import {
+  createStylusPressureState,
+  normalizeStylusPressure,
+  type StylusPressureState
+} from './drawingPressure';
 
 type DrawingTool = 'pen' | 'lasso';
-type DrawingPoint = [number, number, number];
-
-interface DrawingStroke {
-  id: string;
-  color: string;
-  size: number;
-  points: DrawingPoint[];
-  simulatePressure: boolean;
-  createdAt: string;
-}
+type DrawingPoint = LanDrawingPoint;
+type DrawingStroke = LanDrawingStroke;
 
 interface DrawingPayload {
   canvasHeight: number;
@@ -44,6 +42,7 @@ export interface WorkspaceDrawingLabels {
 interface WorkspaceDrawingBlockProps {
   block: WorkspaceBlock;
   height: number;
+  remoteStrokes?: LanDrawingStroke[];
   text: WorkspaceDrawingLabels;
   width: number;
   onDelete(): void;
@@ -55,6 +54,7 @@ const drawingColors = ['#171717', '#2563eb', '#dc2626', '#16a34a', '#9333ea'];
 export function WorkspaceDrawingBlock({
   block,
   height,
+  remoteStrokes = [],
   text,
   width,
   onDelete,
@@ -71,12 +71,13 @@ export function WorkspaceDrawingBlock({
   const activePointsRef = useRef<DrawingPoint[]>([]);
   const activePointerRef = useRef<number>();
   const activeSimulatePressureRef = useRef(true);
+  const activePressureStateRef = useRef<StylusPressureState>(createStylusPressureState());
   const svgRef = useRef<SVGSVGElement>(null);
 
   useEffect(() => {
     setStrokes(payload.strokes);
     setSelectedStrokeIds(new Set());
-  }, [block.id]);
+  }, [block.id, block.updatedAt]);
 
   const saveStrokes = (nextStrokes: DrawingStroke[]): void => {
     setStrokes(nextStrokes);
@@ -92,13 +93,16 @@ export function WorkspaceDrawingBlock({
 
   const eventPoint = (clientX: number, clientY: number, pressure = 0.5): DrawingPoint => {
     const rect = svgRef.current?.getBoundingClientRect();
+    const normalizedPressure = activeSimulatePressureRef.current
+      ? 0.5
+      : normalizeStylusPressure(pressure, activePressureStateRef.current);
     if (!rect?.width || !rect.height) {
-      return [0, 0, pressure];
+      return [0, 0, normalizedPressure];
     }
     return [
       clamp((clientX - rect.left) * payload.canvasWidth / rect.width, 0, payload.canvasWidth),
       clamp((clientY - rect.top) * payload.canvasHeight / rect.height, 0, payload.canvasHeight),
-      clamp(pressure || 0.5, 0.01, 1)
+      normalizedPressure
     ];
   };
 
@@ -106,11 +110,22 @@ export function WorkspaceDrawingBlock({
     if (event.button !== 0) {
       return;
     }
+    if (event.ctrlKey || event.metaKey) {
+      // Let the event bubble to the PDF viewport, which treats the modifier as
+      // a temporary hand tool without creating a whiteboard stroke.
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
-    event.currentTarget.setPointerCapture(event.pointerId);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Synthetic regression events do not register an OS-level active
+      // pointer, while real pen/touch events still receive pointer capture.
+    }
     activePointerRef.current = event.pointerId;
     activeSimulatePressureRef.current = event.pointerType !== 'pen';
+    activePressureStateRef.current = createStylusPressureState();
     const point = eventPoint(event.clientX, event.clientY, event.pressure);
     if (tool === 'pen') {
       activePointsRef.current = [point];
@@ -127,8 +142,9 @@ export function WorkspaceDrawingBlock({
     }
     event.preventDefault();
     event.stopPropagation();
-    const coalesced = event.nativeEvent.getCoalescedEvents?.() ?? [event.nativeEvent];
-    const points = coalesced.map((sample) => eventPoint(sample.clientX, sample.clientY, sample.pressure));
+    const coalesced = event.nativeEvent.getCoalescedEvents?.();
+    const samples = coalesced?.length ? coalesced : [event.nativeEvent];
+    const points = samples.map((sample) => eventPoint(sample.clientX, sample.clientY, sample.pressure));
     if (tool === 'pen') {
       const next = [...activePointsRef.current, ...points];
       activePointsRef.current = next;
@@ -253,6 +269,9 @@ export function WorkspaceDrawingBlock({
             fill={stroke.color}
           />
         ))}
+        {remoteStrokes.map((stroke) => (
+          <path key={`remote-${stroke.id}`} d={drawingStrokePath({ ...stroke, id: 'active' })} fill={stroke.color} opacity="0.78" />
+        ))}
         {activeStroke && <path d={drawingStrokePath(activeStroke)} fill={activeStroke.color} />}
         {lassoPoints.length > 1 && <polyline className="workspace-drawing__lasso" points={lassoPoints.map((point) => point.join(',')).join(' ')} />}
       </svg>
@@ -311,6 +330,7 @@ function drawingStrokePath(stroke: DrawingStroke): string {
     streamline: 0.48,
     easing: (value) => value,
     simulatePressure: stroke.simulatePressure,
+    last: stroke.id !== 'active',
     start: { taper: 0, cap: true },
     end: { taper: Math.min(stroke.size * 0.4, 3), cap: true }
   });
