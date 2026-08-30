@@ -354,17 +354,18 @@ body.is-moving-workspace-block .workspace-image__viewport {
   display: flex;
   align-items: center;
   gap: 4px;
+  width: min(310px, calc(100% - 20px));
   max-width: calc(100% - 20px);
   min-height: 38px;
   padding: 4px;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid rgba(37, 42, 39, 0.12);
   border-radius: 9px;
   background: rgba(255, 255, 255, 0.94);
   box-shadow: 0 8px 24px rgba(22, 27, 23, 0.13);
   backdrop-filter: blur(12px);
   transform: translateX(-50%);
-  transition: width 150ms ease, transform 150ms ease, background 150ms ease;
+  transition: transform 150ms ease, background 150ms ease;
 }
 
 .workspace-drawing__toolbar.is-collapsed {
@@ -376,18 +377,18 @@ body.is-moving-workspace-block .workspace-image__viewport {
   border-radius: 12px;
   corner-shape: squircle;
   transform: none;
+  overflow: hidden;
 }
 
 .workspace-drawing__toolbar-controls {
   display: flex;
+  flex: 1;
   min-width: 0;
   align-items: center;
   gap: 4px;
-  overflow-x: auto;
-  scrollbar-width: none;
+  overflow: visible;
 }
 
-.workspace-drawing__toolbar-controls::-webkit-scrollbar { display: none; }
 .workspace-drawing__toolbar.is-collapsed .workspace-drawing__toolbar-controls { display: none; }
 
 .workspace-drawing__toolbar button {
@@ -501,6 +502,80 @@ body.is-moving-workspace-block .workspace-image__viewport {
   width: 48px;
   accent-color: #313733;
 }
+
+.workspace-drawing__brush-panel {
+  position: fixed;
+  z-index: 30;
+  display: none;
+  width: min(370px, calc(100cqw - 20px));
+  padding: 11px;
+  grid-template-columns: repeat(6, auto);
+  align-items: center;
+  gap: 9px;
+  border: 1px solid rgba(37, 42, 39, 0.12);
+  border-radius: 15px;
+  corner-shape: squircle;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 14px 38px rgba(22, 27, 23, 0.16);
+  backdrop-filter: blur(16px);
+}
+.workspace-drawing__brush-panel.is-open { display: grid; }
+.workspace-drawing__brush-panel button {
+  display: grid;
+  width: 29px;
+  height: 29px;
+  padding: 0;
+  place-items: center;
+  color: #414744;
+  border: 0;
+  border-radius: 11px;
+  corner-shape: squircle;
+  background: transparent;
+}
+.workspace-drawing__brush-panel button:hover:not(:disabled) { color: #17221d; background: #edf1ee; }
+.workspace-drawing__brush-panel button:disabled { opacity: 0.34; }
+.workspace-drawing__brush-panel > header {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+}
+.workspace-drawing__brush-panel > header strong { font-size: 10px; }
+.workspace-drawing__brush-panel > header small { color: #7a817c; font-size: 9px; font-variant-numeric: tabular-nums; }
+.workspace-drawing__brush-panel .workspace-drawing__color {
+  width: 20px;
+  height: 20px;
+  margin: 0 1px;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  background: var(--drawing-color);
+  box-shadow: 0 0 0 1px rgba(32, 37, 34, 0.16);
+}
+.workspace-drawing__brush-panel .workspace-drawing__color.is-active {
+  box-shadow: 0 0 0 2px #ffffff, 0 0 0 3px #6b736e;
+}
+.workspace-drawing__brush-panel .workspace-drawing__size {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 9px;
+  border-radius: 11px;
+  background: #f1f4f1;
+}
+.workspace-drawing__brush-panel .workspace-drawing__size input { width: auto; min-width: 0; flex: 1; }
+.workspace-drawing__tuning {
+  display: grid;
+  grid-column: span 3;
+  gap: 5px;
+  min-width: 0;
+  padding: 7px 9px;
+  border-radius: 11px;
+  background: #f1f4f1;
+}
+.workspace-drawing__tuning > span { display: flex; justify-content: space-between; color: #525955; font-size: 9px; }
+.workspace-drawing__tuning output { color: #7a817c; font-variant-numeric: tabular-nums; }
+.workspace-drawing__tuning input { width: 100%; min-width: 0; accent-color: #313733; }
 
 /* Participant names are editable per conversation and stay visible in the transcript. */
 .dock-chat-panel > header {
@@ -624,8 +699,9 @@ body.is-moving-workspace-block .workspace-image__viewport {
   .workspace-drawing__toolbar.is-expanded {
     right: 8px;
     left: 8px;
+    width: auto;
     max-width: none;
-    overflow-x: auto;
+    overflow: visible;
     transform: none;
   }
 }

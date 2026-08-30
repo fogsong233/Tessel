@@ -271,6 +271,7 @@ test.describe('PDF reader flow', () => {
     await expect(drawingToolbar).toHaveClass(/is-collapsed/);
     await board.getByRole('button', { name: 'Show drawing tools' }).click();
     await expect(drawingToolbar).toHaveClass(/is-expanded/);
+    expect(await drawingToolbar.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
     await expect(drawingToolbar.getByRole('button', { name: /^Delete sheet/ })).toHaveCount(0);
     await expect.poll(async () => {
       const [box, viewport] = await Promise.all([
@@ -309,6 +310,10 @@ test.describe('PDF reader flow', () => {
     await page.mouse.move(drawingX - 72, drawingY + 60, { steps: 8 });
     await page.mouse.move(drawingX - 150, drawingY + 15, { steps: 8 });
     await page.mouse.up();
+    await expect(surface.locator('path')).toHaveCount(1);
+    await board.getByRole('button', { name: 'Undo stroke' }).click();
+    await expect(surface.locator('path')).toHaveCount(0);
+    await board.getByRole('button', { name: 'Redo stroke' }).click();
     await expect(surface.locator('path')).toHaveCount(1);
 
     await board.getByRole('button', { name: 'Lasso tool' }).click();
@@ -395,11 +400,18 @@ test.describe('PDF reader flow', () => {
     }, { timeout: 8_000 }).toBeGreaterThan(3);
 
     await board.getByRole('button', { name: 'Pen tool' }).click();
+    const desktopBrushPanel = page.getByRole('region', { name: 'Pen tool' });
+    await expect(desktopBrushPanel).toBeVisible();
+    const desktopBrushPanelBox = await desktopBrushPanel.boundingBox();
+    const desktopViewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    expect(desktopBrushPanelBox).toBeTruthy();
+    expect(desktopBrushPanelBox!.x).toBeGreaterThanOrEqual(0);
+    expect(desktopBrushPanelBox!.x + desktopBrushPanelBox!.width).toBeLessThanOrEqual(desktopViewport.width);
     await board.getByRole('button', { name: 'Disable touch drawing' }).click();
     await expect(board.getByRole('button', { name: 'Disable touch drawing' })).toHaveAttribute('aria-pressed', 'true');
     await surface.dispatchEvent('pointerdown', {
       pointerId: 30,
-      pointerType: 'mouse',
+      pointerType: 'touch',
       button: 0,
       buttons: 1,
       clientX: drawingX,
@@ -407,13 +419,13 @@ test.describe('PDF reader flow', () => {
     });
     await surface.dispatchEvent('pointermove', {
       pointerId: 30,
-      pointerType: 'mouse',
+      pointerType: 'touch',
       button: 0,
       buttons: 1,
       clientX: drawingX - 40,
       clientY: drawingY - 60
     });
-    await surface.dispatchEvent('pointerup', { pointerId: 30, pointerType: 'mouse', button: 0, buttons: 0 });
+    await surface.dispatchEvent('pointerup', { pointerId: 30, pointerType: 'touch', button: 0, buttons: 0 });
     await expect(surface.locator('path')).toHaveCount(1);
     await surface.dispatchEvent('pointerdown', {
       pointerId: 31,
@@ -609,6 +621,7 @@ test.describe('PDF reader flow', () => {
     expect(tabletToolsBox).toBeTruthy();
     expect(tabletToolsBox!.y).toBeGreaterThanOrEqual(tabletHeaderBox!.y);
     expect(tabletToolsBox!.y + tabletToolsBox!.height).toBeLessThanOrEqual(tabletHeaderBox!.y + tabletHeaderBox!.height + 1);
+    expect(await tablet.locator('.remote-tools').evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
     await expect.poll(async () => {
       const [paper, viewport] = await Promise.all([
         tabletSurface.boundingBox(),
@@ -619,6 +632,14 @@ test.describe('PDF reader flow', () => {
         && Math.abs(paper.y + paper.height / 2 - (viewport.y + viewport.height / 2)) < 1);
     }).toBe(true);
 
+    await tablet.getByRole('button', { name: '画笔设置' }).click();
+    const brushPanel = tablet.getByRole('region', { name: '画笔设置' });
+    await expect(brushPanel).toBeVisible();
+    const brushPanelBox = await brushPanel.boundingBox();
+    const tabletViewport = await tablet.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    expect(brushPanelBox).toBeTruthy();
+    expect(brushPanelBox!.x).toBeGreaterThanOrEqual(0);
+    expect(brushPanelBox!.x + brushPanelBox!.width).toBeLessThanOrEqual(tabletViewport.width);
     const brushWidth = tablet.getByRole('slider', { name: '笔刷宽度' });
     await expect(brushWidth).toHaveValue('4');
     await tablet.getByRole('button', { name: '收藏当前笔刷' }).click();
@@ -627,6 +648,9 @@ test.describe('PDF reader flow', () => {
     await expect(brushWidth).toHaveValue('5');
     await tablet.getByRole('button', { name: '使用收藏笔刷 #171a16 4 像素' }).click();
     await expect(brushWidth).toHaveValue('4');
+    await tablet.getByRole('slider', { name: '笔触跟手程度' }).fill('100');
+    await tablet.getByRole('slider', { name: '笔触平滑程度' }).fill('35');
+    await tablet.getByRole('button', { name: '画笔设置' }).click();
     await expect(page.locator('.workspace-block-card--drawing')).toBeVisible();
     const surfaceBox = await tabletSurface.boundingBox();
     expect(surfaceBox).toBeTruthy();
@@ -647,17 +671,22 @@ test.describe('PDF reader flow', () => {
     await tablet.mouse.up();
     await expect.poll(async () => {
       const stored = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
-        workspaceBlocks: Array<{ kind: string; payload?: { strokes?: Array<{ points?: unknown[] }> } }>;
+        workspaceBlocks: Array<{ kind: string; payload?: { strokes?: Array<{ points?: unknown[]; smoothing?: number; streamline?: number }> } }>;
       };
-      return stored.workspaceBlocks.find((block) => block.kind === 'drawing')?.payload?.strokes?.[0]?.points?.length ?? 0;
-    }).toBeGreaterThan(2);
+      const stroke = stored.workspaceBlocks.find((block) => block.kind === 'drawing')?.payload?.strokes?.[0];
+      return { ready: (stroke?.points?.length ?? 0) > 2, smoothing: stroke?.smoothing, streamline: stroke?.streamline };
+    }).toEqual({ ready: true, smoothing: 0.35, streamline: 0 });
 
     await tablet.getByRole('button', { name: '禁用手指书写' }).click();
     await expect(tablet.getByRole('button', { name: '已禁用手指书写' })).toHaveClass(/is-active/);
-    await tablet.mouse.move(startX + 20, startY + 120);
-    await tablet.mouse.down();
-    await tablet.mouse.move(startX + 90, startY + 150, { steps: 5 });
-    await tablet.mouse.up();
+    await tabletSurface.dispatchEvent('pointerdown', { pointerId: 60, pointerType: 'touch', button: 0, buttons: 1, clientX: startX + 20, clientY: startY + 120 });
+    await tabletSurface.dispatchEvent('pointermove', { pointerId: 60, pointerType: 'touch', button: 0, buttons: 1, clientX: startX + 90, clientY: startY + 150 });
+    await tabletSurface.dispatchEvent('pointerdown', { pointerId: 62, pointerType: 'pen', button: 0, buttons: 1, clientX: startX + 170, clientY: startY + 120, pressure: 0.35 });
+    await tabletSurface.dispatchEvent('pointermove', { pointerId: 62, pointerType: 'pen', button: 0, buttons: 1, clientX: startX + 210, clientY: startY + 145, pressure: 0.65 });
+    await tabletSurface.dispatchEvent('pointerup', { pointerId: 62, pointerType: 'pen', button: 0, buttons: 0, clientX: startX + 210, clientY: startY + 145, pressure: 0 });
+    await tabletSurface.dispatchEvent('pointerup', { pointerId: 60, pointerType: 'touch', button: 0, buttons: 0, clientX: startX + 90, clientY: startY + 150 });
+    await expect(tabletSurface.locator('path')).toHaveCount(2);
+    await tablet.getByRole('button', { name: '撤销' }).click();
     await expect(tabletSurface.locator('path')).toHaveCount(1);
 
     await tabletSurface.dispatchEvent('pointerdown', {
@@ -680,6 +709,10 @@ test.describe('PDF reader flow', () => {
       clientY: startY + 32,
       pressure: 0
     });
+    await expect(tabletSurface.locator('path')).toHaveCount(0);
+    await tablet.getByRole('button', { name: '撤销' }).click();
+    await expect(tabletSurface.locator('path')).toHaveCount(1);
+    await tablet.getByRole('button', { name: '重做' }).click();
     await expect(tabletSurface.locator('path')).toHaveCount(0);
     await tablet.getByRole('button', { name: '撤销' }).click();
     await expect(tabletSurface.locator('path')).toHaveCount(1);

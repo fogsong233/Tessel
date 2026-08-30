@@ -31,11 +31,11 @@ import type { LanDrawingPoint, LanDrawingStroke, LanWhiteboardClientMessage } fr
 import {
   drawingSelectionBounds,
   drawingStrokeNearPoint,
-  drawingStrokePath,
   strokeIntersectsPolygon,
   transformDrawingSelection,
   type DrawingBounds
 } from '../drawing/drawingGeometry';
+import { DrawingStrokePath } from '../drawing/DrawingStrokePath';
 import { createStylusPressureState, normalizeStylusPressure, type StylusPressureState } from '../reader/drawingPressure';
 import { remoteDrawingPayload } from './remoteDrawing';
 
@@ -91,7 +91,9 @@ interface SelectionGesture {
 
 interface FavoriteBrush {
   color: string;
+  follow: number;
   size: number;
+  smoothing: number;
 }
 
 const colors = ['#171a16', '#2563eb', '#e0453b', '#16a36a', '#8b4bd6', '#e99620'];
@@ -126,7 +128,10 @@ export function RemoteCanvas({
   const [tool, setTool] = useState<DrawingTool>('pen');
   const [color, setColor] = useState(initialBrushRef.current.color);
   const [size, setSize] = useState(initialBrushRef.current.size);
+  const [smoothing, setSmoothing] = useState(initialBrushRef.current.smoothing);
+  const [follow, setFollow] = useState(initialBrushRef.current.follow);
   const [favoriteBrushes, setFavoriteBrushes] = useState<FavoriteBrush[]>(readFavoriteBrushes);
+  const [brushPanelOpen, setBrushPanelOpen] = useState(false);
   const [penOnly, setPenOnly] = useState(payload.penOnly);
   const [zoom, setZoom] = useState(1);
   const [selectionNotice, setSelectionNotice] = useState<string>();
@@ -169,8 +174,8 @@ export function RemoteCanvas({
   }, [block.updatedAt]);
 
   useEffect(() => {
-    localStorage.setItem(brushSettingsKey, JSON.stringify({ color, size } satisfies FavoriteBrush));
-  }, [color, size]);
+    localStorage.setItem(brushSettingsKey, JSON.stringify({ color, follow, size, smoothing } satisfies FavoriteBrush));
+  }, [color, follow, size, smoothing]);
 
   useEffect(() => {
     localStorage.setItem(favoriteBrushesKey, JSON.stringify(favoriteBrushes));
@@ -345,6 +350,11 @@ export function RemoteCanvas({
   };
 
   const startInteraction = (event: ReactPointerEvent<SVGSVGElement>): void => {
+    if (tool === 'pen' && event.pointerType === 'pen' && activePointerTypeRef.current === 'touch') {
+      cancelActive();
+      touchPointsRef.current.clear();
+      pinchRef.current = undefined;
+    }
     if (event.pointerType === 'touch') {
       if (activePointerTypeRef.current === 'pen') {
         return;
@@ -359,10 +369,7 @@ export function RemoteCanvas({
     if (event.button !== 0 || activePointerRef.current !== undefined) {
       return;
     }
-    if (tool === 'pen' && penOnly && event.pointerType !== 'pen') {
-      if (event.pointerType !== 'touch') {
-        return;
-      }
+    if (tool === 'pen' && penOnly && event.pointerType === 'touch') {
       event.preventDefault();
       capturePointer(event);
       activePointerRef.current = event.pointerId;
@@ -418,6 +425,8 @@ export function RemoteCanvas({
         id: createRemoteId('stroke'),
         color,
         size,
+        smoothing,
+        streamline: 1 - follow,
         points: [point],
         simulatePressure,
         createdAt: new Date().toISOString()
@@ -767,10 +776,11 @@ export function RemoteCanvas({
     send({ type: 'set-pen-only', requestId: createRemoteId('pen-only'), canvasId: block.id, penOnly: next });
   };
 
-  const currentBrushFavorite = favoriteBrushes.some((brush) => sameBrush(brush, { color, size }));
+  const currentBrush = { color, follow, size, smoothing };
+  const currentBrushFavorite = favoriteBrushes.some((brush) => sameBrush(brush, currentBrush));
 
   const toggleFavoriteBrush = (): void => {
-    const brush = { color, size };
+    const brush = currentBrush;
     setFavoriteBrushes((current) => current.some((candidate) => sameBrush(candidate, brush))
       ? current.filter((candidate) => !sameBrush(candidate, brush))
       : [...current, brush].slice(-6));
@@ -779,6 +789,8 @@ export function RemoteCanvas({
   const selectBrush = (brush: FavoriteBrush): void => {
     setColor(brush.color);
     setSize(brush.size);
+    setSmoothing(brush.smoothing);
+    setFollow(brush.follow);
     setTool('pen');
   };
 
@@ -841,14 +853,21 @@ export function RemoteCanvas({
   return (
     <section className={`remote-canvas${entryDirection ? ` is-entering-${entryDirection}` : ''}`}>
       <div className="remote-tools" aria-label="手写工具栏">
-        <ToolButton active={tool === 'pen' && !temporaryEraser} label="笔" onClick={() => setTool('pen')}><PenLine /></ToolButton>
-        <ToolButton active={tool === 'eraser' || temporaryEraser} label="橡皮" onClick={() => setTool('eraser')}><Eraser /></ToolButton>
-        <ToolButton active={tool === 'lasso'} label="圈选" onClick={() => setTool('lasso')}><CircleDashed /></ToolButton>
-        <ToolButton active={tool === 'hand'} label="移动" onClick={() => setTool('hand')}><Hand /></ToolButton>
+        <ToolButton active={tool === 'pen' && !temporaryEraser} pressed={brushPanelOpen} label="画笔设置" onClick={() => { setTool('pen'); setBrushPanelOpen((value) => !value); }}>
+          <span className="remote-pen-tool-icon"><PenLine /><i style={{ background: color }} /></span>
+        </ToolButton>
+        <ToolButton active={tool === 'eraser' || temporaryEraser} label="橡皮" onClick={() => { setTool('eraser'); setBrushPanelOpen(false); }}><Eraser /></ToolButton>
+        <ToolButton active={tool === 'lasso'} label="圈选" onClick={() => { setTool('lasso'); setBrushPanelOpen(false); }}><CircleDashed /></ToolButton>
+        <ToolButton active={tool === 'hand'} label="移动" onClick={() => { setTool('hand'); setBrushPanelOpen(false); }}><Hand /></ToolButton>
         <ToolButton active={penOnly} pressed={penOnly} label={penOnly ? '已禁用手指书写' : '禁用手指书写'} onClick={togglePenOnly}>
           <span className="remote-touch-block-icon"><Hand /><Slash /></span>
         </ToolButton>
         <span className="remote-tools__divider" />
+        <section className={`remote-brush-panel${brushPanelOpen ? ' is-open' : ''}`} aria-label="画笔设置" aria-hidden={!brushPanelOpen}>
+          <header>
+            <strong>画笔</strong>
+            <small>调节后仅影响新笔迹</small>
+          </header>
         <div className="remote-color-row" aria-label="颜色">
           {colors.map((preset) => (
             <button
@@ -874,7 +893,7 @@ export function RemoteCanvas({
               <button
                 type="button"
                 key={`${brush.color}-${brush.size}`}
-                className={sameBrush(brush, { color, size }) ? 'is-active' : undefined}
+                className={sameBrush(brush, currentBrush) ? 'is-active' : undefined}
                 aria-label={`使用收藏笔刷 ${brush.color} ${formatBrushSize(brush.size)} 像素`}
                 title={`${brush.color} · ${formatBrushSize(brush.size)} px`}
                 onClick={() => selectBrush(brush)}
@@ -891,6 +910,15 @@ export function RemoteCanvas({
           <button type="button" aria-label="增大笔刷宽度" onClick={() => adjustBrushSize(1)}><Plus /></button>
           <output>{formatBrushSize(size)}</output>
         </div>
+          <label className="remote-brush-tuning">
+            <span><strong>跟手</strong><output>{Math.round(follow * 100)}</output></span>
+            <input type="range" min="0" max="100" step="1" value={Math.round(follow * 100)} aria-label="笔触跟手程度" onChange={(event) => setFollow(Number(event.target.value) / 100)} />
+          </label>
+          <label className="remote-brush-tuning">
+            <span><strong>平滑</strong><output>{Math.round(smoothing * 100)}</output></span>
+            <input type="range" min="0" max="100" step="1" value={Math.round(smoothing * 100)} aria-label="笔触平滑程度" onChange={(event) => setSmoothing(Number(event.target.value) / 100)} />
+          </label>
+        </section>
         <span className="remote-tools__spacer" />
         <ToolButton disabled={undoRef.current.length === 0 && strokes.length === 0} label="撤销" onClick={undo}><Undo2 /></ToolButton>
         <ToolButton disabled={redoRef.current.length === 0} label="重做" onClick={redo}><Redo2 /></ToolButton>
@@ -924,15 +952,14 @@ export function RemoteCanvas({
             >
               <rect width={payload.canvasWidth} height={payload.canvasHeight} fill="#fff" />
               {strokes.map((stroke) => (
-                <path
+                <DrawingStrokePath
                   key={stroke.id}
                   className={selectedStrokeIds.has(stroke.id) ? 'is-selected' : undefined}
-                  d={drawingStrokePath(stroke)}
-                  fill={stroke.color}
+                  stroke={stroke}
                 />
               ))}
-              {remoteStrokes.map((stroke) => <path key={`remote-${stroke.id}`} d={drawingStrokePath(stroke, true)} fill={stroke.color} opacity="0.78" />)}
-              {activeStroke && <path d={drawingStrokePath(activeStroke, true)} fill={activeStroke.color} />}
+              {remoteStrokes.map((stroke) => <DrawingStrokePath key={`remote-${stroke.id}`} active stroke={stroke} opacity={0.78} />)}
+              {activeStroke && <DrawingStrokePath active stroke={activeStroke} />}
               {lassoPoints.length > 1 && <polyline className="remote-canvas__lasso" points={lassoPoints.map((point) => point.join(',')).join(' ')} />}
               {selectionBounds && (
                 <g className="remote-canvas__selection">
@@ -1063,9 +1090,9 @@ function clamp(value: number, minimum: number, maximum: number): number {
 
 function readStoredBrush(): FavoriteBrush {
   try {
-    return normalizeBrush(JSON.parse(localStorage.getItem(brushSettingsKey) ?? 'null')) ?? { color: colors[0], size: 4 };
+    return normalizeBrush(JSON.parse(localStorage.getItem(brushSettingsKey) ?? 'null')) ?? defaultBrush();
   } catch {
-    return { color: colors[0], size: 4 };
+    return defaultBrush();
   }
 }
 
@@ -1085,12 +1112,28 @@ function normalizeBrush(value: unknown): FavoriteBrush | undefined {
   const brush = value as Partial<FavoriteBrush>;
   return typeof brush.color === 'string' && /^#[0-9a-f]{6}$/i.test(brush.color)
     && typeof brush.size === 'number' && Number.isFinite(brush.size)
-    ? { color: brush.color.toLowerCase(), size: clamp(Math.round(brush.size * 2) / 2, 1, 40) }
+    ? {
+        color: brush.color.toLowerCase(),
+        follow: unitInterval(brush.follow, 0.9),
+        size: clamp(Math.round(brush.size * 2) / 2, 1, 40),
+        smoothing: unitInterval(brush.smoothing, 0.5)
+      }
     : undefined;
 }
 
 function sameBrush(left: FavoriteBrush, right: FavoriteBrush): boolean {
-  return left.color.toLowerCase() === right.color.toLowerCase() && Math.abs(left.size - right.size) < 0.01;
+  return left.color.toLowerCase() === right.color.toLowerCase()
+    && Math.abs(left.size - right.size) < 0.01
+    && Math.abs(left.follow - right.follow) < 0.01
+    && Math.abs(left.smoothing - right.smoothing) < 0.01;
+}
+
+function defaultBrush(): FavoriteBrush {
+  return { color: colors[0], follow: 0.9, size: 4, smoothing: 0.5 };
+}
+
+function unitInterval(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? clamp(value, 0, 1) : fallback;
 }
 
 function formatBrushSize(size: number): string {

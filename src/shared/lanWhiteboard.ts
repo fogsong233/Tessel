@@ -7,6 +7,10 @@ export interface LanDrawingStroke {
   id: string;
   color: string;
   size: number;
+  /** Outline smoothing used when this stroke was created (0..1). */
+  smoothing?: number;
+  /** Pointer trailing/streamlining used when this stroke was created (0..1). */
+  streamline?: number;
   points: LanDrawingPoint[];
   simulatePressure: boolean;
   createdAt: string;
@@ -97,11 +101,18 @@ export function isLanDrawingStroke(value: unknown): value is LanDrawingStroke {
     && Number.isFinite(stroke.size)
     && stroke.size > 0
     && stroke.size <= 96
+    && optionalUnitInterval(stroke.smoothing)
+    && optionalUnitInterval(stroke.streamline)
     && typeof stroke.simulatePressure === 'boolean'
     && typeof stroke.createdAt === 'string'
     && Array.isArray(stroke.points)
     && stroke.points.length <= 100_000
     && stroke.points.every(isLanDrawingPoint);
+}
+
+function optionalUnitInterval(value: unknown): boolean {
+  return value === undefined
+    || (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1);
 }
 
 export function isLanDrawingPoint(value: unknown): value is LanDrawingPoint {

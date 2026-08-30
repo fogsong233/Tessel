@@ -3,29 +3,31 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactElement,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
 } from 'react';
-import { ArrowLeftRight, ChevronUp, CircleDashed, Hand, ImagePlus, Maximize2, PenLine, Slash, SlidersHorizontal, Trash2, Undo2, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ArrowLeftRight, ChevronUp, CircleDashed, Eraser, Hand, ImagePlus, Maximize2, PenLine, Redo2, Slash, SlidersHorizontal, Trash2, Undo2, X } from 'lucide-react';
 import type { WorkspaceBlock } from '../../../shared/domain';
 import { createId } from '../../../shared/ids';
 import type { LanDrawingPoint, LanDrawingStroke } from '../../../shared/lanWhiteboard';
 import {
   drawingSelectionBounds,
   drawingStrokeNearPoint,
-  drawingStrokePath,
   strokeIntersectsPolygon,
   transformDrawingSelection,
   type DrawingBounds
 } from '../drawing/drawingGeometry';
+import { DrawingStrokePath } from '../drawing/DrawingStrokePath';
 import {
   createStylusPressureState,
   normalizeStylusPressure,
   type StylusPressureState
 } from './drawingPressure';
 
-type DrawingTool = 'pen' | 'lasso';
+type DrawingTool = 'pen' | 'eraser' | 'lasso';
 type DrawingPoint = LanDrawingPoint;
 type DrawingStroke = LanDrawingStroke;
 
@@ -51,7 +53,10 @@ export interface WorkspaceDrawingLabels {
   delete: string;
   deleteSelection: string;
   drawingColor: string;
+  drawingFollow: string;
+  drawingSmoothing: string;
   drawingSize: string;
+  eraserTool: string;
   hideDrawingToolbar: string;
   lassoTool: string;
   penOnlyMode: string;
@@ -64,6 +69,7 @@ export interface WorkspaceDrawingLabels {
   penTool: string;
   showDrawingToolbar: string;
   undoStroke: string;
+  redoStroke: string;
 }
 
 interface WorkspaceDrawingBlockProps {
@@ -101,14 +107,21 @@ export function WorkspaceDrawingBlock({
   const [tool, setTool] = useState<DrawingTool>('pen');
   const [color, setColor] = useState(drawingColors[0]);
   const [size, setSize] = useState(4);
+  const [smoothing, setSmoothing] = useState(0.5);
+  const [follow, setFollow] = useState(0.9);
   const [penOnly, setPenOnly] = useState(payload.penOnly);
   const [toolbarExpanded, setToolbarExpanded] = useState(false);
+  const [brushPanelOpen, setBrushPanelOpen] = useState(false);
+  const [brushPanelPosition, setBrushPanelPosition] = useState<CSSProperties>({ left: -10_000, top: -10_000 });
   const [temporaryEraser, setTemporaryEraser] = useState(false);
   const activePointsRef = useRef<DrawingPoint[]>([]);
   const activePointerRef = useRef<number>();
+  const activePointerTypeRef = useRef<string>();
   const activeSimulatePressureRef = useRef(true);
   const activePressureStateRef = useRef<StylusPressureState>(createStylusPressureState());
   const svgRef = useRef<SVGSVGElement>(null);
+  const brushButtonRef = useRef<HTMLButtonElement>(null);
+  const brushPanelRef = useRef<HTMLElement>(null);
   const strokesRef = useRef(strokes);
   const selectionGestureRef = useRef<SelectionGesture>();
   const stylusHoldRef = useRef<{
@@ -119,11 +132,19 @@ export function WorkspaceDrawingBlock({
   }>();
   const temporaryEraserPointerRef = useRef<number>();
   const eraserChangedRef = useRef(false);
+  const eraserOriginRef = useRef<DrawingStroke[]>();
+  const undoRef = useRef<DrawingStroke[][]>([]);
+  const redoRef = useRef<DrawingStroke[][]>([]);
+  const activeFrameRef = useRef<number>();
   const previousBlockIdRef = useRef(block.id);
 
   useEffect(() => {
     const blockChanged = previousBlockIdRef.current !== block.id;
     previousBlockIdRef.current = block.id;
+    if (blockChanged) {
+      undoRef.current = [];
+      redoRef.current = [];
+    }
     setStrokes(payload.strokes);
     strokesRef.current = payload.strokes;
     setPenOnly(payload.penOnly);
@@ -137,17 +158,58 @@ export function WorkspaceDrawingBlock({
   }, [strokes]);
 
   useEffect(() => () => {
+    if (activeFrameRef.current !== undefined) {
+      cancelAnimationFrame(activeFrameRef.current);
+    }
     if (stylusHoldRef.current) {
       clearTimeout(stylusHoldRef.current.timer);
     }
   }, []);
+
+  useLayoutEffect(() => {
+    if (!brushPanelOpen) {
+      return;
+    }
+    const positionPanel = (): void => {
+      const anchor = brushButtonRef.current?.getBoundingClientRect();
+      const panel = brushPanelRef.current?.getBoundingClientRect();
+      if (!anchor || !panel) {
+        return;
+      }
+      const margin = 10;
+      const left = clamp(anchor.left + anchor.width / 2 - panel.width / 2, margin, innerWidth - panel.width - margin);
+      const below = anchor.bottom + 8;
+      const top = below + panel.height <= innerHeight - margin
+        ? below
+        : clamp(anchor.top - panel.height - 8, margin, innerHeight - panel.height - margin);
+      setBrushPanelPosition({ left, top });
+    };
+    positionPanel();
+    addEventListener('resize', positionPanel);
+    addEventListener('scroll', positionPanel, true);
+    return () => {
+      removeEventListener('resize', positionPanel);
+      removeEventListener('scroll', positionPanel, true);
+    };
+  }, [block.id, brushPanelOpen]);
 
   const selectionBounds = useMemo(
     () => drawingSelectionBounds(strokes, selectedStrokeIds),
     [selectedStrokeIds, strokes]
   );
 
-  const saveStrokes = (nextStrokes: DrawingStroke[]): void => {
+  const saveStrokes = (
+    nextStrokes: DrawingStroke[],
+    previousStrokes = strokesRef.current,
+    remember = true
+  ): void => {
+    if (remember) {
+      undoRef.current.push(previousStrokes);
+      if (undoRef.current.length > 80) {
+        undoRef.current.shift();
+      }
+      redoRef.current = [];
+    }
     strokesRef.current = nextStrokes;
     setStrokes(nextStrokes);
     onSave({
@@ -157,6 +219,16 @@ export function WorkspaceDrawingBlock({
         strokes: nextStrokes
       },
       updatedAt: new Date().toISOString()
+    });
+  };
+
+  const scheduleActivePreview = (): void => {
+    if (activeFrameRef.current !== undefined) {
+      return;
+    }
+    activeFrameRef.current = requestAnimationFrame(() => {
+      activeFrameRef.current = undefined;
+      setActivePoints([...activePointsRef.current]);
     });
   };
 
@@ -219,8 +291,13 @@ export function WorkspaceDrawingBlock({
         return;
       }
       stylusHoldRef.current = undefined;
+      if (activeFrameRef.current !== undefined) {
+        cancelAnimationFrame(activeFrameRef.current);
+        activeFrameRef.current = undefined;
+      }
       activePointsRef.current = [];
       setActivePoints([]);
+      eraserOriginRef.current = strokesRef.current;
       eraserChangedRef.current = false;
       temporaryEraserPointerRef.current = pointerId;
       setTemporaryEraser(true);
@@ -231,7 +308,15 @@ export function WorkspaceDrawingBlock({
   };
 
   const beginStroke = (event: ReactPointerEvent<SVGSVGElement>): void => {
-    if (event.button !== 0) {
+    if (tool === 'pen' && event.pointerType === 'pen' && activePointerTypeRef.current === 'touch') {
+      cancelStylusHold();
+      activePointerRef.current = undefined;
+      activePointerTypeRef.current = undefined;
+      activePointsRef.current = [];
+      setActivePoints([]);
+      setLassoPoints([]);
+    }
+    if (event.button !== 0 || activePointerRef.current !== undefined) {
       return;
     }
     if (event.ctrlKey || event.metaKey) {
@@ -239,7 +324,7 @@ export function WorkspaceDrawingBlock({
       // a temporary hand tool without creating a whiteboard stroke.
       return;
     }
-    if (tool === 'pen' && penOnly && event.pointerType !== 'pen') {
+    if (tool === 'pen' && penOnly && event.pointerType === 'touch') {
       return;
     }
     event.preventDefault();
@@ -251,6 +336,7 @@ export function WorkspaceDrawingBlock({
       // pointer, while real pen/touch events still receive pointer capture.
     }
     activePointerRef.current = event.pointerId;
+    activePointerTypeRef.current = event.pointerType;
     activeSimulatePressureRef.current = event.pointerType !== 'pen';
     activePressureStateRef.current = createStylusPressureState();
     const point = eventPoint(event.clientX, event.clientY, event.pressure);
@@ -259,6 +345,10 @@ export function WorkspaceDrawingBlock({
       setActivePoints([point]);
       setSelectedStrokeIds(new Set());
       armStylusEraser(event, point);
+    } else if (tool === 'eraser') {
+      eraserOriginRef.current = strokesRef.current;
+      eraserChangedRef.current = false;
+      eraseAt(point);
     } else {
       setLassoPoints([[point[0], point[1]]]);
     }
@@ -325,23 +415,27 @@ export function WorkspaceDrawingBlock({
       return;
     }
     if (tool === 'pen') {
-      const next = [...activePointsRef.current, ...points];
-      activePointsRef.current = next;
-      setActivePoints(next);
+      activePointsRef.current.push(...points);
+      scheduleActivePreview();
+    } else if (tool === 'eraser') {
+      for (const point of points) {
+        eraseAt(point);
+      }
     } else {
       setLassoPoints((current) => [...current, ...points.map(([x, y]) => [x, y] as [number, number])]);
     }
   };
 
   const finishStroke = (event: ReactPointerEvent<SVGSVGElement>): void => {
-    if (selectionGestureRef.current?.pointerId === event.pointerId) {
+    const selectionGesture = selectionGestureRef.current;
+    if (selectionGesture?.pointerId === event.pointerId) {
       event.preventDefault();
       event.stopPropagation();
       selectionGestureRef.current = undefined;
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
-      saveStrokes(strokesRef.current);
+      saveStrokes(strokesRef.current, selectionGesture.originalStrokes);
       return;
     }
     if (activePointerRef.current !== event.pointerId) {
@@ -354,24 +448,32 @@ export function WorkspaceDrawingBlock({
     }
     cancelStylusHold(event.pointerId);
     activePointerRef.current = undefined;
+    activePointerTypeRef.current = undefined;
 
     if (temporaryEraserPointerRef.current === event.pointerId) {
       temporaryEraserPointerRef.current = undefined;
       setTemporaryEraser(false);
       if (eraserChangedRef.current) {
-        saveStrokes(strokesRef.current);
+        saveStrokes(strokesRef.current, eraserOriginRef.current ?? strokesRef.current);
       }
+      eraserOriginRef.current = undefined;
       eraserChangedRef.current = false;
       return;
     }
 
     if (tool === 'pen') {
       const points = activePointsRef.current;
+      if (activeFrameRef.current !== undefined) {
+        cancelAnimationFrame(activeFrameRef.current);
+        activeFrameRef.current = undefined;
+      }
       if (points.length > 0) {
-        saveStrokes([...strokes, {
+        saveStrokes([...strokesRef.current, {
           id: createId('stroke'),
           color,
           size,
+          smoothing,
+          streamline: 1 - follow,
           points,
           simulatePressure: activeSimulatePressureRef.current,
           createdAt: new Date().toISOString()
@@ -379,6 +481,15 @@ export function WorkspaceDrawingBlock({
       }
       activePointsRef.current = [];
       setActivePoints([]);
+      return;
+    }
+
+    if (tool === 'eraser') {
+      if (eraserChangedRef.current) {
+        saveStrokes(strokesRef.current, eraserOriginRef.current ?? strokesRef.current);
+      }
+      eraserOriginRef.current = undefined;
+      eraserChangedRef.current = false;
       return;
     }
 
@@ -429,10 +540,30 @@ export function WorkspaceDrawingBlock({
     }
   };
 
+  const undo = (): void => {
+    const previous = undoRef.current.pop() ?? (strokesRef.current.length > 0 ? strokesRef.current.slice(0, -1) : undefined);
+    if (!previous) {
+      return;
+    }
+    redoRef.current.push(strokesRef.current);
+    saveStrokes(previous, strokesRef.current, false);
+  };
+
+  const redo = (): void => {
+    const next = redoRef.current.pop();
+    if (!next) {
+      return;
+    }
+    undoRef.current.push(strokesRef.current);
+    saveStrokes(next, strokesRef.current, false);
+  };
+
   const activeStroke: DrawingStroke | undefined = activePoints.length > 0 ? {
     id: 'active',
     color,
     size,
+    smoothing,
+    streamline: 1 - follow,
     points: activePoints,
     simulatePressure: activeSimulatePressureRef.current,
     createdAt: ''
@@ -447,21 +578,33 @@ export function WorkspaceDrawingBlock({
           title={toolbarExpanded ? text.hideDrawingToolbar : text.showDrawingToolbar}
           aria-label={toolbarExpanded ? text.hideDrawingToolbar : text.showDrawingToolbar}
           aria-expanded={toolbarExpanded}
-          onClick={() => setToolbarExpanded((value) => !value)}
+          onClick={() => setToolbarExpanded((value) => {
+            if (value) setBrushPanelOpen(false);
+            return !value;
+          })}
         >
           {toolbarExpanded ? <ChevronUp size={15} /> : <SlidersHorizontal size={15} />}
         </button>
         <div className="workspace-drawing__toolbar-controls">
-          <button type="button" className={tool === 'pen' ? 'is-active' : ''} title={text.penTool} aria-label={text.penTool} onClick={() => setTool('pen')}>
+          <button ref={brushButtonRef} type="button" className={tool === 'pen' ? 'is-active' : ''} title={text.penTool} aria-label={text.penTool} aria-expanded={brushPanelOpen} onClick={() => { setTool('pen'); setBrushPanelOpen((value) => !value); }}>
             <PenLine size={15} />
           </button>
-          <button type="button" className={tool === 'lasso' ? 'is-active' : ''} title={text.lassoTool} aria-label={text.lassoTool} onClick={() => setTool('lasso')}>
+          <button type="button" className={tool === 'eraser' ? 'is-active' : ''} title={text.eraserTool} aria-label={text.eraserTool} onClick={() => { setTool('eraser'); setBrushPanelOpen(false); }}>
+            <Eraser size={15} />
+          </button>
+          <button type="button" className={tool === 'lasso' ? 'is-active' : ''} title={text.lassoTool} aria-label={text.lassoTool} onClick={() => { setTool('lasso'); setBrushPanelOpen(false); }}>
             <CircleDashed size={15} />
           </button>
           <button type="button" className={penOnly ? 'is-active' : ''} title={text.penOnlyMode} aria-label={text.penOnlyMode} aria-pressed={penOnly} onClick={() => savePenOnly(!penOnly)}>
             <span className="workspace-drawing__touch-block-icon"><Hand size={15} /><Slash size={18} /></span>
           </button>
           <span className="workspace-drawing__divider" />
+          {createPortal(<section ref={brushPanelRef} className={`workspace-drawing__brush-panel${brushPanelOpen ? ' is-open' : ''}`} style={brushPanelPosition} aria-label={text.penTool} aria-hidden={!brushPanelOpen}>
+            <header>
+              <strong>{text.penTool}</strong>
+              <small>{Math.round(follow * 100)}%</small>
+              <button type="button" className="is-danger" title={text.clearCanvas} aria-label={text.clearCanvas} disabled={strokes.length === 0} onClick={() => saveStrokes([])}><X size={14} /></button>
+            </header>
           {drawingColors.map((preset) => (
             <button
               type="button"
@@ -480,6 +623,15 @@ export function WorkspaceDrawingBlock({
             <span style={{ width: size, height: size }} />
             <input type="range" min="1" max="28" step="1" value={size} aria-label={text.drawingSize} onChange={(event) => setSize(Number(event.target.value))} />
           </label>
+            <label className="workspace-drawing__tuning">
+              <span>{text.drawingFollow}<output>{Math.round(follow * 100)}</output></span>
+              <input type="range" min="0" max="100" step="1" value={Math.round(follow * 100)} aria-label={text.drawingFollow} onChange={(event) => setFollow(Number(event.target.value) / 100)} />
+            </label>
+            <label className="workspace-drawing__tuning">
+              <span>{text.drawingSmoothing}<output>{Math.round(smoothing * 100)}</output></span>
+              <input type="range" min="0" max="100" step="1" value={Math.round(smoothing * 100)} aria-label={text.drawingSmoothing} onChange={(event) => setSmoothing(Number(event.target.value) / 100)} />
+            </label>
+          </section>, document.body) as unknown as ReactElement}
           <span className="workspace-drawing__spacer" />
           {showPlacementControl && (
             <button
@@ -492,14 +644,11 @@ export function WorkspaceDrawingBlock({
               <ArrowLeftRight size={15} />
             </button>
           )}
-          <button type="button" title={text.undoStroke} aria-label={text.undoStroke} disabled={strokes.length === 0} onClick={() => saveStrokes(strokes.slice(0, -1))}>
+          <button type="button" title={text.undoStroke} aria-label={text.undoStroke} disabled={undoRef.current.length === 0 && strokes.length === 0} onClick={undo}>
             <Undo2 size={15} />
           </button>
-          <button type="button" title={text.deleteSelection} aria-label={text.deleteSelection} disabled={selectedStrokeIds.size === 0} onClick={removeSelection}>
-            <Trash2 size={15} />
-          </button>
-          <button type="button" title={text.clearCanvas} aria-label={text.clearCanvas} disabled={strokes.length === 0} onClick={() => saveStrokes([])}>
-            <X size={15} />
+          <button type="button" title={text.redoStroke} aria-label={text.redoStroke} disabled={redoRef.current.length === 0} onClick={redo}>
+            <Redo2 size={15} />
           </button>
         </div>
       </div>
@@ -528,17 +677,12 @@ export function WorkspaceDrawingBlock({
         onPointerCancel={finishStroke}
       >
         {strokes.map((stroke) => (
-          <path
-            key={stroke.id}
-            className={selectedStrokeIds.has(stroke.id) ? 'is-selected' : undefined}
-            d={drawingStrokePath(stroke)}
-            fill={stroke.color}
-          />
+          <DrawingStrokePath key={stroke.id} className={selectedStrokeIds.has(stroke.id) ? 'is-selected' : undefined} stroke={stroke} />
         ))}
         {remoteStrokes.map((stroke) => (
-          <path key={`remote-${stroke.id}`} d={drawingStrokePath({ ...stroke, id: 'active' })} fill={stroke.color} opacity="0.78" />
+          <DrawingStrokePath key={`remote-${stroke.id}`} active stroke={stroke} opacity={0.78} />
         ))}
-        {activeStroke && <path d={drawingStrokePath(activeStroke)} fill={activeStroke.color} />}
+        {activeStroke && <DrawingStrokePath active stroke={activeStroke} />}
         {lassoPoints.length > 1 && <polyline className="workspace-drawing__lasso" points={lassoPoints.map((point) => point.join(',')).join(' ')} />}
         {selectionBounds && (
           <g className="workspace-drawing__selection">
@@ -603,6 +747,8 @@ function drawingBlockPayload(block: WorkspaceBlock): DrawingPayload {
         id: typeof stroke.id === 'string' ? stroke.id : createId('stroke'),
         color: typeof stroke.color === 'string' ? stroke.color : drawingColors[0],
         size: typeof stroke.size === 'number' ? clamp(stroke.size, 1, 40) : 4,
+        smoothing: typeof stroke.smoothing === 'number' ? clamp(stroke.smoothing, 0, 1) : undefined,
+        streamline: typeof stroke.streamline === 'number' ? clamp(stroke.streamline, 0, 1) : undefined,
         points,
         simulatePressure: stroke.simulatePressure !== false,
         createdAt: typeof stroke.createdAt === 'string' ? stroke.createdAt : new Date().toISOString()

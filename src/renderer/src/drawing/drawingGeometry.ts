@@ -20,8 +20,8 @@ export function drawingStrokePath(stroke: LanDrawingStroke, active = false): str
   const outline = getStroke(stroke.points, {
     size: stroke.size,
     thinning: 0.68,
-    smoothing: 0.62,
-    streamline: 0.48,
+    smoothing: unitInterval(stroke.smoothing, 0.62),
+    streamline: unitInterval(stroke.streamline, 0.48),
     easing: (value) => value,
     simulatePressure: stroke.simulatePressure,
     last: !active,
@@ -40,6 +40,12 @@ export function drawingStrokePath(stroke: LanDrawingStroke, active = false): str
   }
   commands.push('Z');
   return commands.join(' ');
+}
+
+function unitInterval(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.min(1, value))
+    : fallback;
 }
 
 export function strokeIntersectsPolygon(stroke: LanDrawingStroke, polygon: Array<[number, number]>): boolean {
