@@ -7,7 +7,7 @@ import {
   useRef,
   useState
 } from 'react';
-import { ArrowLeftRight, ChevronUp, CircleDashed, ImagePlus, Maximize2, PenLine, PenTool, SlidersHorizontal, Trash2, Undo2, X } from 'lucide-react';
+import { ArrowLeftRight, ChevronUp, CircleDashed, Hand, ImagePlus, Maximize2, PenLine, Slash, SlidersHorizontal, Trash2, Undo2, X } from 'lucide-react';
 import type { WorkspaceBlock } from '../../../shared/domain';
 import { createId } from '../../../shared/ids';
 import type { LanDrawingPoint, LanDrawingStroke } from '../../../shared/lanWhiteboard';
@@ -459,7 +459,7 @@ export function WorkspaceDrawingBlock({
             <CircleDashed size={15} />
           </button>
           <button type="button" className={penOnly ? 'is-active' : ''} title={text.penOnlyMode} aria-label={text.penOnlyMode} aria-pressed={penOnly} onClick={() => savePenOnly(!penOnly)}>
-            <PenTool size={15} />
+            <span className="workspace-drawing__touch-block-icon"><Hand size={15} /><Slash size={18} /></span>
           </button>
           <span className="workspace-drawing__divider" />
           {drawingColors.map((preset) => (

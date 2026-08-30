@@ -60,6 +60,7 @@ export type LanWhiteboardClientMessage =
   | { type: 'delete-canvas'; requestId: string; canvasId: string }
   | { type: 'move-canvas'; requestId: string; canvasId: string; side: LanWhiteboardSide }
   | { type: 'set-pen-only'; requestId: string; canvasId: string; penOnly: boolean }
+  | { type: 'trust-device'; requestId: string; deviceId: string }
   | { type: 'share-selection'; requestId: string; canvasId: string; strokes: LanDrawingStroke[] }
   | { type: 'stroke-begin'; canvasId: string; stroke: Omit<LanDrawingStroke, 'points'> & { points: LanDrawingPoint[] } }
   | { type: 'stroke-points'; canvasId: string; strokeId: string; points: LanDrawingPoint[] }
@@ -79,6 +80,7 @@ export type LanWhiteboardServerMessage =
   | { type: 'ack'; requestId: string; revision: number; canvasId?: string }
   | { type: 'pong'; sentAt: number; serverAt: number }
   | { type: 'presence'; clientCount: number }
+  | { type: 'device-trusted'; requestId: string; credential: string }
   | { type: 'error'; requestId?: string; message: string };
 
 export type LanWhiteboardRendererEvent = Exclude<LanWhiteboardServerMessage, { type: 'snapshot' | 'ack' | 'pong' }>;

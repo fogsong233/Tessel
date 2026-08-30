@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { networkInterfaces } from 'node:os';
@@ -58,6 +58,7 @@ export class LanWhiteboardServer {
   private server?: Server;
   private webSocketServer?: WebSocketServer;
   private port?: number;
+  private trustSecret = '';
 
   constructor(options: LanWhiteboardServerOptions) {
     this.rendererDirectory = resolve(options.rendererDirectory);
@@ -70,7 +71,11 @@ export class LanWhiteboardServer {
     if (this.server) {
       return;
     }
-    await this.refreshSnapshot();
+    const [, trustSecret] = await Promise.all([
+      this.refreshSnapshot(),
+      this.runMutation(() => this.store.getOrCreateLanWhiteboardTrustSecret())
+    ]);
+    this.trustSecret = trustSecret;
 
     const server = createServer((request, response) => {
       void this.handleHttpRequest(request, response);
@@ -215,15 +220,21 @@ export class LanWhiteboardServer {
 
   private handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     const requestUrl = requestUrlFor(request);
-    if (requestUrl.pathname !== '/whiteboard' || requestUrl.searchParams.get('token') !== this.token || !this.webSocketServer) {
+    if (requestUrl.pathname !== '/whiteboard' || !this.webSocketServer) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
     }
+    const authorized = requestUrl.searchParams.get('token') === this.token
+      || this.isTrustedCredential(requestUrl.searchParams.get('trust'));
     if ('setNoDelay' in socket && typeof socket.setNoDelay === 'function') {
       socket.setNoDelay(true);
     }
     this.webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+      if (!authorized) {
+        webSocket.close(1008, 'This Tessel link is invalid or has expired.');
+        return;
+      }
       this.webSocketServer?.emit('connection', webSocket, request);
     });
   }
@@ -278,6 +289,16 @@ export class LanWhiteboardServer {
         const canvasId = requiredCanvasId(message.canvasId, this.canvases);
         const saved = await this.setPenOnly(canvasId, message.penOnly === true);
         send(socket, { type: 'ack', requestId: cleanRequestId(message.requestId), revision: this.revision, canvasId: saved.id });
+        return;
+      }
+      case 'trust-device': {
+        const requestId = cleanRequestId(message.requestId);
+        const deviceId = requiredString(message.deviceId, 'deviceId');
+        send(socket, {
+          type: 'device-trusted',
+          requestId,
+          credential: this.issueTrustedCredential(deviceId)
+        });
         return;
       }
       case 'share-selection': {
@@ -505,6 +526,42 @@ export class LanWhiteboardServer {
     return size;
   }
 
+  private issueTrustedCredential(deviceId: string): string {
+    const payload = Buffer.from(JSON.stringify({ version: 1, deviceId, issuedAt: Date.now() }), 'utf8').toString('base64url');
+    const signature = createHmac('sha256', this.trustSecret).update(payload).digest('base64url');
+    return `${payload}.${signature}`;
+  }
+
+  private isTrustedCredential(credential: string | null): boolean {
+    if (!credential || !this.trustSecret || credential.length > 1_024) {
+      return false;
+    }
+    const [payload, signature, extra] = credential.split('.');
+    if (!payload || !signature || extra) {
+      return false;
+    }
+    try {
+      const expected = createHmac('sha256', this.trustSecret).update(payload).digest();
+      const received = Buffer.from(signature, 'base64url');
+      if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
+        return false;
+      }
+      const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
+        version?: unknown;
+        deviceId?: unknown;
+        issuedAt?: unknown;
+      };
+      return parsed.version === 1
+        && typeof parsed.deviceId === 'string'
+        && parsed.deviceId.length > 0
+        && parsed.deviceId.length <= 200
+        && typeof parsed.issuedAt === 'number'
+        && Number.isFinite(parsed.issuedAt);
+    } catch {
+      return false;
+    }
+  }
+
   private publish(message: LanWhiteboardRendererEvent): void {
     this.publishToRenderers(message);
     this.broadcast(message);
@@ -539,11 +596,12 @@ export class LanWhiteboardServer {
       return;
     }
     const isAsset = requestUrl.pathname.startsWith('/assets/');
-    if (!isAsset && requestUrl.searchParams.get('token') !== this.token) {
-      writeText(response, 403, 'This Tessel link is invalid or has expired.');
+    const isRemotePage = requestUrl.pathname === '/' || requestUrl.pathname === '/remote.html';
+    if (!isAsset && !isRemotePage) {
+      writeText(response, 404, 'Not found');
       return;
     }
-    const relativePath = requestUrl.pathname === '/' || requestUrl.pathname === '/remote.html'
+    const relativePath = isRemotePage
       ? 'remote.html'
       : requestUrl.pathname.replace(/^\/+/, '');
     const absolutePath = resolve(this.rendererDirectory, relativePath);

@@ -412,6 +412,15 @@ body.is-moving-workspace-block .workspace-image__viewport {
   background: rgba(241, 244, 241, 0.9);
 }
 
+.workspace-drawing__touch-block-icon {
+  position: relative;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+}
+.workspace-drawing__touch-block-icon svg:last-child { position: absolute; }
+
 .workspace-drawing__toolbar button:hover:not(:disabled),
 .workspace-drawing__toolbar button.is-active {
   color: #17221d;

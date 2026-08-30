@@ -10,6 +10,8 @@ import {
   Plus,
   Radio,
   RefreshCw,
+  ShieldCheck,
+  ShieldPlus,
   Trash2,
   Wifi,
   WifiOff
@@ -22,10 +24,11 @@ import { useLanWhiteboardSocket } from './useLanWhiteboardSocket';
 
 export function RemoteWhiteboardApp(): ReactElement {
   const token = useMemo(() => new URLSearchParams(location.search).get('token') ?? '', []);
-  const { clientCount, latency, lastAcknowledgement, send, snapshot, status, transientStrokes } = useLanWhiteboardSocket(token);
+  const { clientCount, latency, lastAcknowledgement, send, snapshot, status, transientStrokes, trustDevice, trusted } = useLanWhiteboardSocket(token);
   const [selectedCanvasId, setSelectedCanvasId] = useState<string>();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarCompact, setSidebarCompact] = useState(false);
+  const [pageDirection, setPageDirection] = useState<'next' | 'previous'>();
   const [fullscreen, setFullscreen] = useState(Boolean(document.fullscreenElement));
   const [pendingDelete, setPendingDelete] = useState<WorkspaceBlock>();
 
@@ -35,6 +38,11 @@ export function RemoteWhiteboardApp(): ReactElement {
     && block.pageNumber === snapshot.context?.pageNumber) ?? [];
   const notebookSide = contextCanvases[0] ? remoteDrawingPayload(contextCanvases[0]).side : 'left';
   const groupedCanvases = useMemo(() => groupCanvases(snapshot?.canvases ?? [], snapshot?.documents ?? []), [snapshot?.canvases, snapshot?.documents]);
+  const selectedNotebookSheets = useMemo(
+    () => selectedCanvas ? notebookSheets(snapshot?.canvases ?? [], selectedCanvas) : [],
+    [selectedCanvas, snapshot?.canvases]
+  );
+  const selectedSheetIndex = selectedNotebookSheets.findIndex((block) => block.id === selectedCanvasId);
 
   useEffect(() => {
     if (!snapshot || selectedCanvas) {
@@ -47,6 +55,7 @@ export function RemoteWhiteboardApp(): ReactElement {
 
   useEffect(() => {
     if (lastAcknowledgement?.requestId.startsWith('canvas_') && lastAcknowledgement.canvasId) {
+      setPageDirection('next');
       setSelectedCanvasId(lastAcknowledgement.canvasId);
       setSidebarOpen(false);
     }
@@ -77,6 +86,16 @@ export function RemoteWhiteboardApp(): ReactElement {
   const moveCanvas = (block: WorkspaceBlock): void => {
     const side = remoteDrawingPayload(block).side === 'left' ? 'right' : 'left';
     send({ type: 'move-canvas', requestId: remoteId('move'), canvasId: block.id, side });
+  };
+
+  const navigateSheet = (direction: 'next' | 'previous'): void => {
+    const offset = direction === 'next' ? 1 : -1;
+    const next = selectedNotebookSheets[selectedSheetIndex + offset];
+    if (!next) {
+      return;
+    }
+    setPageDirection(direction);
+    setSelectedCanvasId(next.id);
   };
 
   const toggleFullscreen = (): void => {
@@ -118,6 +137,14 @@ export function RemoteWhiteboardApp(): ReactElement {
             <span>{status === 'connected' ? `${latency ?? '—'} ms` : '重连中'}</span>
             {clientCount > 1 && <small>{clientCount} 台设备</small>}
           </span>
+          <button
+            type="button"
+            className={`remote-header__button remote-header__trust${trusted ? ' is-active' : ''}`}
+            aria-label={trusted ? '已信任此设备' : '信任此设备'}
+            title={trusted ? '此设备以后无需新二维码即可连接' : '信任后，此设备可直接重新连接'}
+            disabled={status !== 'connected' || trusted}
+            onClick={trustDevice}
+          >{trusted ? <ShieldCheck /> : <ShieldPlus />}</button>
           <button type="button" className="remote-header__button" aria-label={fullscreen ? '退出全屏' : '进入全屏'} onClick={toggleFullscreen}>
             {fullscreen ? <Minimize /> : <Expand />}
           </button>
@@ -154,7 +181,7 @@ export function RemoteWhiteboardApp(): ReactElement {
                     <button
                       type="button"
                       aria-label={`PDF 第 ${block.pageNumber ?? '—'} 页 · 纸张 ${sheetNumber(snapshot?.canvases ?? [], block)}`}
-                      onClick={() => { setSelectedCanvasId(block.id); if (innerWidth < 760) setSidebarOpen(false); }}
+                      onClick={() => { setPageDirection(undefined); setSelectedCanvasId(block.id); if (innerWidth < 760) setSidebarOpen(false); }}
                     >
                       <span className="remote-canvas-row__preview">
                         <Radio />
@@ -197,12 +224,16 @@ export function RemoteWhiteboardApp(): ReactElement {
             block={selectedCanvas}
             connected={status === 'connected'}
             canMove
+            canNavigateNext={selectedSheetIndex >= 0 && selectedSheetIndex < selectedNotebookSheets.length - 1}
+            canNavigatePrevious={selectedSheetIndex > 0}
+            entryDirection={pageDirection}
             sheetNumber={sheetNumber(snapshot?.canvases ?? [], selectedCanvas)}
             totalSheets={(snapshot?.canvases ?? []).filter((block) => block.documentId === selectedCanvas.documentId && block.pageNumber === selectedCanvas.pageNumber).length}
             remoteStrokes={Object.values(transientStrokes[selectedCanvas.id] ?? {})}
             send={send}
             onDelete={() => setPendingDelete(selectedCanvas)}
             onMove={() => moveCanvas(selectedCanvas)}
+            onNavigate={navigateSheet}
           />
         ) : snapshot ? (
           <EmptyWorkspace contextDocument={contextDocument} pageNumber={snapshot.context?.pageNumber} onCreate={createCanvas} />
@@ -285,12 +316,16 @@ function groupCanvases(canvases: WorkspaceBlock[], documents: LanWhiteboardDocum
 }
 
 function sheetNumber(canvases: WorkspaceBlock[], block: WorkspaceBlock): number {
-  const sheets = canvases
+  const sheets = notebookSheets(canvases, block);
+  return Math.max(1, sheets.findIndex((candidate) => candidate.id === block.id) + 1);
+}
+
+function notebookSheets(canvases: WorkspaceBlock[], block: WorkspaceBlock): WorkspaceBlock[] {
+  return canvases
     .filter((candidate) => candidate.documentId === block.documentId && candidate.pageNumber === block.pageNumber)
     .sort((a, b) => Number(a.payload?.sheetIndex ?? Number.MAX_SAFE_INTEGER) - Number(b.payload?.sheetIndex ?? Number.MAX_SAFE_INTEGER)
       || (remoteDrawingPayload(a).side === 'left' ? -1 : 1) - (remoteDrawingPayload(b).side === 'left' ? -1 : 1)
       || a.createdAt.localeCompare(b.createdAt));
-  return Math.max(1, sheets.findIndex((candidate) => candidate.id === block.id) + 1);
 }
 
 function remoteId(prefix: string): string {

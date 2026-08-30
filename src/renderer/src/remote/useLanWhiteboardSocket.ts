@@ -9,21 +9,30 @@ interface SocketState {
   lastAcknowledgement?: { requestId: string; canvasId?: string };
   snapshot?: LanWhiteboardSnapshot;
   status: ConnectionStatus;
+  trusted: boolean;
   transientStrokes: Record<string, Record<string, LanDrawingStroke>>;
 }
 
-export function useLanWhiteboardSocket(token: string): SocketState & { send(message: LanWhiteboardClientMessage): boolean } {
+const trustedCredentialKey = 'tessel.lan-whiteboard.trusted-credential';
+const trustedDeviceIdKey = 'tessel.lan-whiteboard.device-id';
+
+export function useLanWhiteboardSocket(token: string): SocketState & {
+  send(message: LanWhiteboardClientMessage): boolean;
+  trustDevice(): boolean;
+} {
   const socketRef = useRef<WebSocket>();
   const retryRef = useRef(0);
   const pendingRef = useRef<LanWhiteboardClientMessage[]>([]);
   const [state, setState] = useState<SocketState>({
     clientCount: 0,
-    status: token ? 'connecting' : 'invalid',
+    status: token || readTrustedCredential() ? 'connecting' : 'invalid',
+    trusted: Boolean(readTrustedCredential()),
     transientStrokes: {}
   });
 
   useEffect(() => {
-    if (!token) {
+    const trustedCredential = readTrustedCredential();
+    if (!token && !trustedCredential) {
       return;
     }
     let disposed = false;
@@ -36,7 +45,15 @@ export function useLanWhiteboardSocket(token: string): SocketState & { send(mess
       }
       setState((current) => ({ ...current, status: 'connecting' }));
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const socket = new WebSocket(`${protocol}//${location.host}/whiteboard?token=${encodeURIComponent(token)}`);
+      const query = new URLSearchParams();
+      if (token) {
+        query.set('token', token);
+      }
+      const credential = readTrustedCredential();
+      if (credential) {
+        query.set('trust', credential);
+      }
+      const socket = new WebSocket(`${protocol}//${location.host}/whiteboard?${query}`);
       socketRef.current = socket;
       socket.addEventListener('open', () => {
         retryRef.current = 0;
@@ -54,7 +71,11 @@ export function useLanWhiteboardSocket(token: string): SocketState & { send(mess
       });
       socket.addEventListener('message', (event) => {
         try {
-          applyMessage(JSON.parse(String(event.data)) as LanWhiteboardServerMessage, setState);
+          const message = JSON.parse(String(event.data)) as LanWhiteboardServerMessage;
+          if (message.type === 'device-trusted') {
+            localStorage.setItem(trustedCredentialKey, message.credential);
+          }
+          applyMessage(message, setState);
         } catch (error) {
           console.warn('Ignored malformed Tessel whiteboard message', error);
         }
@@ -67,6 +88,10 @@ export function useLanWhiteboardSocket(token: string): SocketState & { send(mess
           return;
         }
         setState((current) => ({ ...current, status: event.code === 1008 ? 'invalid' : 'disconnected' }));
+        if (event.code === 1008 && readTrustedCredential()) {
+          localStorage.removeItem(trustedCredentialKey);
+          setState((current) => ({ ...current, trusted: false }));
+        }
         if (event.code !== 1008) {
           const delay = Math.min(3_000, 180 * 2 ** retryRef.current);
           retryRef.current += 1;
@@ -105,7 +130,16 @@ export function useLanWhiteboardSocket(token: string): SocketState & { send(mess
     return true;
   }, []);
 
-  return { ...state, send };
+  const trustDevice = useCallback((): boolean => {
+    let deviceId = localStorage.getItem(trustedDeviceIdKey)?.trim();
+    if (!deviceId) {
+      deviceId = globalThis.crypto?.randomUUID?.() ?? `device_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem(trustedDeviceIdKey, deviceId);
+    }
+    return send({ type: 'trust-device', requestId: `trust_${Date.now().toString(36)}`, deviceId });
+  }, [send]);
+
+  return { ...state, send, trustDevice };
 }
 
 function isDurableMessage(message: LanWhiteboardClientMessage): boolean {
@@ -193,6 +227,9 @@ function applyMessage(message: LanWhiteboardServerMessage, setState: React.Dispa
     case 'presence':
       setState((current) => ({ ...current, clientCount: message.clientCount }));
       return;
+    case 'device-trusted':
+      setState((current) => ({ ...current, trusted: true }));
+      return;
     case 'pong':
       setState((current) => ({ ...current, latency: Math.max(0, Date.now() - message.sentAt) }));
       return;
@@ -205,5 +242,13 @@ function applyMessage(message: LanWhiteboardServerMessage, setState: React.Dispa
         lastAcknowledgement: { requestId: message.requestId, canvasId: message.canvasId }
       }));
       return;
+  }
+}
+
+function readTrustedCredential(): string {
+  try {
+    return localStorage.getItem(trustedCredentialKey)?.trim() ?? '';
+  } catch {
+    return '';
   }
 }

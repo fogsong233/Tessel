@@ -1,5 +1,5 @@
 import { app, safeStorage } from 'electron';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
@@ -61,6 +61,7 @@ interface StoreFile {
   aiProvider: PersistedAiProviderConfig;
   webDavSync: PersistedWebDavSyncConfig;
   appPreferences: AppPreferences;
+  lanWhiteboardTrustSecret?: string;
 }
 
 const emptyStore = (): StoreFile => ({
@@ -606,6 +607,18 @@ export class JsonWorkspaceStore {
     store.appPreferences = normalizeAppPreferences(config);
     await this.write(store);
     return store.appPreferences;
+  }
+
+  async getOrCreateLanWhiteboardTrustSecret(): Promise<string> {
+    const store = await this.read();
+    const existing = store.lanWhiteboardTrustSecret?.trim();
+    if (existing && /^[A-Za-z0-9_-]{43}$/.test(existing)) {
+      return existing;
+    }
+    const secret = randomBytes(32).toString('base64url');
+    store.lanWhiteboardTrustSecret = secret;
+    await this.write(store);
+    return secret;
   }
 
   private async read(): Promise<StoreFile> {

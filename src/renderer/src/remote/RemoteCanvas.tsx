@@ -10,6 +10,8 @@ import {
 } from 'react';
 import {
   ArrowLeftRight,
+  ChevronDown,
+  ChevronUp,
   CircleDashed,
   Eraser,
   Hand,
@@ -17,9 +19,10 @@ import {
   Maximize2,
   Minus,
   PenLine,
-  PenTool,
   Plus,
   Redo2,
+  Slash,
+  Star,
   Trash2,
   Undo2
 } from 'lucide-react';
@@ -41,13 +44,17 @@ type DrawingTool = 'pen' | 'eraser' | 'lasso' | 'hand';
 interface RemoteCanvasProps {
   block: WorkspaceBlock;
   canMove: boolean;
+  canNavigateNext: boolean;
+  canNavigatePrevious: boolean;
   connected: boolean;
+  entryDirection?: 'next' | 'previous';
   sheetNumber: number;
   totalSheets: number;
   remoteStrokes: LanDrawingStroke[];
   send(message: LanWhiteboardClientMessage): boolean;
   onDelete(): void;
   onMove(): void;
+  onNavigate(direction: 'next' | 'previous'): void;
 }
 
 interface PanState {
@@ -56,6 +63,12 @@ interface PanState {
   pointerId: number;
   scrollLeft: number;
   scrollTop: number;
+}
+
+interface PageSwipeState {
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
 }
 
 interface PinchState {
@@ -76,11 +89,33 @@ interface SelectionGesture {
   startY: number;
 }
 
+interface FavoriteBrush {
+  color: string;
+  size: number;
+}
+
 const colors = ['#171a16', '#2563eb', '#e0453b', '#16a36a', '#8b4bd6', '#e99620'];
 const canvasPadding = 56;
+const brushSettingsKey = 'tessel.lan-whiteboard.brush';
+const favoriteBrushesKey = 'tessel.lan-whiteboard.favorite-brushes';
 
-export function RemoteCanvas({ block, canMove, connected, sheetNumber, totalSheets, remoteStrokes, send, onDelete, onMove }: RemoteCanvasProps): ReactElement {
+export function RemoteCanvas({
+  block,
+  canMove,
+  canNavigateNext,
+  canNavigatePrevious,
+  connected,
+  entryDirection,
+  sheetNumber,
+  totalSheets,
+  remoteStrokes,
+  send,
+  onDelete,
+  onMove,
+  onNavigate
+}: RemoteCanvasProps): ReactElement {
   const payload = remoteDrawingPayload(block);
+  const initialBrushRef = useRef(readStoredBrush());
   const [strokes, setStrokes] = useState(payload.strokes);
   const strokesRef = useRef(payload.strokes);
   const [activeStroke, setActiveStroke] = useState<LanDrawingStroke>();
@@ -89,12 +124,15 @@ export function RemoteCanvas({ block, canMove, connected, sheetNumber, totalShee
   const lassoPointsRef = useRef<Array<[number, number]>>([]);
   const [selectedStrokeIds, setSelectedStrokeIds] = useState<Set<string>>(new Set());
   const [tool, setTool] = useState<DrawingTool>('pen');
-  const [color, setColor] = useState(colors[0]);
-  const [size, setSize] = useState(4);
+  const [color, setColor] = useState(initialBrushRef.current.color);
+  const [size, setSize] = useState(initialBrushRef.current.size);
+  const [favoriteBrushes, setFavoriteBrushes] = useState<FavoriteBrush[]>(readFavoriteBrushes);
   const [penOnly, setPenOnly] = useState(payload.penOnly);
   const [zoom, setZoom] = useState(1);
   const [selectionNotice, setSelectionNotice] = useState<string>();
   const [temporaryEraser, setTemporaryEraser] = useState(false);
+  const [pageSwipeOffset, setPageSwipeOffset] = useState(0);
+  const pageSwipeOffsetRef = useRef(0);
   const zoomRef = useRef(1);
   const viewportRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -104,6 +142,8 @@ export function RemoteCanvas({ block, canMove, connected, sheetNumber, totalShee
   const pendingTransmissionRef = useRef<LanDrawingPoint[]>([]);
   const frameRef = useRef<number>();
   const panRef = useRef<PanState>();
+  const pageSwipeRef = useRef<PageSwipeState>();
+  const wheelNavigationRef = useRef({ accumulated: 0, lastEventAt: 0, lastNavigationAt: 0 });
   const touchPointsRef = useRef(new Map<number, { x: number; y: number }>());
   const pinchRef = useRef<PinchState>();
   const eraserChangedRef = useRef(false);
@@ -127,6 +167,14 @@ export function RemoteCanvas({ block, canMove, connected, sheetNumber, totalShee
       setPenOnly(payload.penOnly);
     }
   }, [block.updatedAt]);
+
+  useEffect(() => {
+    localStorage.setItem(brushSettingsKey, JSON.stringify({ color, size } satisfies FavoriteBrush));
+  }, [color, size]);
+
+  useEffect(() => {
+    localStorage.setItem(favoriteBrushesKey, JSON.stringify(favoriteBrushes));
+  }, [favoriteBrushes]);
 
   const selectionBounds = drawingSelectionBounds(strokes, selectedStrokeIds);
 
@@ -205,6 +253,11 @@ export function RemoteCanvas({ block, canMove, connected, sheetNumber, totalShee
     stylusHoldRef.current = undefined;
   };
 
+  const updatePageSwipeOffset = (offset: number): void => {
+    pageSwipeOffsetRef.current = offset;
+    setPageSwipeOffset(offset);
+  };
+
   const eraseAt = (point: LanDrawingPoint): void => {
     const next = strokesRef.current.filter((stroke) => !drawingStrokeNearPoint(stroke, point, Math.max(8, size * 1.8)));
     if (next.length !== strokesRef.current.length) {
@@ -264,6 +317,8 @@ export function RemoteCanvas({ block, canMove, connected, sheetNumber, totalShee
     setLassoPoints([]);
     temporaryEraserPointerRef.current = undefined;
     setTemporaryEraser(false);
+    pageSwipeRef.current = undefined;
+    updatePageSwipeOffset(0);
   };
 
   const beginPinchIfReady = (): boolean => {
@@ -321,6 +376,11 @@ export function RemoteCanvas({ block, canMove, connected, sheetNumber, totalShee
           scrollLeft: viewport.scrollLeft,
           scrollTop: viewport.scrollTop
         };
+        pageSwipeRef.current = {
+          pointerId: event.pointerId,
+          startClientX: event.clientX,
+          startClientY: event.clientY
+        };
       }
       return;
     }
@@ -339,6 +399,13 @@ export function RemoteCanvas({ block, canMove, connected, sheetNumber, totalShee
           scrollLeft: viewport.scrollLeft,
           scrollTop: viewport.scrollTop
         };
+        if (event.pointerType === 'touch') {
+          pageSwipeRef.current = {
+            pointerId: event.pointerId,
+            startClientX: event.clientX,
+            startClientY: event.clientY
+          };
+        }
       }
       return;
     }
@@ -437,8 +504,19 @@ export function RemoteCanvas({ block, canMove, connected, sheetNumber, totalShee
     if ((tool === 'hand' || (tool === 'pen' && penOnly)) && pan?.pointerId === event.pointerId) {
       const viewport = viewportRef.current;
       if (viewport) {
-        viewport.scrollLeft = pan.scrollLeft - (event.clientX - pan.clientX);
-        viewport.scrollTop = pan.scrollTop - (event.clientY - pan.clientY);
+        const deltaX = event.clientX - pan.clientX;
+        const deltaY = event.clientY - pan.clientY;
+        const maximumScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+        const verticalGesture = Math.abs(deltaY) > Math.abs(deltaX) * 1.15;
+        const pullingPrevious = deltaY > 0 && pan.scrollTop <= 1 && canNavigatePrevious;
+        const pullingNext = deltaY < 0 && pan.scrollTop >= maximumScrollTop - 1 && canNavigateNext;
+        if (pageSwipeRef.current?.pointerId === event.pointerId && verticalGesture && (pullingPrevious || pullingNext)) {
+          updatePageSwipeOffset(clamp(deltaY * 0.48, -76, 76));
+        } else {
+          updatePageSwipeOffset(0);
+          viewport.scrollLeft = pan.scrollLeft - deltaX;
+          viewport.scrollTop = pan.scrollTop - deltaY;
+        }
       }
       return;
     }
@@ -492,9 +570,22 @@ export function RemoteCanvas({ block, canMove, connected, sheetNumber, totalShee
     event.preventDefault();
     releasePointer(event);
     cancelStylusHold(event.pointerId);
+    const pageSwipe = pageSwipeRef.current?.pointerId === event.pointerId
+      ? pageSwipeRef.current
+      : undefined;
+    const completedPageSwipe = event.type === 'pointerup' && pageSwipe && Math.abs(pageSwipeOffsetRef.current) >= 48
+      ? pageSwipeOffsetRef.current < 0 ? 'next' : 'previous'
+      : undefined;
+    pageSwipeRef.current = undefined;
+    updatePageSwipeOffset(0);
     activePointerRef.current = undefined;
     activePointerTypeRef.current = undefined;
     panRef.current = undefined;
+
+    if (completedPageSwipe) {
+      onNavigate(completedPageSwipe);
+      return;
+    }
 
     if (temporaryEraserPointerRef.current === event.pointerId) {
       temporaryEraserPointerRef.current = undefined;
@@ -560,21 +651,23 @@ export function RemoteCanvas({ block, canMove, connected, sheetNumber, totalShee
 
   const setZoomAround = (nextZoom: number, clientX?: number, clientY?: number): void => {
     const viewport = viewportRef.current;
-    if (!viewport) {
+    const paper = svgRef.current;
+    if (!viewport || !paper) {
       return;
     }
     const bounded = clamp(nextZoom, 0.16, 4);
-    const oldZoom = zoomRef.current;
-    const rect = viewport.getBoundingClientRect();
-    const localX = (clientX ?? rect.left + rect.width / 2) - rect.left;
-    const localY = (clientY ?? rect.top + rect.height / 2) - rect.top;
-    const contentX = viewport.scrollLeft + localX;
-    const contentY = viewport.scrollTop + localY;
+    const viewportRect = viewport.getBoundingClientRect();
+    const paperRect = paper.getBoundingClientRect();
+    const anchorClientX = clientX ?? viewportRect.left + viewportRect.width / 2;
+    const anchorClientY = clientY ?? viewportRect.top + viewportRect.height / 2;
+    const anchorX = clamp((anchorClientX - paperRect.left) / Math.max(1, paperRect.width), 0, 1);
+    const anchorY = clamp((anchorClientY - paperRect.top) / Math.max(1, paperRect.height), 0, 1);
     zoomRef.current = bounded;
     setZoom(bounded);
     requestAnimationFrame(() => {
-      viewport.scrollLeft = contentX * bounded / oldZoom - localX;
-      viewport.scrollTop = contentY * bounded / oldZoom - localY;
+      const nextPaperRect = paper.getBoundingClientRect();
+      viewport.scrollLeft += nextPaperRect.left + nextPaperRect.width * anchorX - anchorClientX;
+      viewport.scrollTop += nextPaperRect.top + nextPaperRect.height * anchorY - anchorClientY;
     });
   };
 
@@ -674,6 +767,26 @@ export function RemoteCanvas({ block, canMove, connected, sheetNumber, totalShee
     send({ type: 'set-pen-only', requestId: createRemoteId('pen-only'), canvasId: block.id, penOnly: next });
   };
 
+  const currentBrushFavorite = favoriteBrushes.some((brush) => sameBrush(brush, { color, size }));
+
+  const toggleFavoriteBrush = (): void => {
+    const brush = { color, size };
+    setFavoriteBrushes((current) => current.some((candidate) => sameBrush(candidate, brush))
+      ? current.filter((candidate) => !sameBrush(candidate, brush))
+      : [...current, brush].slice(-6));
+  };
+
+  const selectBrush = (brush: FavoriteBrush): void => {
+    setColor(brush.color);
+    setSize(brush.size);
+    setTool('pen');
+  };
+
+  const adjustBrushSize = (delta: number): void => {
+    setSize((current) => clamp(Math.round((current + delta) * 2) / 2, 1, 40));
+    setTool('pen');
+  };
+
   const shareSelection = (): void => {
     if (selectedStrokeIds.size === 0 || !connected) {
       return;
@@ -692,17 +805,49 @@ export function RemoteCanvas({ block, canMove, connected, sheetNumber, totalShee
     if (event.ctrlKey || event.metaKey) {
       event.preventDefault();
       setZoomAround(zoomRef.current * Math.exp(-event.deltaY * 0.0024), event.clientX, event.clientY);
+      return;
+    }
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) {
+      return;
+    }
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      return;
+    }
+    const maximumScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    const direction = event.deltaY > 0 ? 'next' : 'previous';
+    const atBoundary = direction === 'next'
+      ? viewport.scrollTop >= maximumScrollTop - 1 && canNavigateNext
+      : viewport.scrollTop <= 1 && canNavigatePrevious;
+    if (!atBoundary) {
+      wheelNavigationRef.current.accumulated = 0;
+      return;
+    }
+    event.preventDefault();
+    const now = performance.now();
+    const state = wheelNavigationRef.current;
+    if (now - state.lastEventAt > 240 || Math.sign(state.accumulated) !== Math.sign(event.deltaY)) {
+      state.accumulated = 0;
+    }
+    state.lastEventAt = now;
+    state.accumulated += event.deltaY;
+    if (Math.abs(state.accumulated) >= 72 && now - state.lastNavigationAt > 420) {
+      state.accumulated = 0;
+      state.lastNavigationAt = now;
+      onNavigate(direction);
     }
   };
 
   return (
-    <section className="remote-canvas">
+    <section className={`remote-canvas${entryDirection ? ` is-entering-${entryDirection}` : ''}`}>
       <div className="remote-tools" aria-label="手写工具栏">
         <ToolButton active={tool === 'pen' && !temporaryEraser} label="笔" onClick={() => setTool('pen')}><PenLine /></ToolButton>
         <ToolButton active={tool === 'eraser' || temporaryEraser} label="橡皮" onClick={() => setTool('eraser')}><Eraser /></ToolButton>
         <ToolButton active={tool === 'lasso'} label="圈选" onClick={() => setTool('lasso')}><CircleDashed /></ToolButton>
         <ToolButton active={tool === 'hand'} label="移动" onClick={() => setTool('hand')}><Hand /></ToolButton>
-        <ToolButton active={penOnly} label="仅触控笔书写" onClick={togglePenOnly}><PenTool /></ToolButton>
+        <ToolButton active={penOnly} pressed={penOnly} label={penOnly ? '已禁用手指书写' : '禁用手指书写'} onClick={togglePenOnly}>
+          <span className="remote-touch-block-icon"><Hand /><Slash /></span>
+        </ToolButton>
         <span className="remote-tools__divider" />
         <div className="remote-color-row" aria-label="颜色">
           {colors.map((preset) => (
@@ -719,11 +864,33 @@ export function RemoteCanvas({ block, canMove, connected, sheetNumber, totalShee
             <input type="color" value={color} aria-label="自定义颜色" onChange={(event) => { setColor(event.target.value); setTool('pen'); }} />
           </label>
         </div>
-        <label className="remote-size" title={`笔触 ${size}px`}>
+        <span className="remote-tools__divider" />
+        <ToolButton active={currentBrushFavorite} pressed={currentBrushFavorite} label={currentBrushFavorite ? '取消收藏当前笔刷' : '收藏当前笔刷'} onClick={toggleFavoriteBrush}>
+          <Star fill={currentBrushFavorite ? 'currentColor' : 'none'} />
+        </ToolButton>
+        {favoriteBrushes.length > 0 && (
+          <div className="remote-brush-favorites" aria-label="收藏的笔刷">
+            {favoriteBrushes.map((brush) => (
+              <button
+                type="button"
+                key={`${brush.color}-${brush.size}`}
+                className={sameBrush(brush, { color, size }) ? 'is-active' : undefined}
+                aria-label={`使用收藏笔刷 ${brush.color} ${formatBrushSize(brush.size)} 像素`}
+                title={`${brush.color} · ${formatBrushSize(brush.size)} px`}
+                onClick={() => selectBrush(brush)}
+              >
+                <span style={{ background: brush.color, height: clamp(brush.size / 2, 2, 12) }} />
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="remote-size" title={`笔触 ${formatBrushSize(size)}px`}>
           <span style={{ width: clamp(size, 3, 22), height: clamp(size, 3, 22) }} />
-          <input type="range" min="1" max="32" value={size} onChange={(event) => setSize(Number(event.target.value))} />
-          <output>{size}</output>
-        </label>
+          <button type="button" aria-label="减小笔刷宽度" onClick={() => adjustBrushSize(-1)}><Minus /></button>
+          <input type="range" min="1" max="40" step="0.5" value={size} aria-label="笔刷宽度" onChange={(event) => { setSize(Number(event.target.value)); setTool('pen'); }} />
+          <button type="button" aria-label="增大笔刷宽度" onClick={() => adjustBrushSize(1)}><Plus /></button>
+          <output>{formatBrushSize(size)}</output>
+        </div>
         <span className="remote-tools__spacer" />
         <ToolButton disabled={undoRef.current.length === 0 && strokes.length === 0} label="撤销" onClick={undo}><Undo2 /></ToolButton>
         <ToolButton disabled={redoRef.current.length === 0} label="重做" onClick={redo}><Redo2 /></ToolButton>
@@ -731,78 +898,89 @@ export function RemoteCanvas({ block, canMove, connected, sheetNumber, totalShee
 
       <div className="remote-canvas__viewport" ref={viewportRef} onWheel={wheel}>
         <div
-          className="remote-canvas__space"
+          className={`remote-canvas__space${pageSwipeOffset ? ' is-page-swiping' : ''}`}
           style={{
             width: payload.canvasWidth * zoom + canvasPadding * 2,
             height: payload.canvasHeight * zoom + canvasPadding * 2
           }}
         >
-          <svg
-            ref={svgRef}
-            className={`remote-canvas__paper is-${temporaryEraser ? 'eraser' : tool}`}
+          <div
+            className="remote-canvas__stage"
             style={{
-              left: canvasPadding,
-              top: canvasPadding,
               width: payload.canvasWidth * zoom,
-              height: payload.canvasHeight * zoom
+              height: payload.canvasHeight * zoom,
+              transform: `translateY(${pageSwipeOffset}px)`
             }}
-            viewBox={`0 0 ${payload.canvasWidth} ${payload.canvasHeight}`}
-            preserveAspectRatio="none"
-            onPointerDown={startInteraction}
-            onPointerMove={moveInteraction}
-            onPointerUp={finishInteraction}
-            onPointerCancel={finishInteraction}
           >
-            <rect width={payload.canvasWidth} height={payload.canvasHeight} fill="#fff" />
-            {strokes.map((stroke) => (
-              <path
-                key={stroke.id}
-                className={selectedStrokeIds.has(stroke.id) ? 'is-selected' : undefined}
-                d={drawingStrokePath(stroke)}
-                fill={stroke.color}
-              />
-            ))}
-            {remoteStrokes.map((stroke) => <path key={`remote-${stroke.id}`} d={drawingStrokePath(stroke, true)} fill={stroke.color} opacity="0.78" />)}
-            {activeStroke && <path d={drawingStrokePath(activeStroke, true)} fill={activeStroke.color} />}
-            {lassoPoints.length > 1 && <polyline className="remote-canvas__lasso" points={lassoPoints.map((point) => point.join(',')).join(' ')} />}
-            {selectionBounds && (
-              <g className="remote-canvas__selection">
-                <rect
-                  className="remote-canvas__selection-box"
-                  x={selectionBounds.x}
-                  y={selectionBounds.y}
-                  width={selectionBounds.width}
-                  height={selectionBounds.height}
-                  aria-label="移动选区"
-                  onPointerDown={(event) => beginSelectionGesture('move', event)}
-                />
-                <g
-                  className="remote-canvas__selection-handle"
-                  aria-label="缩放选区"
-                  transform={`translate(${selectionBounds.x + selectionBounds.width} ${selectionBounds.y + selectionBounds.height})`}
-                  onPointerDown={(event) => beginSelectionGesture('resize', event)}
-                >
-                  <circle r="11" />
-                  <Maximize2 x={-6} y={-6} width="12" height="12" />
-                </g>
-              </g>
-            )}
-          </svg>
-          {selectionBounds && (
-            <div
-              className="remote-selection-actions"
-              style={{
-                left: canvasPadding + (selectionBounds.x + 7) * zoom,
-                top: canvasPadding + (selectionBounds.y + 7) * zoom
-              }}
+            <svg
+              ref={svgRef}
+              className={`remote-canvas__paper is-${temporaryEraser ? 'eraser' : tool}`}
+              viewBox={`0 0 ${payload.canvasWidth} ${payload.canvasHeight}`}
+              preserveAspectRatio="none"
+              onPointerDown={startInteraction}
+              onPointerMove={moveInteraction}
+              onPointerUp={finishInteraction}
+              onPointerCancel={finishInteraction}
             >
-              <span>{selectedStrokeIds.size} 条</span>
-              <button type="button" disabled={!connected} onClick={shareSelection}>发送到 AI</button>
-              <button type="button" className="is-danger" onClick={deleteSelection}>删除</button>
-            </div>
-          )}
+              <rect width={payload.canvasWidth} height={payload.canvasHeight} fill="#fff" />
+              {strokes.map((stroke) => (
+                <path
+                  key={stroke.id}
+                  className={selectedStrokeIds.has(stroke.id) ? 'is-selected' : undefined}
+                  d={drawingStrokePath(stroke)}
+                  fill={stroke.color}
+                />
+              ))}
+              {remoteStrokes.map((stroke) => <path key={`remote-${stroke.id}`} d={drawingStrokePath(stroke, true)} fill={stroke.color} opacity="0.78" />)}
+              {activeStroke && <path d={drawingStrokePath(activeStroke, true)} fill={activeStroke.color} />}
+              {lassoPoints.length > 1 && <polyline className="remote-canvas__lasso" points={lassoPoints.map((point) => point.join(',')).join(' ')} />}
+              {selectionBounds && (
+                <g className="remote-canvas__selection">
+                  <rect
+                    className="remote-canvas__selection-box"
+                    x={selectionBounds.x}
+                    y={selectionBounds.y}
+                    width={selectionBounds.width}
+                    height={selectionBounds.height}
+                    aria-label="移动选区"
+                    onPointerDown={(event) => beginSelectionGesture('move', event)}
+                  />
+                  <g
+                    className="remote-canvas__selection-handle"
+                    aria-label="缩放选区"
+                    transform={`translate(${selectionBounds.x + selectionBounds.width} ${selectionBounds.y + selectionBounds.height})`}
+                    onPointerDown={(event) => beginSelectionGesture('resize', event)}
+                  >
+                    <circle r="11" />
+                    <Maximize2 x={-6} y={-6} width="12" height="12" />
+                  </g>
+                </g>
+              )}
+            </svg>
+            {selectionBounds && (
+              <div
+                className="remote-selection-actions"
+                style={{
+                  left: (selectionBounds.x + 7) * zoom,
+                  top: (selectionBounds.y + 7) * zoom
+                }}
+              >
+                <span>{selectedStrokeIds.size} 条</span>
+                <button type="button" disabled={!connected} onClick={shareSelection}>发送到 AI</button>
+                <button type="button" className="is-danger" onClick={deleteSelection}>删除</button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
+
+      {totalSheets > 1 && (
+        <nav className="remote-page-flow" aria-label="同页纸张导航">
+          <button type="button" aria-label="上一张纸" disabled={!canNavigatePrevious} onClick={() => onNavigate('previous')}><ChevronUp /></button>
+          <span><strong>{sheetNumber}</strong><small>/{totalSheets}</small></span>
+          <button type="button" aria-label="下一张纸" disabled={!canNavigateNext} onClick={() => onNavigate('next')}><ChevronDown /></button>
+        </nav>
+      )}
 
       <div className="remote-canvas__identity">
         <span><strong>PDF {block.pageNumber ?? '—'} · 纸张 {sheetNumber}/{totalSheets}</strong></span>
@@ -828,7 +1006,8 @@ function ToolButton({
   danger = false,
   disabled = false,
   label,
-  onClick
+  onClick,
+  pressed
 }: {
   active?: boolean;
   children: ReactElement;
@@ -836,12 +1015,14 @@ function ToolButton({
   disabled?: boolean;
   label: string;
   onClick(): void;
+  pressed?: boolean;
 }): ReactElement {
   return (
     <button
       type="button"
       className={`remote-tool${active ? ' is-active' : ''}${danger ? ' is-danger' : ''}`}
       aria-label={label}
+      aria-pressed={pressed}
       title={label}
       disabled={disabled}
       onClick={onClick}
@@ -878,4 +1059,40 @@ function createRemoteId(prefix: string): string {
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
+}
+
+function readStoredBrush(): FavoriteBrush {
+  try {
+    return normalizeBrush(JSON.parse(localStorage.getItem(brushSettingsKey) ?? 'null')) ?? { color: colors[0], size: 4 };
+  } catch {
+    return { color: colors[0], size: 4 };
+  }
+}
+
+function readFavoriteBrushes(): FavoriteBrush[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(favoriteBrushesKey) ?? '[]');
+    return Array.isArray(parsed) ? parsed.flatMap((value) => normalizeBrush(value) ?? []).slice(-6) : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeBrush(value: unknown): FavoriteBrush | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+  const brush = value as Partial<FavoriteBrush>;
+  return typeof brush.color === 'string' && /^#[0-9a-f]{6}$/i.test(brush.color)
+    && typeof brush.size === 'number' && Number.isFinite(brush.size)
+    ? { color: brush.color.toLowerCase(), size: clamp(Math.round(brush.size * 2) / 2, 1, 40) }
+    : undefined;
+}
+
+function sameBrush(left: FavoriteBrush, right: FavoriteBrush): boolean {
+  return left.color.toLowerCase() === right.color.toLowerCase() && Math.abs(left.size - right.size) < 0.01;
+}
+
+function formatBrushSize(size: number): string {
+  return Number.isInteger(size) ? String(size) : size.toFixed(1);
 }

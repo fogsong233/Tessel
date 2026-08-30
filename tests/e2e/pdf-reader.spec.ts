@@ -395,8 +395,8 @@ test.describe('PDF reader flow', () => {
     }, { timeout: 8_000 }).toBeGreaterThan(3);
 
     await board.getByRole('button', { name: 'Pen tool' }).click();
-    await board.getByRole('button', { name: 'Stylus only' }).click();
-    await expect(board.getByRole('button', { name: 'Stylus only' })).toHaveAttribute('aria-pressed', 'true');
+    await board.getByRole('button', { name: 'Disable touch drawing' }).click();
+    await expect(board.getByRole('button', { name: 'Disable touch drawing' })).toHaveAttribute('aria-pressed', 'true');
     await surface.dispatchEvent('pointerdown', {
       pointerId: 30,
       pointerType: 'mouse',
@@ -587,6 +587,15 @@ test.describe('PDF reader flow', () => {
     const tablet = await tabletWindow;
     await expect(tablet.locator('.remote-app')).toBeVisible();
     await expect(tablet.locator('.remote-status.is-connected')).toBeVisible();
+    await tablet.getByRole('button', { name: '信任此设备' }).click();
+    await expect(tablet.getByRole('button', { name: '已信任此设备' })).toBeVisible();
+    await expect.poll(() => tablet.evaluate(() => Boolean(localStorage.getItem('tessel.lan-whiteboard.trusted-credential')))).toBe(true);
+    const invalidTokenUrl = new URL(url!);
+    invalidTokenUrl.searchParams.set('token', 'expired-token-fixture');
+    await tablet.goto(invalidTokenUrl.toString());
+    await expect(tablet.locator('.remote-app')).toBeVisible();
+    await expect(tablet.locator('.remote-status.is-connected')).toBeVisible();
+    await expect(tablet.getByRole('button', { name: '已信任此设备' })).toBeVisible();
     await tablet.getByRole('button', { name: '创建笔记' }).click();
 
     const tabletSurface = tablet.locator('.remote-canvas__paper');
@@ -600,6 +609,24 @@ test.describe('PDF reader flow', () => {
     expect(tabletToolsBox).toBeTruthy();
     expect(tabletToolsBox!.y).toBeGreaterThanOrEqual(tabletHeaderBox!.y);
     expect(tabletToolsBox!.y + tabletToolsBox!.height).toBeLessThanOrEqual(tabletHeaderBox!.y + tabletHeaderBox!.height + 1);
+    await expect.poll(async () => {
+      const [paper, viewport] = await Promise.all([
+        tabletSurface.boundingBox(),
+        tablet.locator('.remote-canvas__viewport').boundingBox()
+      ]);
+      return Boolean(paper && viewport
+        && Math.abs(paper.x + paper.width / 2 - (viewport.x + viewport.width / 2)) < 1
+        && Math.abs(paper.y + paper.height / 2 - (viewport.y + viewport.height / 2)) < 1);
+    }).toBe(true);
+
+    const brushWidth = tablet.getByRole('slider', { name: '笔刷宽度' });
+    await expect(brushWidth).toHaveValue('4');
+    await tablet.getByRole('button', { name: '收藏当前笔刷' }).click();
+    await expect(tablet.getByRole('button', { name: '取消收藏当前笔刷' })).toBeVisible();
+    await tablet.getByRole('button', { name: '增大笔刷宽度' }).click();
+    await expect(brushWidth).toHaveValue('5');
+    await tablet.getByRole('button', { name: '使用收藏笔刷 #171a16 4 像素' }).click();
+    await expect(brushWidth).toHaveValue('4');
     await expect(page.locator('.workspace-block-card--drawing')).toBeVisible();
     const surfaceBox = await tabletSurface.boundingBox();
     expect(surfaceBox).toBeTruthy();
@@ -625,8 +652,8 @@ test.describe('PDF reader flow', () => {
       return stored.workspaceBlocks.find((block) => block.kind === 'drawing')?.payload?.strokes?.[0]?.points?.length ?? 0;
     }).toBeGreaterThan(2);
 
-    await tablet.getByRole('button', { name: '仅触控笔书写' }).click();
-    await expect(tablet.getByRole('button', { name: '仅触控笔书写' })).toHaveClass(/is-active/);
+    await tablet.getByRole('button', { name: '禁用手指书写' }).click();
+    await expect(tablet.getByRole('button', { name: '已禁用手指书写' })).toHaveClass(/is-active/);
     await tablet.mouse.move(startX + 20, startY + 120);
     await tablet.mouse.down();
     await tablet.mouse.move(startX + 90, startY + 150, { steps: 5 });
@@ -678,6 +705,39 @@ test.describe('PDF reader flow', () => {
 
     await tablet.getByRole('button', { name: '显示纸张列表' }).click();
     await tablet.getByRole('button', { name: '新增纸张' }).click();
+    await expect(tablet.locator('.remote-canvas__identity')).toContainText('纸张 2/2');
+    await expect(tablet.getByRole('navigation', { name: '同页纸张导航' })).toBeVisible();
+    await tablet.locator('.remote-canvas__viewport').dispatchEvent('wheel', { deltaY: -120, deltaX: 0 });
+    await expect(tablet.locator('.remote-canvas__identity')).toContainText('纸张 1/2');
+    const swipeSurfaceBox = await tabletSurface.boundingBox();
+    expect(swipeSurfaceBox).toBeTruthy();
+    const swipeX = swipeSurfaceBox!.x + swipeSurfaceBox!.width / 2;
+    const swipeY = swipeSurfaceBox!.y + swipeSurfaceBox!.height / 2;
+    await tabletSurface.dispatchEvent('pointerdown', {
+      pointerId: 71,
+      pointerType: 'touch',
+      button: 0,
+      buttons: 1,
+      clientX: swipeX,
+      clientY: swipeY
+    });
+    await tabletSurface.dispatchEvent('pointermove', {
+      pointerId: 71,
+      pointerType: 'touch',
+      button: 0,
+      buttons: 1,
+      clientX: swipeX,
+      clientY: swipeY - 130
+    });
+    await expect(tablet.locator('.remote-canvas__stage')).toHaveAttribute('style', /translateY\(-/);
+    await tabletSurface.dispatchEvent('pointerup', {
+      pointerId: 71,
+      pointerType: 'touch',
+      button: 0,
+      buttons: 0,
+      clientX: swipeX,
+      clientY: swipeY - 130
+    });
     await expect(tablet.locator('.remote-canvas__identity')).toContainText('纸张 2/2');
     await tablet.getByRole('button', { name: '显示纸张列表' }).click();
     await expect(tablet.locator('.remote-canvas-row')).toHaveCount(2);
