@@ -5,6 +5,7 @@ import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { auditInterfaces } from './helpers/uiAudit';
 
 const rootDir = resolve(__dirname, '../..');
 const mainEntry = join(rootDir, 'out/main/index.js');
@@ -49,7 +50,8 @@ test.describe('PDF reader flow', () => {
         FAKE_CODEX_AUTH: useExecTransport ? 'api-key' : 'chatgpt',
         TESSEL_CODEX_TRANSPORT: testInfo.title.includes('exec checkpoint') ? 'exec' : '',
         TESSEL_LAN_WHITEBOARD_PORT: '0',
-        SIDELIGHT_E2E_PDF_LOAD_DELAY_MS: testInfo.title.includes('stable while loading') ? '900' : '',
+        SIDELIGHT_E2E_PDF_LOAD_DELAY_MS: testInfo.title.includes('stable while loading') ? '900'
+          : testInfo.title.includes('visually audits') ? '2500' : '',
         SIDELIGHT_USER_DATA_DIR: userDataDir,
         SIDELIGHT_E2E_HIDE_WINDOWS: '1',
         SIDELIGHT_E2E_ALLOW_LOOPBACK_MEDIA: '1'
@@ -76,6 +78,22 @@ test.describe('PDF reader flow', () => {
       };
       return store.documents[0];
     }).toMatchObject({ id: `pdf_${expectedHash}`, fingerprint: { hash: expectedHash } });
+  });
+
+  test('visually audits every settings section and reader surface', async () => {
+    test.setTimeout(480_000);
+    await auditInterfaces(app, page, rootDir, () => selectPdfText(page));
+  });
+
+  test('clears PDF search highlights when the search field is emptied', async () => {
+    await expect(page.locator('.textLayer').first()).toContainText('Reader fixture');
+    const search = page.getByPlaceholder('Search in PDF');
+    await search.fill('Alpha');
+    await search.press('Enter');
+    await expect(page.locator('.textLayer .highlight').first()).toBeVisible();
+    await search.fill('');
+    await expect(page.locator('.textLayer .highlight')).toHaveCount(0);
+    await expect(page.locator('.textLayer').first()).toContainText('Reader fixture quote Alpha Beta');
   });
 
   test('keeps the sidebar and PDF anchor stable while loading and zooming', async () => {
@@ -311,6 +329,9 @@ test.describe('PDF reader flow', () => {
     await page.mouse.move(drawingX - 150, drawingY + 15, { steps: 8 });
     await page.mouse.up();
     await expect(surface.locator('path')).toHaveCount(1);
+    const surfaceAfterStroke = await surface.boundingBox();
+    expect(Math.abs(surfaceAfterStroke!.x - surfaceBox!.x), 'zoom settling must not scroll during handwriting').toBeLessThan(2);
+    expect(Math.abs(surfaceAfterStroke!.y - surfaceBox!.y), 'zoom settling must not scroll during handwriting').toBeLessThan(2);
     await board.getByRole('button', { name: 'Undo stroke' }).click();
     await expect(surface.locator('path')).toHaveCount(0);
     await board.getByRole('button', { name: 'Redo stroke' }).click();
@@ -632,7 +653,7 @@ test.describe('PDF reader flow', () => {
         && Math.abs(paper.y + paper.height / 2 - (viewport.y + viewport.height / 2)) < 1);
     }).toBe(true);
 
-    await tablet.getByRole('button', { name: '画笔设置' }).click();
+    await tablet.getByRole('button', { name: '画笔设置', exact: true }).click();
     const brushPanel = tablet.getByRole('region', { name: '画笔设置' });
     await expect(brushPanel).toBeVisible();
     const brushPanelBox = await brushPanel.boundingBox();
@@ -650,7 +671,7 @@ test.describe('PDF reader flow', () => {
     await expect(brushWidth).toHaveValue('4');
     await tablet.getByRole('slider', { name: '笔触跟手程度' }).fill('100');
     await tablet.getByRole('slider', { name: '笔触平滑程度' }).fill('35');
-    await tablet.getByRole('button', { name: '画笔设置' }).click();
+    await tablet.getByRole('button', { name: '画笔设置', exact: true }).click();
     await expect(page.locator('.workspace-block-card--drawing')).toBeVisible();
     const surfaceBox = await tabletSurface.boundingBox();
     expect(surfaceBox).toBeTruthy();

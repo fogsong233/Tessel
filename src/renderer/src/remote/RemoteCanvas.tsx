@@ -5,17 +5,19 @@ import {
   type WheelEvent as ReactWheelEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState
 } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowLeftRight,
   ChevronDown,
   ChevronUp,
-  CircleDashed,
+  LassoSelect,
   Eraser,
   Hand,
-  LocateFixed,
+  Scan,
   Maximize2,
   Minus,
   PenLine,
@@ -24,7 +26,8 @@ import {
   Slash,
   Star,
   Trash2,
-  Undo2
+  Undo2,
+  X
 } from 'lucide-react';
 import type { WorkspaceBlock } from '../../../shared/domain';
 import type { LanDrawingPoint, LanDrawingStroke, LanWhiteboardClientMessage } from '../../../shared/lanWhiteboard';
@@ -132,6 +135,20 @@ export function RemoteCanvas({
   const [follow, setFollow] = useState(initialBrushRef.current.follow);
   const [favoriteBrushes, setFavoriteBrushes] = useState<FavoriteBrush[]>(readFavoriteBrushes);
   const [brushPanelOpen, setBrushPanelOpen] = useState(false);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const [brushPanelTop, setBrushPanelTop] = useState(72);
+  useLayoutEffect(() => {
+    if (!brushPanelOpen) return;
+    const measure = (): void => setBrushPanelTop((toolbarRef.current?.getBoundingClientRect().bottom ?? 64) + 8);
+    const escape = (event: KeyboardEvent): void => { if (event.key === 'Escape') setBrushPanelOpen(false); };
+    measure();
+    window.addEventListener('resize', measure);
+    window.addEventListener('keydown', escape);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('keydown', escape);
+    };
+  }, [brushPanelOpen]);
   const [penOnly, setPenOnly] = useState(payload.penOnly);
   const [zoom, setZoom] = useState(1);
   const [selectionNotice, setSelectionNotice] = useState<string>();
@@ -852,21 +869,22 @@ export function RemoteCanvas({
 
   return (
     <section className={`remote-canvas${entryDirection ? ` is-entering-${entryDirection}` : ''}`}>
-      <div className="remote-tools" aria-label="手写工具栏">
+      <div className="remote-tools" ref={toolbarRef} aria-label="手写工具栏">
         <ToolButton active={tool === 'pen' && !temporaryEraser} pressed={brushPanelOpen} label="画笔设置" onClick={() => { setTool('pen'); setBrushPanelOpen((value) => !value); }}>
           <span className="remote-pen-tool-icon"><PenLine /><i style={{ background: color }} /></span>
         </ToolButton>
         <ToolButton active={tool === 'eraser' || temporaryEraser} label="橡皮" onClick={() => { setTool('eraser'); setBrushPanelOpen(false); }}><Eraser /></ToolButton>
-        <ToolButton active={tool === 'lasso'} label="圈选" onClick={() => { setTool('lasso'); setBrushPanelOpen(false); }}><CircleDashed /></ToolButton>
+        <ToolButton active={tool === 'lasso'} label="圈选" onClick={() => { setTool('lasso'); setBrushPanelOpen(false); }}><LassoSelect /></ToolButton>
         <ToolButton active={tool === 'hand'} label="移动" onClick={() => { setTool('hand'); setBrushPanelOpen(false); }}><Hand /></ToolButton>
         <ToolButton active={penOnly} pressed={penOnly} label={penOnly ? '已禁用手指书写' : '禁用手指书写'} onClick={togglePenOnly}>
           <span className="remote-touch-block-icon"><Hand /><Slash /></span>
         </ToolButton>
         <span className="remote-tools__divider" />
-        <section className={`remote-brush-panel${brushPanelOpen ? ' is-open' : ''}`} aria-label="画笔设置" aria-hidden={!brushPanelOpen}>
+        {createPortal(<section className={`remote-brush-panel${brushPanelOpen ? ' is-open' : ''}`} style={{ '--remote-brush-top': `${brushPanelTop}px` } as CSSProperties} aria-label="画笔设置" aria-hidden={!brushPanelOpen}>
           <header>
             <strong>画笔</strong>
             <small>调节后仅影响新笔迹</small>
+            <button type="button" className="remote-brush-panel__close" aria-label="关闭画笔设置" title="关闭画笔设置" onClick={() => setBrushPanelOpen(false)}><X /></button>
           </header>
         <div className="remote-color-row" aria-label="颜色">
           {colors.map((preset) => (
@@ -918,7 +936,7 @@ export function RemoteCanvas({
             <span><strong>平滑</strong><output>{Math.round(smoothing * 100)}</output></span>
             <input type="range" min="0" max="100" step="1" value={Math.round(smoothing * 100)} aria-label="笔触平滑程度" onChange={(event) => setSmoothing(Number(event.target.value) / 100)} />
           </label>
-        </section>
+        </section>, document.body) as unknown as ReactElement}
         <span className="remote-tools__spacer" />
         <ToolButton disabled={undoRef.current.length === 0 && strokes.length === 0} label="撤销" onClick={undo}><Undo2 /></ToolButton>
         <ToolButton disabled={redoRef.current.length === 0} label="重做" onClick={redo}><Redo2 /></ToolButton>
@@ -1019,7 +1037,7 @@ export function RemoteCanvas({
         <button type="button" aria-label="缩小" onClick={() => setZoomAround(zoomRef.current / 1.18)}><Minus /></button>
         <button type="button" className="remote-zoom__value" onClick={fitCanvas}>{Math.round(zoom * 100)}%</button>
         <button type="button" aria-label="放大" onClick={() => setZoomAround(zoomRef.current * 1.18)}><Plus /></button>
-        <button type="button" aria-label="适合屏幕" onClick={fitCanvas}><LocateFixed /></button>
+        <button type="button" aria-label="适合屏幕" onClick={fitCanvas}><Scan /></button>
       </div>
       {!connected && <div className="remote-canvas__offline">正在重新连接，笔迹会在连接恢复后继续同步</div>}
       {selectionNotice && <div className="remote-canvas__notice" role="status">{selectionNotice}</div>}

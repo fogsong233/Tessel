@@ -9,7 +9,7 @@ import {
   useState
 } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeftRight, ChevronUp, CircleDashed, Eraser, Hand, ImagePlus, Maximize2, PenLine, Redo2, Slash, SlidersHorizontal, Trash2, Undo2, X } from 'lucide-react';
+import { ArrowLeftRight, ChevronUp, LassoSelect, Eraser, Hand, Send, Maximize2, PenLine, Redo2, Slash, SlidersHorizontal, Trash2, Undo2, X } from 'lucide-react';
 import type { WorkspaceBlock } from '../../../shared/domain';
 import { createId } from '../../../shared/ids';
 import type { LanDrawingPoint, LanDrawingStroke } from '../../../shared/lanWhiteboard';
@@ -49,6 +49,7 @@ interface SelectionGesture {
 }
 
 export interface WorkspaceDrawingLabels {
+  close: string;
   clearCanvas: string;
   delete: string;
   deleteSelection: string;
@@ -593,7 +594,7 @@ export function WorkspaceDrawingBlock({
             <Eraser size={15} />
           </button>
           <button type="button" className={tool === 'lasso' ? 'is-active' : ''} title={text.lassoTool} aria-label={text.lassoTool} onClick={() => { setTool('lasso'); setBrushPanelOpen(false); }}>
-            <CircleDashed size={15} />
+            <LassoSelect size={15} />
           </button>
           <button type="button" className={penOnly ? 'is-active' : ''} title={text.penOnlyMode} aria-label={text.penOnlyMode} aria-pressed={penOnly} onClick={() => savePenOnly(!penOnly)}>
             <span className="workspace-drawing__touch-block-icon"><Hand size={15} /><Slash size={18} /></span>
@@ -603,7 +604,8 @@ export function WorkspaceDrawingBlock({
             <header>
               <strong>{text.penTool}</strong>
               <small>{Math.round(follow * 100)}%</small>
-              <button type="button" className="is-danger" title={text.clearCanvas} aria-label={text.clearCanvas} disabled={strokes.length === 0} onClick={() => saveStrokes([])}><X size={14} /></button>
+              <button type="button" className="is-danger" title={text.clearCanvas} aria-label={text.clearCanvas} disabled={strokes.length === 0} onClick={() => saveStrokes([])}><Trash2 size={14} /></button>
+              <button type="button" title={text.close} aria-label={text.close} onClick={() => setBrushPanelOpen(false)}><X size={14} /></button>
             </header>
           {drawingColors.map((preset) => (
             <button
@@ -662,7 +664,7 @@ export function WorkspaceDrawingBlock({
           onPointerDown={(event) => event.stopPropagation()}
         >
           <span>{selectedStrokeIds.size}</span>
-          <button type="button" title={text.sendSelectionToAi} aria-label={text.sendSelectionToAi} onClick={shareSelection}><ImagePlus size={13} />{text.sendSelectionToAi}</button>
+          <button type="button" title={text.sendSelectionToAi} aria-label={text.sendSelectionToAi} onClick={shareSelection}><Send size={13} />{text.sendSelectionToAi}</button>
           <button type="button" className="is-danger" title={text.deleteSelection} aria-label={text.deleteSelection} onClick={removeSelection}><Trash2 size={13} /></button>
         </div>
       )}

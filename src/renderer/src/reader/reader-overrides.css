@@ -275,6 +275,7 @@ body.is-moving-workspace-block .workspace-image__viewport {
   align-items: center;
   gap: 5px;
   min-width: 0;
+  max-width: min(100%, calc(var(--reader-viewport-width, 100vw) - 96px));
   padding: 5px 7px 5px 8px;
   border-bottom: 1px solid #d9dcd5;
   background: #f7f3d9;
@@ -282,8 +283,8 @@ body.is-moving-workspace-block .workspace-image__viewport {
 
 .workspace-notebook__mark { display: grid; width: 27px; height: 27px; place-items: center; color: #5f5a36; border-radius: 5px; background: #e9dfa4; }
 .workspace-notebook__title { display: flex; min-width: 0; flex-direction: column; }
-.workspace-notebook__title strong { font-size: 10px; line-height: 1.2; }
-.workspace-notebook__title small { color: #817d69; font-size: 8px; }
+.workspace-notebook__title strong { font-size: 12px; line-height: 1.2; }
+.workspace-notebook__title small { color: #817d69; font-size: 10px; }
 .workspace-notebook__header button {
   display: grid;
   width: 29px;
@@ -311,7 +312,7 @@ body.is-moving-workspace-block .workspace-image__viewport {
 .workspace-notebook__pages::-webkit-scrollbar-thumb { border-radius: 999px; background: rgba(67, 73, 64, 0.38); }
 
 .workspace-notebook__sheet + .workspace-notebook__sheet { margin-top: 14px; }
-.workspace-notebook__sheet-label { display: flex; min-height: 25px; padding: 0 3px; align-items: center; justify-content: space-between; color: #747a70; font-size: 8px; font-weight: 680; }
+.workspace-notebook__sheet-label { display: flex; min-height: 29px; max-width: min(100%, calc(var(--reader-viewport-width, 100vw) - 114px)); padding: 0 3px; align-items: center; justify-content: space-between; color: #747a70; font-size: 10px; font-weight: 680; }
 .workspace-notebook__sheet-label small { color: #7a813f; }
 .workspace-notebook__sheet-actions { display: inline-flex; align-items: center; gap: 5px; }
 .workspace-notebook__delete-sheet {
@@ -369,8 +370,8 @@ body.is-moving-workspace-block .workspace-image__viewport {
 }
 
 .workspace-drawing__toolbar.is-collapsed {
-  right: 8px;
-  left: auto;
+  right: auto;
+  left: 8px;
   width: 33px;
   min-height: 33px;
   padding: 2px;
@@ -474,9 +475,9 @@ body.is-moving-workspace-block .workspace-image__viewport {
 
 .workspace-drawing__custom-color input {
   position: absolute;
-  inset: -4px;
-  width: 30px;
-  height: 30px;
+  inset: 0;
+  width: 22px;
+  height: 22px;
   padding: 0;
   border: 0;
   cursor: pointer;
@@ -537,7 +538,7 @@ body.is-moving-workspace-block .workspace-image__viewport {
 .workspace-drawing__brush-panel > header {
   display: grid;
   grid-column: 1 / -1;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 8px;
 }

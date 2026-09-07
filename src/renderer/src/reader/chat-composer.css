@@ -1,12 +1,12 @@
 /* Canonical chat surface. This file is intentionally loaded after the legacy
    reader stylesheet so composer geometry has one predictable final owner. */
 .chat-composer {
-  --chat-control-size: 34px;
+  --chat-control-size: max(34px, calc(var(--tessel-composer-font-size, 14px) * 1.4 + 12px));
   --chat-control-radius: 12px;
   position: relative;
   display: grid;
   gap: 8px;
-  padding: 10px clamp(14px, 3vw, 24px) 12px;
+  padding: 10px 14px 12px;
   border-top: 1px solid #e8eae9;
   background: rgba(255, 255, 255, 0.98);
 }
@@ -52,7 +52,7 @@
   background: transparent;
   font-family: var(--tessel-agent-font, Inter, ui-sans-serif, system-ui, sans-serif);
   font-size: var(--tessel-composer-font-size, 14px);
-  line-height: 22px;
+  line-height: max(22px, 1.4em);
   outline: 0;
   scrollbar-width: thin;
   scrollbar-color: rgba(56, 63, 59, 0.25) transparent;
@@ -96,9 +96,18 @@
   min-width: 0;
 }
 
+.chat-config-option {
+  text-align: left;
+}
+
+.chat-config-option > span {
+  justify-self: stretch;
+  text-align: left;
+}
+
 .chat-composer__controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(32px, auto);
   align-items: center;
   gap: 5px;
   min-width: 0;
@@ -116,7 +125,7 @@
 
 .chat-composer .chat-config-trigger--permission {
   width: auto;
-  max-width: min(132px, 36%);
+  max-width: 132px;
 }
 
 .chat-command-notice {

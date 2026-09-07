@@ -1,8 +1,9 @@
-import { type ReactElement } from 'react';
+import { type ReactElement, useRef } from 'react';
 import { ArrowLeftRight, FileText, Plus, Trash2 } from 'lucide-react';
 import type { WorkspaceBlock } from '../../../shared/domain';
 import type { LanDrawingStroke } from '../../../shared/lanWhiteboard';
 import { WorkspaceDrawingBlock, drawingBlockSide, type WorkspaceDrawingLabels } from './WorkspaceDrawingBlock';
+import { useReaderViewport } from './useReaderViewport';
 
 export interface WorkspaceDrawingNotebookLabels extends WorkspaceDrawingLabels {
   addNotebookSheet: string;
@@ -36,6 +37,8 @@ export function WorkspaceDrawingNotebook({
   onSave,
   onShareSelection
 }: WorkspaceDrawingNotebookProps): ReactElement {
+  const pagesRef = useRef<HTMLDivElement>(null);
+  const pagesSize = useReaderViewport(pagesRef);
   const sheets = [...blocks].sort(compareSheets);
   const side = drawingBlockSide(sheets[0]);
   const nextSide = side === 'left' ? 'right' : 'left';
@@ -56,11 +59,11 @@ export function WorkspaceDrawingNotebook({
           onClick={() => onMoveSide(nextSide)}
         ><ArrowLeftRight size={14} /></button>
       </header>
-      <div className="workspace-notebook__pages">
+      <div className="workspace-notebook__pages" ref={pagesRef}>
         {sheets.map((block, index) => {
           const canvasWidth = finitePositive(block.payload?.canvasWidth, block.width || 612);
           const canvasHeight = finitePositive(block.payload?.canvasHeight, block.height || 792);
-          const sheetWidth = Math.max(240, width - 22);
+          const sheetWidth = Math.max(1, (pagesSize.width || width - 14) - 18);
           const sheetHeight = sheetWidth * canvasHeight / canvasWidth;
           return (
             <article className="workspace-notebook__sheet" data-sheet-id={block.id} key={block.id}>

@@ -8,7 +8,7 @@ import {
   PanelLeftOpen,
   PenLine,
   Plus,
-  Radio,
+  NotebookPen,
   RefreshCw,
   ShieldCheck,
   ShieldPlus,
@@ -184,7 +184,7 @@ export function RemoteWhiteboardApp(): ReactElement {
                       onClick={() => { setPageDirection(undefined); setSelectedCanvasId(block.id); if (innerWidth < 760) setSidebarOpen(false); }}
                     >
                       <span className="remote-canvas-row__preview">
-                        <Radio />
+                        <NotebookPen />
                       </span>
                       <span>
                         <strong>PDF 第 {block.pageNumber ?? '—'} 页 · 纸张 {sheetNumber(snapshot?.canvases ?? [], block)}</strong>

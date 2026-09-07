@@ -6720,7 +6720,7 @@ body.is-resizing-workspace-block * {
   gap: 14px;
 }
 
-.reader-settings__fields label {
+.reader-settings__fields > label {
   display: grid;
   min-width: 0;
   gap: 7px;
@@ -6733,7 +6733,7 @@ body.is-resizing-workspace-block * {
   grid-column: 1 / -1;
 }
 
-.reader-settings__fields input:not([type="checkbox"]),
+.reader-settings__fields input:not([type="checkbox"]):not([type="range"]):not([type="color"]),
 .reader-settings__fields select {
   width: 100%;
   min-width: 0;
@@ -6749,7 +6749,7 @@ body.is-resizing-workspace-block * {
   outline: none;
 }
 
-.reader-settings__fields input:not([type="checkbox"]):focus,
+.reader-settings__fields input:not([type="checkbox"]):not([type="range"]):not([type="color"]):focus,
 .reader-settings__fields select:focus {
   border-color: #4b8e6d;
   box-shadow: 0 0 0 3px rgba(76, 146, 112, 0.14);
@@ -8224,8 +8224,8 @@ body.is-resizing-workspace-block * {
   z-index: 18;
   flex: 0 0 var(--dock-lane-width);
   width: var(--dock-lane-width);
-  height: calc(100vh - 28px);
-  max-height: calc(100vh - 28px);
+  height: var(--dock-available-height, calc(100vh - 82px));
+  max-height: var(--dock-available-height, calc(100vh - 82px));
   margin-left: var(--dock-gap);
   pointer-events: none;
 }
@@ -8288,8 +8288,8 @@ body.is-resizing-workspace-block * {
 
   .reader-float-dock,
   .reader-float-dock.is-chat-open {
-    right: 18px;
-    width: calc(100% - 36px);
+    right: auto;
+    width: 100%;
   }
 }
 
@@ -11365,7 +11365,7 @@ body.is-moving-dock .reader-float-dock.is-chat-open {
   background: #ffffff;
 }
 
-.reader-settings__fields label {
+.reader-settings__fields > label {
   display: grid;
   grid-template-columns: minmax(150px, 0.8fr) minmax(260px, 1.2fr);
   align-items: center;
@@ -11378,7 +11378,7 @@ body.is-moving-dock .reader-float-dock.is-chat-open {
   font-weight: 620;
 }
 
-.reader-settings__fields label:last-child {
+.reader-settings__fields > label:last-child {
   border-bottom: 0;
 }
 
@@ -11387,7 +11387,7 @@ body.is-moving-dock .reader-float-dock.is-chat-open {
   grid-column: auto;
 }
 
-.reader-settings__fields input:not([type="checkbox"]),
+.reader-settings__fields input:not([type="checkbox"]):not([type="range"]):not([type="color"]),
 .reader-settings__fields select {
   min-height: 36px;
   border-color: #dfe1e2;
@@ -11395,7 +11395,7 @@ body.is-moving-dock .reader-float-dock.is-chat-open {
   background: #ffffff;
 }
 
-.reader-settings__fields input:not([type="checkbox"]):focus,
+.reader-settings__fields input:not([type="checkbox"]):not([type="range"]):not([type="color"]):focus,
 .reader-settings__fields select:focus {
   border-color: #aeb8be;
   box-shadow: 0 0 0 3px rgba(80, 105, 120, 0.08);
@@ -11545,7 +11545,7 @@ body.is-moving-dock .reader-float-dock.is-chat-open {
   border-radius: var(--tessel-control-radius);
 }
 
-.reader-settings__fields input:not([type="checkbox"]),
+.reader-settings__fields input:not([type="checkbox"]):not([type="range"]):not([type="color"]),
 .reader-settings__fields select,
 .reader-settings__color-control input[type="color"],
 .reader-settings__color-control .quiet-button,
@@ -11852,7 +11852,7 @@ body.is-moving-dock .reader-float-dock.is-chat-open {
     margin-bottom: 28px;
   }
 
-  .reader-settings__fields label,
+  .reader-settings__fields > label,
   .reader-settings__update-summary > div {
     grid-template-columns: 1fr;
     gap: 8px;

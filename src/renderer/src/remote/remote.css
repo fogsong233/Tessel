@@ -324,7 +324,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .remote-sidebar__empty p { max-width: 180px; margin: 6px 0; font-size: 10px; line-height: 1.6; }
 
 .remote-sidebar-backdrop { display: none; }
-.remote-workspace { position: relative; grid-row: 2; grid-column: 2; min-width: 0; min-height: 0; overflow: hidden; }
+.remote-workspace { position: relative; grid-row: 2; grid-column: 2; min-width: 0; min-height: 0; overflow: hidden; container: canvas / inline-size; }
 .remote-canvas { position: absolute; inset: 0; min-width: 0; min-height: 0; }
 
 .remote-tools {
@@ -350,8 +350,8 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 .remote-tool {
   display: flex;
-  width: 39px;
-  height: 37px;
+  width: 44px;
+  height: 40px;
   padding: 0;
   flex: 0 0 auto;
   align-items: center;
@@ -451,12 +451,15 @@ button { -webkit-tap-highlight-color: transparent; }
 .remote-size output { width: 24px; color: #656a5e; font-size: 10px; font-weight: 700; text-align: center; font-variant-numeric: tabular-nums; }
 
 .remote-brush-panel {
-  position: absolute;
-  z-index: 2;
-  top: calc(100% + 9px);
+  position: fixed;
+  z-index: 50;
+  top: var(--remote-brush-top, 72px);
   left: 50%;
   display: none;
   width: min(470px, calc(100vw - 24px));
+  max-height: calc(100dvh - var(--remote-brush-top, 72px) - 12px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 12px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: center;
@@ -485,9 +488,25 @@ button { -webkit-tap-highlight-color: transparent; }
 .remote-brush-panel > .remote-tool {
   position: absolute;
   top: 6px;
-  right: 7px;
+  right: 45px;
   background: #eef0e9;
 }
+.remote-brush-panel__close {
+  position: absolute;
+  top: 6px;
+  right: 7px;
+  display: grid;
+  width: 32px;
+  height: 37px;
+  padding: 0;
+  place-items: center;
+  color: #62665b;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+}
+.remote-brush-panel__close:hover { background: #eceee7; }
+.remote-brush-panel__close svg { width: 18px; height: 18px; }
 .remote-brush-panel > .remote-brush-favorites { min-width: 0; grid-column: 1 / -1; overflow: hidden; }
 .remote-brush-panel > .remote-size {
   width: 100%;
@@ -658,7 +677,7 @@ button { -webkit-tap-highlight-color: transparent; }
   box-shadow: 0 8px 24px rgba(35, 38, 30, 0.12);
   backdrop-filter: blur(14px);
 }
-.remote-canvas__identity > span { display: flex; min-width: 110px; max-width: 220px; padding: 0 9px; flex-direction: column; }
+.remote-canvas__identity > span { display: flex; flex: 1 1 auto; min-width: 0; max-width: 220px; padding: 0 9px; flex-direction: column; }
 .remote-canvas__identity small,
 .remote-canvas__identity strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .remote-canvas__identity small { color: #8a8f84; font-size: 8px; }
@@ -675,11 +694,18 @@ button { -webkit-tap-highlight-color: transparent; }
   corner-shape: squircle;
   background: transparent;
   font-size: 9px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .remote-canvas__identity button:hover { background: #eceee7; }
 .remote-canvas__identity button:disabled { opacity: 0.35; }
 .remote-canvas__identity button.is-danger { color: #ad3d38; }
 .remote-canvas__identity button svg { width: 14px; }
+
+@container canvas (max-width: 620px) {
+  .remote-canvas__identity { max-width: calc(100% - 200px); }
+  .remote-canvas__identity button { width: 30px; padding: 0; gap: 0; justify-content: center; font-size: 0; }
+}
 
 .remote-page-flow {
   position: absolute;
@@ -806,7 +832,7 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 @media (max-width: 560px) {
-  .remote-app { --header-height: 56px; }
+  .remote-app { --header-height: 112px; }
   .remote-header { gap: 7px; padding-left: 7px; padding-right: 8px; }
   .remote-header__logo { display: none; }
   .remote-header__brand { gap: 4px; }
@@ -816,8 +842,7 @@ button { -webkit-tap-highlight-color: transparent; }
   .remote-status > span { display: none; }
   .remote-header__button,
   .remote-header__sidebar-toggle { width: 34px; height: 34px; }
-  .remote-tools { top: calc(var(--header-height) + 8px); max-width: calc(100vw - 16px); min-height: 45px; padding: 4px; }
-  .remote-tool { width: 35px; height: 35px; }
+  .remote-tools { top: calc(env(safe-area-inset-top) + 58px); max-width: calc(100vw - 16px); min-height: 45px; padding: 4px; }
   .remote-color-row .remote-color:nth-child(n + 5):not(:last-child) { display: none; }
   .remote-size { width: 154px; }
   .remote-size > span,
@@ -828,6 +853,12 @@ button { -webkit-tap-highlight-color: transparent; }
   .remote-zoom { right: 10px; bottom: max(10px, env(safe-area-inset-bottom)); }
   .remote-canvas__identity { right: 10px; bottom: 54px; left: 10px; max-width: none; }
   .remote-canvas__identity > span { flex: 1; }
+}
+
+@media (min-width: 561px) and (max-width: 680px) {
+  .remote-app { --header-height: 112px; }
+  .remote-header { align-items: start; padding-top: calc(env(safe-area-inset-top) + 8px); }
+  .remote-tools { top: calc(env(safe-area-inset-top) + 58px); max-width: calc(100vw - 16px); }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -9,6 +9,7 @@ import {
   type SetStateAction,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -40,6 +41,7 @@ import {
   Bookmark,
   BookmarkPlus,
   ChevronDown,
+  ChevronUp,
   ChevronsLeft,
   ChevronsRight,
   Check,
@@ -53,6 +55,8 @@ import {
   Highlighter,
   Languages,
   ListTree,
+  NotebookPen,
+  Paperclip,
   MessageCircle,
   Minus,
   Move,
@@ -60,6 +64,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  ShieldAlert,
   Pin,
   PinOff,
   PenLine,
@@ -113,6 +118,7 @@ import { WorkspaceDrawingNotebook } from './reader/WorkspaceDrawingNotebook';
 import { WorkspaceImageBlock, imageBlockPayload } from './reader/WorkspaceImageBlock';
 import { readerText, type ReaderText } from './i18n/readerText';
 import { loadCodexModels, resolveCodexModelCommand } from './reader/codexConversation';
+import { useReaderViewport } from './reader/useReaderViewport';
 import {
   type ZoomAnchor,
   prepareZoomScrollSpace,
@@ -368,6 +374,7 @@ export function PdfReader({
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const readerViewport = useReaderViewport(stageRef);
   const runtimeRef = useRef<PdfRuntime>();
   const marksRef = useRef(marks);
   const selectionColorsRef = useRef(normalizeSelectionColors(selectionColors));
@@ -389,6 +396,7 @@ export function PdfReader({
   const zoomPageLockRef = useRef<ZoomPageLock>();
   const zoomLockVersionRef = useRef(0);
   const zoomLayoutTimersRef = useRef<number[]>([]);
+  const zoomLayoutVersionRef = useRef(0);
   const pendingRevealScrollTopRef = useRef<number>();
   const lastPdfReadingIntentRef = useRef(0);
   const selectionMouseUpTimerRef = useRef<number>();
@@ -565,21 +573,30 @@ export function PdfReader({
         ? 'chat'
         : dockTab;
   const defaultDockWidth = noteEditorNote ? 880 : hasOpenDock ? 560 : 372;
-  const resolvedDockWidth = dockWidth === undefined
-    ? defaultDockWidth
-    : noteEditorNote
-      ? Math.max(760, dockWidth)
-      : dockWidth;
+  const preferredDockWidth = dockWidth ?? defaultDockWidth;
+  const maximumDockWidth = readerViewport.width > 0
+    ? Math.max(300, readerViewport.width - Math.min(320, readerViewport.width * 0.4) - dockHandleGutter)
+    : preferredDockWidth;
+  const resolvedDockWidth = Math.min(preferredDockWidth, maximumDockWidth);
+  const maximumDockOffsetY = Math.max(0, readerViewport.height - 44 - 360);
+  useLayoutEffect(() => {
+    setDockOffset((current) => {
+      const y = clamp(current.y, 0, maximumDockOffsetY);
+      return y === current.y ? current : { ...current, y };
+    });
+  }, [maximumDockOffsetY]);
   const stageStyle = useMemo(
     () => ({
       '--dock-panel-width': `${resolvedDockWidth}px`,
+      '--reader-viewport-width': `${readerViewport.width}px`,
       '--dock-lane-width': `${resolvedDockWidth + dockHandleGutter}px`,
       '--dock-offset-x': `${dockOffset.x}px`,
       '--dock-offset-y': `${dockOffset.y}px`,
+      '--dock-available-height': `${Math.max(200, readerViewport.height - 44 - Math.max(0, dockOffset.y))}px`,
       ...selectionColorCssVars(resolvedSelectionColors),
       ...(workspaceLeftGutter > 0 ? { '--canvas-left-gutter': `${workspaceLeftGutter}px` } : {})
     }) as CSSProperties,
-    [dockOffset.x, dockOffset.y, resolvedDockWidth, resolvedSelectionColors, workspaceLeftGutter]
+    [dockOffset.x, dockOffset.y, readerViewport.width, readerViewport.height, resolvedDockWidth, resolvedSelectionColors, workspaceLeftGutter]
   );
 
   const closeNoteForForeground = useCallback((nextNoteId?: string): void => {
@@ -1494,36 +1511,30 @@ export function PdfReader({
       return;
     }
 
-    window.requestAnimationFrame(() => {
-      const dock = container.querySelector<HTMLElement>('.reader-dock-lane');
-      if (!dock) {
-        return;
-      }
+    const dock = container.querySelector<HTMLElement>('.reader-dock-lane');
+    if (!dock) {
+      return;
+    }
 
-      const viewportRect = container.getBoundingClientRect();
-      const dockRect = dock.getBoundingClientRect();
-      const delta = dockRect.right - viewportRect.right;
-      if (Math.abs(delta) > 1) {
-        container.scrollLeft += delta;
-      }
-    });
+    const viewportRect = container.getBoundingClientRect();
+    const dockRect = dock.getBoundingClientRect();
+    const delta = dockRect.right - (viewportRect.left + container.clientWidth);
+    if (Math.abs(delta) > 1) {
+      container.scrollLeft += delta;
+    }
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!source || !hasOpenDock) {
       return;
     }
 
-    let secondFrame = 0;
-    const frame = window.requestAnimationFrame(() => {
-      alignDockRight();
-      secondFrame = window.requestAnimationFrame(alignDockRight);
-    });
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.cancelAnimationFrame(secondFrame);
-    };
-  }, [activeConversationId, alignDockRight, dockTab, hasOpenDock, noteEditorNote?.id, source, transientAid?.id]);
+    // Keep controls in bounds in the same commit as their resized host. Chaining
+    // delayed frames could otherwise race a click/focus in the model menu.
+    alignDockRight();
+    const frame = window.requestAnimationFrame(alignDockRight);
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeConversationId, alignDockRight, dockTab, hasOpenDock, noteEditorNote?.id, readerViewport.width, readerViewport.height, resolvedDockWidth, source, transientAid?.id]);
 
   useEffect(() => {
     if (leftPanelOpen || hasOpenDock || status !== 'ready') {
@@ -1629,6 +1640,12 @@ export function PdfReader({
     }, 350);
   }, []);
 
+  const cancelZoomSettling = useCallback((): void => {
+    zoomLayoutVersionRef.current += 1;
+    zoomLayoutTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    zoomLayoutTimersRef.current = [];
+  }, []);
+
   const applyZoomAtAnchor = useCallback((anchor: ZoomAnchor, nextScale: number): void => {
     const runtime = runtimeRef.current;
     const container = containerRef.current;
@@ -1646,12 +1663,16 @@ export function PdfReader({
     const blockToKeepVisible = visibleWorkspaceBlockId(lockedPage);
     const lockVersion = beginZoomPageLock(lockedPage);
     const scaleRatio = clampedScale / currentScale;
-    zoomLayoutTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    cancelZoomSettling();
+    const layoutVersion = zoomLayoutVersionRef.current;
+    const revealAfterLayout = (): void => {
+      if (blockToKeepVisible && zoomLayoutVersionRef.current === layoutVersion) {
+        revealWorkspaceBlock(blockToKeepVisible);
+      }
+    };
     zoomLayoutTimersRef.current = [120, 360, 760, 1_400].map((delay) => window.setTimeout(() => {
       updateWorkspaceBlockLayouts();
-      if (blockToKeepVisible) {
-        window.requestAnimationFrame(() => revealWorkspaceBlock(blockToKeepVisible));
-      }
+      window.requestAnimationFrame(revealAfterLayout);
     }, delay));
     prepareZoomScrollSpace(container, anchor, scaleRatio);
     runtime.pdfViewer.currentScale = clampedScale;
@@ -1660,13 +1681,12 @@ export function PdfReader({
       updateWorkspaceBlockLayouts();
       window.requestAnimationFrame(() => {
         updateWorkspaceBlockLayouts();
-        if (blockToKeepVisible) {
-          window.requestAnimationFrame(() => revealWorkspaceBlock(blockToKeepVisible));
-        }
+        window.requestAnimationFrame(revealAfterLayout);
       });
     });
   }, [
     beginZoomPageLock,
+    cancelZoomSettling,
     finishZoomPageLock,
     revealWorkspaceBlock,
     status,
@@ -1674,10 +1694,7 @@ export function PdfReader({
     visibleWorkspaceBlockId
   ]);
 
-  useEffect(() => () => {
-    zoomLayoutTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-    zoomLayoutTimersRef.current = [];
-  }, []);
+  useEffect(() => cancelZoomSettling, [cancelZoomSettling]);
 
   const zoomViewport = useCallback((direction: 'in' | 'out'): void => {
     const runtime = runtimeRef.current;
@@ -2101,6 +2118,12 @@ export function PdfReader({
     });
   }, [searchQuery]);
 
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      runtimeRef.current?.eventBus.dispatch('findbarclose', {});
+    }
+  }, [searchQuery]);
+
   const submitPageJump = (event: FormEvent): void => {
     event.preventDefault();
     setPageDraftFocused(false);
@@ -2134,8 +2157,8 @@ export function PdfReader({
 
     const minX = viewportRect && dockRect ? origin.x + viewportRect.left + 12 - dockRect.left : -720;
     const maxX = viewportRect && dockRect ? origin.x + viewportRect.right - 12 - dockRect.right : 160;
-    const minY = viewportRect && dockRect ? origin.y + viewportRect.top + 12 - dockRect.top : -96;
-    const maxY = viewportRect && dockRect ? origin.y + viewportRect.bottom - 96 - dockRect.top : 520;
+    const minY = 0;
+    const maxY = maximumDockOffsetY;
 
     const moveDock = (clientX: number, clientY: number): void => {
       setDockOffset({
@@ -2166,7 +2189,7 @@ export function PdfReader({
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', stopMove, { once: true });
     window.addEventListener('blur', stopMove, { once: true });
-  }, [dockOffset]);
+  }, [dockOffset, maximumDockOffsetY]);
 
   const startDockResize = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
     event.preventDefault();
@@ -2175,8 +2198,8 @@ export function PdfReader({
 
     const startX = event.clientX;
     const startWidth = resolvedDockWidth;
-    const minWidth = noteEditorNote ? 640 : 320;
-    const maxWidth = Math.min(noteEditorNote ? 1040 : 760, Math.max(minWidth, window.innerWidth - 180));
+    const minWidth = 300;
+    const maxWidth = Math.max(minWidth, maximumDockWidth);
     let edgeScrollDelta = 0;
     let lastClientX = startX;
 
@@ -2208,7 +2231,7 @@ export function PdfReader({
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', stopResize, { once: true });
     window.addEventListener('pointercancel', stopResize, { once: true });
-  }, [noteEditorNote, resolvedDockWidth]);
+  }, [maximumDockWidth, resolvedDockWidth]);
 
   const buildDocumentToolContext = useCallback((input: {
     conversation?: Conversation;
@@ -2510,6 +2533,10 @@ export function PdfReader({
                   ref={containerRef}
                   onDoubleClick={enterCanvasDragMode}
                   onWheel={(event) => notePdfReadingIntent(event.target)}
+                  // New input owns the viewport. A delayed zoom reveal must not
+                  // scroll the notebook midway through a stroke or lasso gesture.
+                  onPointerDownCapture={cancelZoomSettling}
+                  onWheelCapture={cancelZoomSettling}
                   onPointerDown={handleCanvasDragPointerDown}
                   tabIndex={0}
                 >
@@ -2827,11 +2854,11 @@ function ReaderLeftPanel({
           disabled={!documentReady}
           onChange={(event) => onSearchQueryChange(event.target.value)}
         />
-        <button type="button" title="Previous match" disabled={!documentReady || !searchQuery.trim()} onClick={onFindPrevious}>
-          <Minus size={14} />
+        <button type="button" title={t.previousMatch} disabled={!documentReady || !searchQuery.trim()} onClick={onFindPrevious}>
+          <ChevronUp size={14} />
         </button>
-        <button type="button" title="Next match" disabled={!documentReady || !searchQuery.trim()} onClick={onFindNext}>
-          <Plus size={14} />
+        <button type="button" title={t.nextMatch} disabled={!documentReady || !searchQuery.trim()} onClick={onFindNext}>
+          <ChevronDown size={14} />
         </button>
       </form>
 
@@ -2885,7 +2912,7 @@ function ReaderLeftPanel({
             {notebook.count > 0 ? (
               <>
                 <button type="button" title={t.openNotebook} aria-label={t.openNotebook} onClick={() => { setCanvasMenuOpen(false); onOpenNotebook(notebook.firstBlockId); }}>
-                  <Check size={14} />
+                  <NotebookPen size={14} />
                   <span>{t.openNotebook}</span>
                 </button>
                 <button type="button" title={t.addNotebookSheet} aria-label={t.addNotebookSheet} onClick={() => { setCanvasMenuOpen(false); onAddCanvas(notebook.side); }}>
@@ -3175,6 +3202,9 @@ function ReaderDock({
             onClick={() => onTabChange('translations')}
           >
             <Languages size={17} />
+          </Button>
+          <Button type="button" text rounded className={activeTab === 'notes' ? 'is-active' : ''} title={t.notes} aria-label={t.notes} onClick={() => onTabChange('notes')}>
+            <FileText size={17} />
           </Button>
         </span>
         <span className="dock-iconbar__actions">
@@ -4287,9 +4317,11 @@ function DockChatPanel({
   const codexSettings = conversation.codexSettings ?? {};
   const permissionMode = codexSettings.permissionMode ?? 'workspace-write';
   const selectedModel = codexModels.find((model) => model.id === codexSettings.model);
-  const reasoningEfforts = selectedModel?.supportedReasoningEfforts.length
+  const availableEfforts = selectedModel?.supportedReasoningEfforts.length
     ? selectedModel.supportedReasoningEfforts
     : Array.from(new Set(codexModels.flatMap((model) => model.supportedReasoningEfforts)));
+  const effortOrder = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+  const reasoningEfforts = [...availableEfforts].sort((a, b) => effortOrder.indexOf(a) - effortOrder.indexOf(b));
   const slashQuery = draft.trimStart();
   const slashCommands = chatSlashCommands(text);
   const matchingSlashCommands = slashQuery.startsWith('/') && !slashQuery.includes(' ')
@@ -4362,8 +4394,27 @@ function DockChatPanel({
       return;
     }
 
-    textarea.style.height = 'auto';
-    textarea.style.height = `${Math.max(36, Math.min(textarea.scrollHeight, 144))}px`;
+    const resize = (): void => {
+      textarea.style.height = 'auto';
+      textarea.style.height = `${Math.max(36, Math.min(textarea.scrollHeight, 144))}px`;
+    };
+    resize();
+    let previousWidth = textarea.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (textarea.clientWidth !== previousWidth) {
+        previousWidth = textarea.clientWidth;
+        resize();
+      }
+    });
+    observer.observe(textarea);
+    // Settings can change font metrics without changing the draft or width.
+    const appearanceObserver = new MutationObserver(resize);
+    const shell = textarea.closest('.app-shell');
+    if (shell) appearanceObserver.observe(shell, { attributes: true, attributeFilter: ['style'] });
+    return () => {
+      observer.disconnect();
+      appearanceObserver.disconnect();
+    };
   }, [draft]);
 
   useEffect(() => {
@@ -4818,7 +4869,7 @@ function DockChatPanel({
             disabled={busy}
             onClick={() => fileInputRef.current?.click()}
           >
-            <FilePlus2 size={17} />
+            <Paperclip size={17} />
           </Button>
           <textarea
             ref={textareaRef}
@@ -4895,7 +4946,7 @@ function DockChatPanel({
                   disabled={busy}
                   onClick={() => setConfigMenu((current) => current === 'permissions' ? undefined : 'permissions')}
                 >
-                  <ShieldCheck size={13} />
+                  {permissionMode === 'full-access' ? <ShieldAlert size={13} /> : <ShieldCheck size={13} />}
                   <span>{permissionLabel(permissionMode, text)}</span>
                   <ChevronDown size={13} />
                 </button>
@@ -5278,6 +5329,10 @@ function SelectionToolbar({
           {text.quote}
         </button>
       )}
+      <button type="button" className="selection-toolbar__action selection-toolbar__action--note" title={text.openNote} onClick={() => onCreateNote(selection)}>
+        <FileText size={15} />
+        {text.notes}
+      </button>
       <button
         type="button"
         className="selection-toolbar__action selection-toolbar__action--summary"
