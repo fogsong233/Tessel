@@ -647,13 +647,6 @@ body.is-moving-workspace-block .workspace-image__viewport {
   );
 }
 
-/* Center an empty two-line composer on the adjacent controls. Once text is
-   entered it returns to the top line, preserving the existing multiline flow. */
-.chat-composer > .chat-composer__row > textarea:placeholder-shown {
-  padding-top: 18px;
-  padding-bottom: 18px;
-}
-
 /* Stable reader geometry: asynchronous PDF sizing and zooming must not reflow
    the sidebar or temporarily drop page-attached components. */
 .reader-splitter > .reader-left-panel {

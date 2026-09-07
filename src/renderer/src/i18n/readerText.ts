@@ -1,8 +1,7 @@
 import type { UiLanguage } from '../../../shared/domain';
 
-export function readerText(language: UiLanguage) {
-  if (language === 'zh-CN') {
-    return {
+const readerTextByLanguage = {
+  'zh-CN': {
       notebook: '手写笔记',
       notebookSheet: '纸张',
       notebookSheets: '张纸',
@@ -65,6 +64,7 @@ export function readerText(language: UiLanguage) {
       permissionFullAccessDescription: '可访问和修改这台电脑上的任意文件',
       fullAccessWarning: '当前对话可以访问并修改本机任意文件。',
       slashCommands: '对话命令',
+      slashModel: '切换当前对话的模型与推理强度',
       slashStatus: '显示模型、推理强度和权限',
       slashPs: '显示此对话中的活动任务',
       slashStop: '停止当前 Codex 对话',
@@ -72,6 +72,11 @@ export function readerText(language: UiLanguage) {
       messageCodex: '给 Codex 发消息，或输入 / 查看命令',
       sendGuidance: '发送引导',
       useSettingsModel: '使用“设置”中选择的模型',
+      codexConfigBusy: '请等待当前回复结束后再修改对话配置。',
+      modelCommandUsage: '用法：/model <模型> [强度]，或只输入 /model 打开选择器。',
+      modelUnavailable: (model: string) => `没有找到模型“${model}”。`,
+      effortUnavailable: (effort: string) => `当前模型不支持“${effort}”推理强度。`,
+      modelChanged: (model: string, effort: string) => `当前对话已切换为 ${model} · ${effort}。`,
       delete: '删除',
       deleteImage: '删除图片',
       deleteMark: '删除标注',
@@ -167,10 +172,8 @@ export function readerText(language: UiLanguage) {
       zoomIn: '放大',
       zoomImage: '缩放图片',
       zoomOut: '缩小'
-    };
-  }
-
-  return {
+  },
+  en: {
     notebook: 'Handwritten notes',
     notebookSheet: 'sheet',
     notebookSheets: 'sheets',
@@ -233,6 +236,7 @@ export function readerText(language: UiLanguage) {
     permissionFullAccessDescription: 'Access and modify files anywhere on this computer',
     fullAccessWarning: 'This conversation can access and modify any local file.',
     slashCommands: 'Chat commands',
+    slashModel: 'Switch model and reasoning for this conversation',
     slashStatus: 'Show model, reasoning, and permissions',
     slashPs: 'Show active tasks in this conversation',
     slashStop: 'Stop the active Codex turn',
@@ -240,6 +244,11 @@ export function readerText(language: UiLanguage) {
     messageCodex: 'Message Codex or type / for commands',
     sendGuidance: 'Send guidance',
     useSettingsModel: 'Use the model selected in Settings',
+    codexConfigBusy: 'Wait for the active response to finish before changing this conversation.',
+    modelCommandUsage: 'Usage: /model <model> [effort], or enter /model to open the picker.',
+    modelUnavailable: (model: string) => `Model “${model}” was not found.`,
+    effortUnavailable: (effort: string) => `The current model does not support “${effort}” reasoning.`,
+    modelChanged: (model: string, effort: string) => `This conversation now uses ${model} · ${effort}.`,
     delete: 'Delete',
     deleteImage: 'Delete image',
     deleteMark: 'Delete mark',
@@ -335,7 +344,11 @@ export function readerText(language: UiLanguage) {
     zoomIn: 'Zoom in',
     zoomImage: 'Zoom image',
     zoomOut: 'Zoom out'
-  };
-}
+  }
+} satisfies Record<UiLanguage, Record<string, unknown>>;
 
-export type ReaderText = ReturnType<typeof readerText>;
+export type ReaderText = (typeof readerTextByLanguage)[UiLanguage];
+
+export function readerText(language: UiLanguage): ReaderText {
+  return readerTextByLanguage[language];
+}

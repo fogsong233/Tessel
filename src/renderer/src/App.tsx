@@ -74,9 +74,15 @@ import {
 } from './PdfReader';
 import tesselLogoUrl from '../../assets/icons/tessel-logo.png?url';
 import { drawingSelectionPng } from './drawing/drawingGeometry';
-import { lanWhiteboardText } from './lanWhiteboardText';
+import { lanWhiteboardText } from './i18n/lanWhiteboardText';
 import { MarkdownView } from './MarkdownView';
 import { LanWhiteboardSettings } from './settings/LanWhiteboardSettings';
+import {
+  formatDateTime,
+  readerHomeText,
+  readerSettingsText,
+  updateStatusText
+} from './i18n/appText';
 
 type TransientAidMode = Extract<AiMode, 'summarize' | 'translate'>;
 
@@ -196,7 +202,9 @@ export function App(): ReactElement {
     '--tessel-agent-font': fontStack(appPreferences.appearance.agentFont),
     '--tessel-code-font': fontStack(appPreferences.appearance.codeFont),
     '--tessel-ui-font-size': `${appPreferences.appearance.uiFontSize}px`,
+    '--tessel-sidebar-font-size': `${appPreferences.appearance.sidebarFontSize}px`,
     '--tessel-agent-font-size': `${appPreferences.appearance.agentFontSize}px`,
+    '--tessel-composer-font-size': `${appPreferences.appearance.composerFontSize}px`,
     '--tessel-code-font-size': `${appPreferences.appearance.codeFontSize}px`,
     '--tessel-highlight-color': appPreferences.selectionColors.highlight,
     '--tessel-underline-color': appPreferences.selectionColors.underline,
@@ -793,6 +801,9 @@ export function App(): ReactElement {
       lastMessage?.role === 'user' && lastMessage.content === prompt
         ? conversation.messages.slice(0, -1)
         : conversation.messages;
+    const streamHistory = appPreferences.experimentalCodexAgent.enabled
+      ? compactCodexHistory(history)
+      : history;
     const anchorPage = conversation.anchor?.pageNumber ?? conversation.pageNumber ?? currentPage;
     const enrichedToolContext = buildAiDocumentToolContext({
       document: activeDocument,
@@ -825,6 +836,25 @@ export function App(): ReactElement {
     const streamId = createId('stream');
     setActiveStream({ streamId, conversationId: conversation.id });
     let finished = false;
+    let pendingRenderFrame: number | undefined;
+    const renderDraftOnNextFrame = (): void => {
+      if (pendingRenderFrame !== undefined || finished) {
+        return;
+      }
+      pendingRenderFrame = window.requestAnimationFrame(() => {
+        pendingRenderFrame = undefined;
+        if (!finished) {
+          putConversationInState(draftConversation);
+        }
+      });
+    };
+    const flushDraftRender = (nextConversation: Conversation): void => {
+      if (pendingRenderFrame !== undefined) {
+        window.cancelAnimationFrame(pendingRenderFrame);
+        pendingRenderFrame = undefined;
+      }
+      putConversationInState(nextConversation);
+    };
     activeConversationStreamRef.current = {
       streamId,
       conversationId: conversation.id,
@@ -876,6 +906,7 @@ export function App(): ReactElement {
 
       finished = true;
       unsubscribe();
+      flushDraftRender(conversationToSave);
       const saved = await saveConversationLocally({
         ...conversationToSave,
         summary: summarizeConversation(conversationToSave.mode, conversationToSave.messages, conversationToSave.anchor)
@@ -904,7 +935,7 @@ export function App(): ReactElement {
           ),
           updatedAt: new Date().toISOString()
         };
-        putConversationInState(draftConversation);
+        renderDraftOnNextFrame();
       }
 
       if (event.activity) {
@@ -921,7 +952,7 @@ export function App(): ReactElement {
           ),
           updatedAt: new Date().toISOString()
         };
-        putConversationInState(draftConversation);
+        renderDraftOnNextFrame();
       }
 
       if (event.artifacts?.length) {
@@ -934,7 +965,7 @@ export function App(): ReactElement {
           ),
           updatedAt: new Date().toISOString()
         };
-        putConversationInState(draftConversation);
+        renderDraftOnNextFrame();
       }
 
       if (event.agentThreadId) {
@@ -944,7 +975,7 @@ export function App(): ReactElement {
           codexThreadId: event.agentThreadId,
           updatedAt: new Date().toISOString()
         };
-        putConversationInState(draftConversation);
+        renderDraftOnNextFrame();
       }
 
       if (event.delta) {
@@ -985,7 +1016,7 @@ export function App(): ReactElement {
           ),
           updatedAt: new Date().toISOString()
         };
-        putConversationInState(draftConversation);
+        renderDraftOnNextFrame();
       }
 
       if (event.done) {
@@ -1001,14 +1032,14 @@ export function App(): ReactElement {
         codexThreadId: conversation.codexThreadId,
         codexOptions: conversation.codexSettings,
         documentId: activeDocument.id,
-        history,
+        history: streamHistory,
         codexContext: enrichedToolContext,
         request: {
           mode: conversation.mode,
           prompt,
           documentTitle: activeDocument.title,
           contextText: conversation.anchor?.quote,
-          messages: history,
+          messages: streamHistory,
           attachments,
           conversationContext: buildChatConversationContext(conversation, activeDocument.title, attachments),
           toolContext: enrichedToolContext,
@@ -1914,7 +1945,15 @@ function ReaderSettingsPanel({
           '--tessel-sidebar-ink': resolvedSettingsSidebarTheme.ink,
           '--tessel-sidebar-muted': resolvedSettingsSidebarTheme.muted,
           '--tessel-directory-ink': resolvedSettingsSidebarTheme.ink,
-          '--tessel-directory-muted': resolvedSettingsSidebarTheme.muted
+          '--tessel-directory-muted': resolvedSettingsSidebarTheme.muted,
+          '--tessel-ui-font': fontStack(appearance.uiFont),
+          '--tessel-agent-font': fontStack(appearance.agentFont),
+          '--tessel-code-font': fontStack(appearance.codeFont),
+          '--tessel-ui-font-size': `${appearance.uiFontSize}px`,
+          '--tessel-sidebar-font-size': `${appearance.sidebarFontSize}px`,
+          '--tessel-agent-font-size': `${appearance.agentFontSize}px`,
+          '--tessel-composer-font-size': `${appearance.composerFontSize}px`,
+          '--tessel-code-font-size': `${appearance.codeFontSize}px`
         } as CSSProperties}
       >
         <form className="reader-settings__form" onSubmit={submit}>
@@ -2110,13 +2149,24 @@ function ReaderSettingsPanel({
                 <div className="reader-settings__wide reader-settings__appearance-group">
                   <strong>{t.typography}</strong>
                   <span>{t.typographyDescription}</span>
-                  <div className="reader-settings__fields reader-settings__fields--nested">
-                    <label>{t.uiFont}<SettingsSelect value={appearance.uiFont} onChange={(event) => setAppearance((current) => ({ ...current, uiFont: event.target.value as AppearanceFont }))}><option value="system">{t.fontSystem}</option><option value="rounded">{t.fontRounded}</option><option value="serif">{t.fontSerif}</option></SettingsSelect></label>
-                    <label>{t.uiFontSize}<input type="number" min="11" max="20" value={appearance.uiFontSize} onChange={(event) => setAppearance((current) => ({ ...current, uiFontSize: Number(event.target.value) }))} /></label>
-                    <label>{t.agentFont}<SettingsSelect value={appearance.agentFont} onChange={(event) => setAppearance((current) => ({ ...current, agentFont: event.target.value as AppearanceFont }))}><option value="system">{t.fontSystem}</option><option value="rounded">{t.fontRounded}</option><option value="serif">{t.fontSerif}</option><option value="mono">{t.fontMono}</option></SettingsSelect></label>
-                    <label>{t.agentFontSize}<input type="number" min="11" max="20" value={appearance.agentFontSize} onChange={(event) => setAppearance((current) => ({ ...current, agentFontSize: Number(event.target.value) }))} /></label>
-                    <label>{t.codeFont}<SettingsSelect value={appearance.codeFont} onChange={(event) => setAppearance((current) => ({ ...current, codeFont: event.target.value as AppearanceFont }))}><option value="mono">{t.fontMono}</option><option value="system">{t.fontSystem}</option><option value="serif">{t.fontSerif}</option></SettingsSelect></label>
-                    <label>{t.codeFontSize}<input type="number" min="11" max="20" value={appearance.codeFontSize} onChange={(event) => setAppearance((current) => ({ ...current, codeFontSize: Number(event.target.value) }))} /></label>
+                  <div className="reader-settings__typography-grid">
+                    <section>
+                      <strong>{t.interfaceTypography}</strong>
+                      <label>{t.uiFont}<SettingsSelect value={appearance.uiFont} onChange={(event) => setAppearance((current) => ({ ...current, uiFont: event.target.value as AppearanceFont }))}><option value="system">{t.fontSystem}</option><option value="rounded">{t.fontRounded}</option><option value="serif">{t.fontSerif}</option></SettingsSelect></label>
+                      <FontSizeControl label={t.uiFontSize} value={appearance.uiFontSize} onChange={(uiFontSize) => setAppearance((current) => ({ ...current, uiFontSize }))} />
+                      <FontSizeControl label={t.sidebarFontSize} value={appearance.sidebarFontSize} onChange={(sidebarFontSize) => setAppearance((current) => ({ ...current, sidebarFontSize }))} />
+                    </section>
+                    <section>
+                      <strong>{t.conversationTypography}</strong>
+                      <label>{t.agentFont}<SettingsSelect value={appearance.agentFont} onChange={(event) => setAppearance((current) => ({ ...current, agentFont: event.target.value as AppearanceFont }))}><option value="system">{t.fontSystem}</option><option value="rounded">{t.fontRounded}</option><option value="serif">{t.fontSerif}</option><option value="mono">{t.fontMono}</option></SettingsSelect></label>
+                      <FontSizeControl label={t.agentFontSize} value={appearance.agentFontSize} onChange={(agentFontSize) => setAppearance((current) => ({ ...current, agentFontSize }))} />
+                      <FontSizeControl label={t.composerFontSize} value={appearance.composerFontSize} onChange={(composerFontSize) => setAppearance((current) => ({ ...current, composerFontSize }))} />
+                    </section>
+                    <section>
+                      <strong>{t.codeTypography}</strong>
+                      <label>{t.codeFont}<SettingsSelect value={appearance.codeFont} onChange={(event) => setAppearance((current) => ({ ...current, codeFont: event.target.value as AppearanceFont }))}><option value="mono">{t.fontMono}</option><option value="system">{t.fontSystem}</option><option value="serif">{t.fontSerif}</option></SettingsSelect></label>
+                      <FontSizeControl label={t.codeFontSize} value={appearance.codeFontSize} onChange={(codeFontSize) => setAppearance((current) => ({ ...current, codeFontSize }))} />
+                    </section>
                   </div>
                 </div>
               </div>
@@ -2170,6 +2220,34 @@ function SettingsSelect({ children, ...props }: ComponentPropsWithoutRef<'select
       <select {...props}>{children}</select>
       <ChevronDown size={15} strokeWidth={2} aria-hidden="true" />
     </span>
+  );
+}
+
+function FontSizeControl({
+  label,
+  value,
+  onChange
+}: {
+  label: string;
+  value: number;
+  onChange(value: number): void;
+}): ReactElement {
+  return (
+    <label className="reader-settings__font-size">
+      <span>{label}</span>
+      <span className="reader-settings__font-size-control">
+        <input
+          type="range"
+          min="11"
+          max="20"
+          step="1"
+          value={value}
+          aria-label={label}
+          onChange={(event) => onChange(Number(event.target.value))}
+        />
+        <output>{value}px</output>
+      </span>
+    </label>
   );
 }
 
@@ -2250,17 +2328,6 @@ function pageRangeLabel(pageStart: number, pageEnd: number, language: UiLanguage
   return language === 'zh-CN' ? `第 ${range} 页 · ` : `p.${range} · `;
 }
 
-function formatDateTime(value: string, language: UiLanguage): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return new Intl.DateTimeFormat(language === 'zh-CN' ? 'zh-CN' : 'en', {
-    dateStyle: 'medium',
-    timeStyle: 'short'
-  }).format(date);
-}
-
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) {
     return '0 B';
@@ -2269,73 +2336,6 @@ function formatBytes(bytes: number): string {
   const unitIndex = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
   const amount = bytes / (1024 ** unitIndex);
   return `${amount >= 10 || unitIndex === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unitIndex]}`;
-}
-
-function readerHomeText(language: UiLanguage) {
-  if (language === 'zh-CN') {
-    return {
-      pdfReader: 'PDF 阅读器',
-      openPdf: '打开 PDF',
-      settings: '设置',
-      recentDocuments: '最近浏览',
-      bookCount: (count: number) => `${count} 本`,
-      missing: '文件已移动',
-      recentMeta: (document: PdfDocumentMeta) => `${document.readingState?.lastPage ? `第 ${document.readingState.lastPage} 页 · ` : ''}${formatDateTime(document.lastOpenedAt, language)}`
-    };
-  }
-  return {
-    pdfReader: 'PDF reader',
-    openPdf: 'Open PDF',
-    settings: 'Settings',
-    recentDocuments: 'Recently viewed',
-    bookCount: (count: number) => `${count} ${count === 1 ? 'book' : 'books'}`,
-    missing: 'File moved',
-    recentMeta: (document: PdfDocumentMeta) => `${document.readingState?.lastPage ? `Page ${document.readingState.lastPage} · ` : ''}${formatDateTime(document.lastOpenedAt, language)}`
-  };
-}
-
-function readerSettingsText(language: UiLanguage) {
-  if (language === 'zh-CN') {
-    return {
-      settings: '设置', close: '关闭', settingsSections: '设置分区', provider: '服务商', sync: '同步', storage: '存储', appearance: '外观', language: '语言', updates: '更新', backToApp: '返回应用', searchSettings: '搜索设置...', configuration: '配置', noSettingsFound: '没有匹配的设置', reset: '恢复默认', sidebarColor: '边栏颜色', appearanceDescription: '统一目录、标注、对话与阅读排版。', annotationColors: '标注与对话颜色', annotationColorsDescription: '用于高亮、划线、引用及阅读工作区的视觉提示。', highlightColor: '高亮', underlineColor: '划线', chatColor: '对话', noteColor: '笔记', summaryColor: '总结', translateColor: '翻译', typography: '排版', typographyDescription: '分别调整界面、Agent 回复与代码的字体和字号。', uiFont: '界面字体', uiFontSize: '界面字号', agentFont: 'Agent 字体', agentFontSize: 'Agent 字号', codeFont: '代码字体', codeFontSize: '代码字号', fontSystem: '系统无衬线', fontRounded: '圆体', fontSerif: '阅读衬线', fontMono: '等宽',
-      aiProvider: 'AI 服务商', displayName: '显示名称', temperature: '温度', baseUrl: '基础 URL', apiKey: 'API 密钥', model: '模型', storedKey: '已保存。输入新密钥可替换。', loading: '加载中...', fetchModels: '获取模型',
-      codexAvailable: '本机 Codex CLI 可用', codexChecking: '正在检查本机 Codex CLI...', codexExecutablePath: 'Codex 可执行文件路径（可选）', codexExecutablePathHint: '留空自动发现；例如 /opt/homebrew/bin/codex 或 C:\\...\\codex.cmd', enabled: '启用', chat: '对话', chatModel: '对话模型', chatReasoning: '对话推理强度', codexDefault: 'Codex 默认', readerDefault: '阅读器默认（低）',
-      translation: '翻译', translationBackend: '翻译后端', translationModel: '翻译模型', translationReasoning: '翻译推理强度', fastestAvailable: '最快可用模型',
-      webDavSync: 'WebDAV 同步', perPdfMetadata: '按 PDF 保存元数据', serverUrl: '服务器 URL', folder: '文件夹', username: '用户名', password: '密码', storedPassword: '已保存。输入新密码可替换。',
-      storageOverview: '本地存储概览', storageDescription: '查看本机保存的书籍、阅读状态和衍生内容；不会展示密钥。', refresh: '刷新', books: '书籍', pdfStorage: 'PDF 文件', metadataStorage: 'Tessel 元数据', metadataLocation: '元数据位置', noStoredBooks: '还没有保存的书籍。打开 PDF 后会显示在这里。', items: '项内容', fileStatus: '文件状态', available: '可访问', missing: '文件已移动或不可访问', fileSize: '文件大小', pages: '总页数', lastReadPage: '上次阅读页', addedAt: '加入时间', lastOpened: '最近打开', filePath: '文件路径', storedContent: '已保存内容', conversations: '对话', messages: '消息', translations: '翻译', notes: '笔记', marks: '标注', bookmarks: '书签', canvasItems: '画布内容', outlineItems: 'AI 目录项', noBookContent: '这本书目前只有文件与阅读记录。', highlight: '高亮', underline: '划线',
-      languageDescription: '界面文本和 AI 回复', uiLanguage: '界面语言', aiPreferredLanguage: 'AI 首选语言',
-      updateDescription: '自动检查并后台下载 GitHub Releases；下载完成后可一键覆盖当前安装目录。未签名 macOS 版使用手动更新。', currentVersion: '当前版本', updateStatus: '更新状态', availableVersion: '可用版本', releaseNotes: '发行说明', checkForUpdates: '检查更新', downloadUpdate: '重试下载', later: '稍后', openDownloads: '前往下载页', restartToUpdate: '重启并更新', cancel: '取消', save: '保存',
-      updateUnsupported: '更新仅在已安装的正式版中可用。', updateManualMac: '当前未签名 macOS 版本请下载新安装包更新。', updateChecking: '正在检查更新...', updateAvailable: '发现新版本，正在准备后台下载。', updateDownloading: (percent?: number) => `正在下载更新${percent === undefined ? '...' : `（${percent}%）`}`, updateReady: '更新已下载，可以重启并覆盖当前安装目录。', updateInstalling: '正在准备更新', updateInstallHint: 'Tessel 即将关闭；安装完成后会从当前安装路径自动重新打开。', updateCurrent: '已是最新版本。', updateError: '无法检查更新。'
-    };
-  }
-  return {
-    settings: 'Settings', close: 'Close', settingsSections: 'Settings sections', provider: 'Provider', sync: 'Sync', storage: 'Storage', appearance: 'Appearance', language: 'Language', updates: 'Updates', backToApp: 'Back to app', searchSettings: 'Search settings...', configuration: 'Configuration', noSettingsFound: 'No settings found', reset: 'Reset', sidebarColor: 'Sidebar color', appearanceDescription: 'Unifies the directory, annotations, chat, and reading typography.', annotationColors: 'Annotation and chat colors', annotationColorsDescription: 'Used for highlights, underlines, quotes, and reading workspace cues.', highlightColor: 'Highlight', underlineColor: 'Underline', chatColor: 'Chat', noteColor: 'Note', summaryColor: 'Summary', translateColor: 'Translation', typography: 'Typography', typographyDescription: 'Tune interface, Agent response, and code typography independently.', uiFont: 'Interface font', uiFontSize: 'Interface size', agentFont: 'Agent font', agentFontSize: 'Agent size', codeFont: 'Code font', codeFontSize: 'Code size', fontSystem: 'System sans', fontRounded: 'Rounded', fontSerif: 'Reading serif', fontMono: 'Monospace',
-    aiProvider: 'AI provider', displayName: 'Display name', temperature: 'Temperature', baseUrl: 'Base URL', apiKey: 'API key', model: 'Model', storedKey: 'Stored. Enter a new key to replace it.', loading: 'Loading...', fetchModels: 'Fetch models',
-    codexAvailable: 'Local Codex CLI available', codexChecking: 'Checking local Codex CLI...', codexExecutablePath: 'Codex executable path (optional)', codexExecutablePathHint: 'Leave blank to auto-detect, e.g. /opt/homebrew/bin/codex or C:\\...\\codex.cmd', enabled: 'Enabled', chat: 'Chat', chatModel: 'Chat model', chatReasoning: 'Chat reasoning', codexDefault: 'Codex default', readerDefault: 'Reader default (Low)',
-    translation: 'Translation', translationBackend: 'Translation backend', translationModel: 'Translation model', translationReasoning: 'Translation reasoning', fastestAvailable: 'Fastest available',
-    webDavSync: 'WebDAV sync', perPdfMetadata: 'Per-PDF metadata', serverUrl: 'Server URL', folder: 'Folder', username: 'Username', password: 'Password', storedPassword: 'Stored. Enter a new password to replace it.',
-    storageOverview: 'Local storage overview', storageDescription: 'Inspect locally stored books, reading state, and derived content. Secrets are never shown.', refresh: 'Refresh', books: 'Books', pdfStorage: 'PDF files', metadataStorage: 'Tessel metadata', metadataLocation: 'Metadata location', noStoredBooks: 'No books are stored yet. Open a PDF and it will appear here.', items: 'items', fileStatus: 'File status', available: 'Available', missing: 'Moved or unavailable', fileSize: 'File size', pages: 'Pages', lastReadPage: 'Last read page', addedAt: 'Added', lastOpened: 'Last opened', filePath: 'File path', storedContent: 'Stored content', conversations: 'Conversations', messages: 'Messages', translations: 'Translations', notes: 'Notes', marks: 'Annotations', bookmarks: 'Bookmarks', canvasItems: 'Canvas items', outlineItems: 'AI outline items', noBookContent: 'This book currently contains only its file and reading record.', highlight: 'Highlight', underline: 'Underline',
-    languageDescription: 'Interface text and AI responses', uiLanguage: 'UI language', aiPreferredLanguage: 'AI preferred language',
-    updateDescription: 'Checks and downloads GitHub Releases in the background. A downloaded update can replace the current install in one step. Unsigned macOS builds update manually.', currentVersion: 'Current version', updateStatus: 'Update status', availableVersion: 'Available version', releaseNotes: 'Release notes', checkForUpdates: 'Check for updates', downloadUpdate: 'Retry download', later: 'Later', openDownloads: 'Open downloads', restartToUpdate: 'Restart and update', cancel: 'Cancel', save: 'Save',
-    updateUnsupported: 'Updates are available in installed releases only.', updateManualMac: 'This unsigned macOS build is updated by downloading a new installer.', updateChecking: 'Checking for updates...', updateAvailable: 'A new version is available. Preparing the background download.', updateDownloading: (percent?: number) => `Downloading update${percent === undefined ? '...' : ` (${percent}%)`}`, updateReady: 'Update downloaded and ready to replace the current installation.', updateInstalling: 'Preparing the update', updateInstallHint: 'Tessel will close, install the update, then reopen from this exact installation path.', updateCurrent: 'You are up to date.', updateError: 'Unable to check for updates.'
-  };
-}
-
-function updateStatusText(state: AppUpdateState | undefined, text: ReturnType<typeof readerSettingsText>): string {
-  if (!state) {
-    return text.updateChecking;
-  }
-  switch (state.status) {
-    case 'unsupported': return state.message?.includes('manual updates') ? text.updateManualMac : text.updateUnsupported;
-    case 'checking': return text.updateChecking;
-    case 'available': return state.message ? `${text.updateAvailable} ${state.message}` : text.updateAvailable;
-    case 'downloading': return text.updateDownloading(state.downloadPercent);
-    case 'ready': return state.message ? `${text.updateReady} ${state.message}` : text.updateReady;
-    case 'installing': return text.updateInstalling;
-    case 'not-available': return text.updateCurrent;
-    case 'error': return state.message ? `${text.updateError} ${state.message}` : text.updateError;
-    default: return text.updateChecking;
-  }
 }
 
 function promptForMode(mode: AiMode, language: AiPreferredLanguage = 'Simplified Chinese'): string {
@@ -2646,6 +2646,15 @@ function buildChatConversationContext(
     conversation.summary.brief ? `Conversation brief: ${conversation.summary.brief}.` : undefined,
     attachments.length ? `The latest user message includes images: ${attachments.map((attachment) => attachment.name).join(', ')}.` : undefined
   ].filter(Boolean).join('\n');
+}
+
+function compactCodexHistory(history: ConversationMessage[]): ConversationMessage[] {
+  return history.slice(-8).map((message) => ({
+    id: message.id,
+    role: message.role,
+    content: message.content.slice(0, 2_000),
+    createdAt: message.createdAt
+  }));
 }
 
 function buildNoteConversationContext(

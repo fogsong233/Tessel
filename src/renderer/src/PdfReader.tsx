@@ -111,7 +111,8 @@ import { MarkdownNoteEditor } from './MarkdownNoteEditor';
 import { drawingBlockSide } from './reader/WorkspaceDrawingBlock';
 import { WorkspaceDrawingNotebook } from './reader/WorkspaceDrawingNotebook';
 import { WorkspaceImageBlock, imageBlockPayload } from './reader/WorkspaceImageBlock';
-import { readerText, type ReaderText } from './reader/readerText';
+import { readerText, type ReaderText } from './i18n/readerText';
+import { loadCodexModels, resolveCodexModelCommand } from './reader/codexConversation';
 import {
   type ZoomAnchor,
   prepareZoomScrollSpace,
@@ -4309,12 +4310,15 @@ function DockChatPanel({
   useEffect(() => {
     setCommandNotice(undefined);
     setConfigMenu(undefined);
+  }, [conversation.id]);
+
+  useEffect(() => {
     if (!isCodex) {
       setCodexModels([]);
       return;
     }
     let disposed = false;
-    void window.sidelight.listCodexModels()
+    void loadCodexModels()
       .then((models) => {
         if (!disposed) {
           setCodexModels(models);
@@ -4328,7 +4332,7 @@ function DockChatPanel({
     return () => {
       disposed = true;
     };
-  }, [conversation.id, isCodex]);
+  }, [isCodex]);
 
   useEffect(() => {
     if (!configMenu) {
@@ -4358,13 +4362,8 @@ function DockChatPanel({
       return;
     }
 
-    // Preserve a two-line starting field even before the user types.
-    if (!draft) {
-      textarea.style.height = '58px';
-      return;
-    }
     textarea.style.height = 'auto';
-    textarea.style.height = `${Math.max(58, Math.min(textarea.scrollHeight, 144))}px`;
+    textarea.style.height = `${Math.max(36, Math.min(textarea.scrollHeight, 144))}px`;
   }, [draft]);
 
   useEffect(() => {
@@ -4418,7 +4417,7 @@ function DockChatPanel({
 
   const updateCodexSettings = (patch: Partial<CodexConversationSettings>): void => {
     if (busy) {
-      setCommandNotice('Wait for the active turn to finish before changing its configuration.');
+      setCommandNotice(text.codexConfigBusy);
       return;
     }
     onUpdateCodexSettings({ ...codexSettings, ...patch });
@@ -4470,7 +4469,41 @@ function DockChatPanel({
       ].join(' · '));
       return true;
     }
+    if (command === '/model') {
+      if (busy) {
+        setCommandNotice(text.codexConfigBusy);
+        return true;
+      }
+      const result = resolveCodexModelCommand(argument, codexModels, codexSettings.model);
+      if (result.kind === 'open') {
+        setConfigMenu('model');
+        setCommandNotice(text.modelCommandUsage);
+        return true;
+      }
+      if (result.kind === 'unknown-model') {
+        setCommandNotice(`${text.modelUnavailable(result.value)} ${text.modelCommandUsage}`);
+        return true;
+      }
+      if (result.kind === 'unsupported-effort') {
+        setCommandNotice(`${text.effortUnavailable(result.value)} ${text.modelCommandUsage}`);
+        return true;
+      }
+      updateCodexSettings({
+        model: result.model,
+        effort: result.effort
+      });
+      setConfigMenu(undefined);
+      setCommandNotice(text.modelChanged(
+        result.modelLabel ?? text.codexDefaultModel,
+        result.effort ? reasoningEffortLabel(result.effort, uiLanguage) : text.codexDefaultEffort
+      ));
+      return true;
+    }
     if (command === '/permissions') {
+      if (busy) {
+        setCommandNotice(text.codexConfigBusy);
+        return true;
+      }
       if (!argument) {
         setConfigMenu('permissions');
         return true;
@@ -4789,7 +4822,7 @@ function DockChatPanel({
           </Button>
           <textarea
             ref={textareaRef}
-            rows={2}
+            rows={1}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onCompositionStart={() => {
@@ -4969,6 +5002,7 @@ function DockChatPanel({
 
 function chatSlashCommands(text: ReaderText): Array<{ command: string; description: string }> {
   return [
+    { command: '/model', description: text.slashModel },
     { command: '/permissions', description: text.codexPermissions },
     { command: '/status', description: text.slashStatus },
     { command: '/ps', description: text.slashPs },

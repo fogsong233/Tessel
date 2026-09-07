@@ -389,7 +389,9 @@ export interface AppearancePreferences {
   agentFont: AppearanceFont;
   codeFont: AppearanceFont;
   uiFontSize: number;
+  sidebarFontSize: number;
   agentFontSize: number;
+  composerFontSize: number;
   codeFontSize: number;
 }
 
@@ -696,7 +698,9 @@ export const defaultAppPreferences: AppPreferences = {
     agentFont: 'system',
     codeFont: 'mono',
     uiFontSize: 14,
+    sidebarFontSize: 13,
     agentFontSize: 14,
+    composerFontSize: 14,
     codeFontSize: 13
   },
   experimentalCodexAgent: {

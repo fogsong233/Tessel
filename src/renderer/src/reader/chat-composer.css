@@ -1,0 +1,148 @@
+/* Canonical chat surface. This file is intentionally loaded after the legacy
+   reader stylesheet so composer geometry has one predictable final owner. */
+.chat-composer {
+  --chat-control-size: 34px;
+  --chat-control-radius: 12px;
+  position: relative;
+  display: grid;
+  gap: 8px;
+  padding: 10px clamp(14px, 3vw, 24px) 12px;
+  border-top: 1px solid #e8eae9;
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.chat-composer > .chat-composer__row {
+  display: grid;
+  grid-template-columns: var(--chat-control-size) minmax(0, 1fr) var(--chat-control-size);
+  align-items: end;
+  gap: 7px;
+  min-width: 0;
+  min-height: 50px;
+  padding: 7px;
+  border: 1px solid #dfe2e0;
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 4px 16px rgba(25, 29, 27, 0.055);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.chat-composer > .chat-composer__row:focus-within {
+  border-color: #aeb7b2;
+  box-shadow: 0 0 0 3px rgba(47, 109, 88, 0.09), 0 5px 18px rgba(25, 29, 27, 0.06);
+}
+
+.chat-composer > .chat-composer__row > textarea {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: stretch;
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  height: 36px;
+  max-height: 144px;
+  margin: 0;
+  padding: 7px 2px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  resize: none;
+  color: #252826;
+  border: 0;
+  background: transparent;
+  font-family: var(--tessel-agent-font, Inter, ui-sans-serif, system-ui, sans-serif);
+  font-size: var(--tessel-composer-font-size, 14px);
+  line-height: 22px;
+  outline: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(56, 63, 59, 0.25) transparent;
+}
+
+.chat-composer > .chat-composer__row > textarea::placeholder {
+  color: #858b87;
+  opacity: 1;
+}
+
+.chat-composer > .chat-composer__row > .chat-icon-button.p-button,
+.chat-composer > .chat-composer__row > .chat-send-button.p-button {
+  grid-row: 1;
+  align-self: end;
+  box-sizing: border-box;
+  width: var(--chat-control-size);
+  min-width: var(--chat-control-size);
+  height: var(--chat-control-size);
+  min-height: var(--chat-control-size);
+  margin: 1px 0;
+  padding: 0;
+  border-radius: var(--chat-control-radius);
+  transform: none;
+}
+
+.chat-composer > .chat-composer__row > .chat-icon-button.p-button {
+  grid-column: 1;
+}
+
+.chat-composer > .chat-composer__row > .chat-send-button.p-button {
+  grid-column: 3;
+}
+
+.chat-composer > .chat-composer__row > .chat-icon-button.p-button:hover,
+.chat-composer > .chat-composer__row > .chat-send-button.p-button:hover:not(:disabled) {
+  transform: none;
+}
+
+.chat-config-shell {
+  position: relative;
+  min-width: 0;
+}
+
+.chat-composer__controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.chat-composer .chat-config-trigger,
+.chat-composer .chat-config-trigger--model {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  height: 30px;
+  min-height: 30px;
+  border-radius: 10px;
+}
+
+.chat-composer .chat-config-trigger--permission {
+  width: auto;
+  max-width: min(132px, 36%);
+}
+
+.chat-command-notice {
+  border: 1px solid #e2e5e3;
+  border-left: 1px solid #e2e5e3;
+  border-radius: 11px;
+  background: #f7f8f7;
+}
+
+.chat-slash-menu,
+.chat-config-popover {
+  border-radius: 14px;
+}
+
+.chat-composer .chat-slash-menu button,
+.chat-composer .chat-config-option,
+.chat-composer .chat-effort-options button {
+  border-radius: 9px;
+}
+
+@media (max-width: 640px) {
+  .chat-composer {
+    padding-inline: 10px;
+  }
+
+  .chat-composer .chat-config-trigger--permission {
+    max-width: 112px;
+  }
+}

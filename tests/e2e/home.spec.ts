@@ -60,6 +60,13 @@ test('opens a focused start page and launches settings in its own window', async
     await settingsPage.getByRole('button', { name: 'Codex' }).click();
     await expect(settingsPage.getByLabel('Chat model')).toBeVisible();
     await expect(settingsPage.getByLabel('Chat reasoning')).toBeVisible();
+    await settingsPage.getByRole('button', { name: 'Appearance' }).click();
+    await settingsPage.getByLabel('Sidebar size').fill('16');
+    await settingsPage.getByLabel('Composer size').fill('17');
+    await expect.poll(() => settingsPage.locator('.reader-settings').evaluate((element) => ({
+      sidebar: getComputedStyle(element).getPropertyValue('--tessel-sidebar-font-size').trim(),
+      composer: getComputedStyle(element).getPropertyValue('--tessel-composer-font-size').trim()
+    }))).toEqual({ sidebar: '16px', composer: '17px' });
     await settingsPage.locator('.reader-settings').getByRole('button', { name: 'Language' }).click();
     await settingsPage.getByLabel('UI language').selectOption('zh-CN');
     await expect(settingsPage.getByLabel('AI 首选语言').locator('option:checked')).toHaveText('简体中文');

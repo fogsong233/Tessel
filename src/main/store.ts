@@ -828,7 +828,9 @@ function normalizeAppearancePreferences(config: AppPreferences['appearance'] | u
     agentFont: normalizeFont(config?.agentFont),
     codeFont: normalizeFont(config?.codeFont),
     uiFontSize: normalizeSize(config?.uiFontSize, defaults.uiFontSize),
+    sidebarFontSize: normalizeSize(config?.sidebarFontSize, config?.uiFontSize ?? defaults.sidebarFontSize),
     agentFontSize: normalizeSize(config?.agentFontSize, defaults.agentFontSize),
+    composerFontSize: normalizeSize(config?.composerFontSize, config?.agentFontSize ?? defaults.composerFontSize),
     codeFontSize: normalizeSize(config?.codeFontSize, defaults.codeFontSize)
   };
 }

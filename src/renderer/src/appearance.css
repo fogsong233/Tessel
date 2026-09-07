@@ -1,0 +1,123 @@
+/* Granular typography controls. PDF canvas/text-layer geometry is deliberately
+   excluded so changing UI text never damages PDF selection alignment. */
+.left-panel {
+  font-size: var(--tessel-sidebar-font-size, 13px);
+}
+
+.left-panel :is(button, input, select, textarea),
+.outline-item,
+.outline-item > span,
+.document-row,
+.document-row > span,
+.trace-card,
+.trace-card__title {
+  font-size: inherit;
+}
+
+.left-panel :is(small, .reader-title-block__brand, .outline-source, .trace-card__meta, .trace-card__brief) {
+  font-size: max(10px, 0.82em);
+}
+
+.chat-bubble,
+.chat-message--user .chat-bubble,
+.chat-message--assistant .chat-bubble,
+.dock-chat-transcript,
+.transient-aid-panel__body {
+  font-size: var(--tessel-agent-font-size, 14px);
+}
+
+.chat-message__role {
+  font-size: max(10px, calc(var(--tessel-agent-font-size, 14px) * 0.78));
+}
+
+.reader-settings {
+  font-family: var(--tessel-ui-font, Inter, ui-sans-serif, system-ui, sans-serif);
+  font-size: var(--tessel-ui-font-size, 14px);
+}
+
+.reader-settings__main,
+.reader-settings__body-content,
+.reader-home__content {
+  font-size: var(--tessel-ui-font-size, 14px);
+}
+
+.reader-settings__section-heading strong,
+.reader-settings__appearance-group > strong {
+  font-size: 1em;
+}
+
+.reader-settings__fields > label,
+.reader-settings__section-heading span,
+.reader-settings__appearance-group > span {
+  font-size: max(11px, 0.84em);
+}
+
+.reader-settings__font-size {
+  display: grid;
+  gap: 7px;
+}
+
+.reader-settings__typography-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  padding-top: 7px;
+}
+
+.reader-settings__typography-grid > section {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e3e6e4;
+  border-radius: 16px;
+  background: #fafbfa;
+}
+
+.reader-settings__typography-grid > section > strong {
+  color: #313633;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.reader-settings__typography-grid > section > label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #686e6a;
+  font-size: 11px;
+}
+
+.reader-settings__font-size-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 10px 0 12px;
+  border: 1px solid #e0e3e1;
+  border-radius: var(--tessel-control-radius, 14px);
+  background: #ffffff;
+}
+
+.reader-settings__font-size-control input[type='range'] {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  accent-color: #2f6d58;
+}
+
+.reader-settings__font-size-control output {
+  color: #444946;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 680;
+  text-align: right;
+}
+
+@media (max-width: 900px) {
+  .reader-settings__typography-grid {
+    grid-template-columns: 1fr;
+  }
+}

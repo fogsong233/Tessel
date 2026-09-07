@@ -6,6 +6,8 @@ import 'primeicons/primeicons.css';
 import 'pdfjs-dist/web/pdf_viewer.css';
 import './styles.css';
 import './reader/reader-overrides.css';
+import './reader/chat-composer.css';
+import './appearance.css';
 import { App } from './App';
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(

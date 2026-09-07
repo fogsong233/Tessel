@@ -480,17 +480,13 @@ function registerIpc(
       abortController.abort();
       void codexAgent.cancel(input.streamId);
     };
-    const sendStreamEvent = (chunk: Omit<AiStreamEvent, 'streamId'>): boolean => {
-      if (!rendererAvailable || sender.isDestroyed()) {
-        abortStream();
-        return false;
-      }
-      const sent = sendToRenderer(sender, 'ai:stream:event', { streamId: input.streamId, ...chunk });
-      if (!sent) {
-        abortStream();
-      }
-      return sent;
-    };
+    const streamSender = createBatchedStreamSender(
+      sender,
+      input.streamId,
+      () => rendererAvailable,
+      abortStream
+    );
+    const sendStreamEvent = streamSender.send;
 
     sender.once('destroyed', abortStream);
     sender.once('render-process-gone', abortStream);
@@ -535,6 +531,7 @@ function registerIpc(
         sendStreamEvent({ error: error instanceof Error ? error.message : String(error), done: true });
       }
     } finally {
+      streamSender.flush();
       if (abortController.signal.aborted && rendererAvailable && !sender.isDestroyed()) {
         sendStreamEvent({ done: true, cancelled: true });
       }
@@ -552,17 +549,13 @@ function registerIpc(
       rendererAvailable = false;
       void codexAgent.cancel(input.streamId);
     };
-    const sendStreamEvent = (chunk: Omit<AiStreamEvent, 'streamId'>): boolean => {
-      if (!rendererAvailable || sender.isDestroyed()) {
-        abortStream();
-        return false;
-      }
-      const sent = sendToRenderer(sender, 'ai:stream:event', { streamId: input.streamId, ...chunk });
-      if (!sent) {
-        abortStream();
-      }
-      return sent;
-    };
+    const streamSender = createBatchedStreamSender(
+      sender,
+      input.streamId,
+      () => rendererAvailable,
+      abortStream
+    );
+    const sendStreamEvent = streamSender.send;
 
     sender.once('destroyed', abortStream);
     sender.once('render-process-gone', abortStream);
@@ -573,6 +566,7 @@ function registerIpc(
         sendStreamEvent({ error: error instanceof Error ? error.message : String(error), done: true });
       }
     } finally {
+      streamSender.flush();
       sender.removeListener('destroyed', abortStream);
       sender.removeListener('render-process-gone', abortStream);
     }
@@ -932,6 +926,74 @@ function sendToRenderer(webContents: WebContents, channel: string, ...args: unkn
     }
     return false;
   }
+}
+
+function createBatchedStreamSender(
+  webContents: WebContents,
+  streamId: string,
+  isAvailable: () => boolean,
+  onUnavailable: () => void
+): {
+  send(chunk: Omit<AiStreamEvent, 'streamId'>): boolean;
+  flush(): boolean;
+} {
+  let pendingDelta = '';
+  let pendingProvider: string | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const deliver = (chunk: Omit<AiStreamEvent, 'streamId'>): boolean => {
+    if (!isAvailable() || webContents.isDestroyed()) {
+      onUnavailable();
+      return false;
+    }
+    const sent = sendToRenderer(webContents, 'ai:stream:event', { streamId, ...chunk });
+    if (!sent) {
+      onUnavailable();
+    }
+    return sent;
+  };
+  const flush = (): boolean => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    if (!pendingDelta) {
+      return isAvailable() && !webContents.isDestroyed();
+    }
+    const delta = pendingDelta;
+    const usedProvider = pendingProvider;
+    pendingDelta = '';
+    pendingProvider = undefined;
+    return deliver({ delta, ...(usedProvider ? { usedProvider } : {}) });
+  };
+  const send = (chunk: Omit<AiStreamEvent, 'streamId'>): boolean => {
+    const isPlainDelta = Boolean(chunk.delta)
+      && !chunk.toolCall
+      && !chunk.activity
+      && !chunk.artifacts?.length
+      && !chunk.agentThreadId
+      && !chunk.done
+      && !chunk.cancelled
+      && !chunk.error;
+    if (isPlainDelta) {
+      if (!isAvailable() || webContents.isDestroyed()) {
+        onUnavailable();
+        return false;
+      }
+      pendingDelta += chunk.delta;
+      pendingProvider = chunk.usedProvider ?? pendingProvider;
+      if (!timer) {
+        timer = setTimeout(flush, 12);
+      }
+      return true;
+    }
+    if (!flush()) {
+      return false;
+    }
+    return deliver(chunk);
+  };
+
+  return { send, flush };
 }
 
 async function pdfSourceForDocument(document: PdfDocumentMeta): Promise<PdfSourceDescriptor> {

@@ -277,6 +277,7 @@ export class CodexAgent {
   private readonly activeTurns = new Map<string, ActiveTurn>();
   private readonly activeExecTurns = new Map<string, ActiveExecTurn>();
   private readonly queuedSteers = new Map<string, PendingSteer[]>();
+  private readonly workspaceImageSnapshots = new Map<string, Map<string, string>>();
   private modelListPromise?: Promise<CodexModelInfo[]>;
   private transportDetectionPromise?: Promise<'app-server' | 'exec'>;
   private executablePromise?: Promise<string>;
@@ -457,13 +458,13 @@ export class CodexAgent {
     input: CodexStreamRequest,
     onEvent: (event: Omit<AiStreamEvent, 'streamId'>) => void
   ): Promise<void> {
+    onEvent({ activity: activity(`session:${input.streamId}`, 'reading', 'Preparing PDF context', 'started') });
     const [, runtime] = await Promise.all([
       this.initialize(),
       this.resolvePdf(input.documentId)
     ]);
     const documentWorkspace = await this.documentWorkspace(runtime.document);
     const reusingThread = Boolean(input.codexThreadId && this.threadContexts.has(input.codexThreadId));
-    onEvent({ activity: activity(`session:${input.streamId}`, 'reading', 'Preparing PDF context', 'started') });
     const [threadId, workspaceImages, turnInput] = await Promise.all([
       this.resolveThread(input, documentWorkspace, onEvent),
       this.workspaceImageVersions(documentWorkspace),
@@ -772,19 +773,26 @@ export class CodexAgent {
   }
 
   private async workspaceImageVersions(directory: string): Promise<Map<string, string>> {
+    const cached = this.workspaceImageSnapshots.get(directory);
+    if (cached) {
+      return new Map(cached);
+    }
     const files = await listWorkspaceImages(directory);
     const versions = new Map<string, string>();
     await Promise.all(files.map(async (filePath) => {
       const details = await stat(filePath);
       versions.set(filePath, imageVersion(details));
     }));
+    this.workspaceImageSnapshots.set(directory, versions);
     return versions;
   }
 
   private async collectArtifacts(active: Pick<ActiveTurn, 'workspaceDirectory' | 'workspaceImages'>): Promise<ConversationAttachment[]> {
     const images = await listWorkspaceImages(active.workspaceDirectory);
+    const currentVersions = new Map<string, string>();
     const attachments = await Promise.all(images.map(async (filePath) => {
       const details = await stat(filePath);
+      currentVersions.set(filePath, imageVersion(details));
       const previousVersion = active.workspaceImages.get(filePath);
       if (previousVersion === imageVersion(details)) {
         return undefined;
@@ -807,6 +815,7 @@ export class CodexAgent {
         createdAt: new Date().toISOString()
       } satisfies ConversationAttachment;
     }));
+    this.workspaceImageSnapshots.set(active.workspaceDirectory, currentVersions);
     return attachments.filter((attachment): attachment is ConversationAttachment => Boolean(attachment));
   }
 

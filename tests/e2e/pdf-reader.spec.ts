@@ -1035,15 +1035,25 @@ test.describe('PDF reader flow', () => {
     await expect(modelButton).toBeVisible();
     await modelButton.click();
     await expect(page.getByRole('dialog', { name: 'Current chat model' })).toBeVisible();
+    await expect(page.getByRole('option').filter({ hasText: 'GPT Test Mini' })).toBeVisible();
     await expect(page.getByRole('group', { name: 'Reasoning effort' })).toBeVisible();
     await page.keyboard.press('Escape');
     const permissionButton = page.getByRole('button', { name: 'Permissions' });
     await expect(permissionButton).toContainText('PDF workspace');
     const composer = page.locator('.dock-chat-panel textarea');
     await composer.fill('/');
-    await expect(page.locator('.chat-slash-menu button')).toHaveCount(4);
-    await expect(page.locator('.chat-slash-menu')).not.toContainText('/model');
+    await expect(page.locator('.chat-slash-menu button')).toHaveCount(5);
+    await expect(page.locator('.chat-slash-menu')).toContainText('/model');
     await expect(page.locator('.chat-slash-menu')).not.toContainText('/help');
+    await composer.fill('/model');
+    await composer.press('Enter');
+    await expect(page.getByRole('dialog', { name: 'Current chat model' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await composer.fill('/model gpt-test-mini medium');
+    await composer.press('Enter');
+    await expect(modelButton).toContainText('GPT Test Mini');
+    await expect(modelButton).toContainText('Medium');
+    await expect(page.locator('.chat-command-notice')).toContainText('This conversation now uses GPT Test Mini');
     await composer.fill('/status');
     await composer.press('Enter');
     await expect(page.locator('.chat-command-notice')).toContainText('PDF workspace');
@@ -1054,10 +1064,27 @@ test.describe('PDF reader flow', () => {
     await expect(page.locator('.chat-message')).toHaveCount(1);
     await expect.poll(async () => {
       const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
-        conversations: Array<{ id: string; codexSettings?: { permissionMode?: string } }>;
+        conversations: Array<{ id: string; codexSettings?: { permissionMode?: string; model?: string; effort?: string } }>;
       };
-      return store.conversations.find((conversation) => conversation.id === 'chat_timeline_fixture')?.codexSettings?.permissionMode;
-    }).toBe('full-access');
+      return store.conversations.find((conversation) => conversation.id === 'chat_timeline_fixture')?.codexSettings;
+    }).toEqual({ permissionMode: 'full-access', model: 'gpt-test-mini', effort: 'medium' });
+
+    const composerGeometry = await page.locator('.chat-composer__row').evaluate((row) => {
+      const textarea = row.querySelector('textarea')!.getBoundingClientRect();
+      const buttons = [...row.querySelectorAll('button')].map((button) => button.getBoundingClientRect());
+      return {
+        textareaLeft: textarea.left,
+        textareaRight: textarea.right,
+        textareaCenter: textarea.top + textarea.height / 2,
+        buttonCenters: buttons.map((button) => button.top + button.height / 2),
+        buttonLefts: buttons.map((button) => button.left)
+      };
+    });
+    expect(composerGeometry.buttonLefts[0]).toBeLessThan(composerGeometry.textareaLeft);
+    expect(composerGeometry.buttonLefts.at(-1)).toBeGreaterThanOrEqual(composerGeometry.textareaRight);
+    for (const center of composerGeometry.buttonCenters) {
+      expect(Math.abs(center - composerGeometry.textareaCenter)).toBeLessThanOrEqual(1.5);
+    }
   });
 
   test('restores per-conversation Codex controls for a chat created before Codex was enabled', async () => {
@@ -1338,7 +1365,7 @@ test.describe('PDF reader flow', () => {
     }).toBe(configuredPath);
   });
 
-  test('persists reader appearance and keeps the chat composer at a two-line height', async () => {
+  test('persists granular reader typography and keeps the chat composer aligned', async () => {
     const settingsPage = await openSettingsWindow(app, page);
     const settings = settingsPage.locator('.reader-settings');
     await settings.getByRole('button', { name: 'Appearance' }).click();
@@ -1350,18 +1377,20 @@ test.describe('PDF reader flow', () => {
     });
     await settings.getByLabel('Interface font').selectOption('rounded');
     await settings.getByLabel('Interface size').fill('16');
+    await settings.getByLabel('Sidebar size').fill('13');
     await settings.getByLabel('Agent font').selectOption('serif');
-    await settings.getByLabel('Agent size').fill('15');
+    await settings.getByLabel('Response size').fill('15');
+    await settings.getByLabel('Composer size').fill('17');
     await settings.getByRole('button', { name: 'Save' }).click();
 
     await expect.poll(async () => {
       const store = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
-        appPreferences?: { selectionColors?: { chat?: string }; appearance?: { uiFont?: string; uiFontSize?: number; agentFont?: string; agentFontSize?: number } };
+        appPreferences?: { selectionColors?: { chat?: string }; appearance?: { uiFont?: string; uiFontSize?: number; sidebarFontSize?: number; agentFont?: string; agentFontSize?: number; composerFontSize?: number } };
       };
       return store.appPreferences;
     }).toMatchObject({
       selectionColors: { chat: '#b8d6ec' },
-      appearance: { uiFont: 'rounded', uiFontSize: 16, agentFont: 'serif', agentFontSize: 15 }
+      appearance: { uiFont: 'rounded', uiFontSize: 16, sidebarFontSize: 13, agentFont: 'serif', agentFontSize: 15, composerFontSize: 17 }
     });
 
     await selectPdfText(page);
@@ -1369,7 +1398,8 @@ test.describe('PDF reader flow', () => {
     const composer = page.locator('.chat-composer textarea');
     await expect(composer).toBeVisible();
     await expect(composer).toHaveCSS('font-family', /Iowan|Charter|Georgia|serif/);
-    expect(await composer.evaluate((textarea) => textarea.getBoundingClientRect().height)).toBeGreaterThanOrEqual(58);
+    await expect(composer).toHaveCSS('font-size', '17px');
+    expect(await composer.evaluate((textarea) => textarea.getBoundingClientRect().height)).toBeGreaterThanOrEqual(36);
     const composerGeometry = await page.locator('.chat-composer__row').evaluate((row) => {
       const textareaElement = row.querySelector('textarea')!;
       const textarea = textareaElement.getBoundingClientRect();

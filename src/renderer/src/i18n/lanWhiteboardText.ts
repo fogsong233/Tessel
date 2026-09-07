@@ -1,4 +1,4 @@
-import type { UiLanguage } from '../../shared/domain';
+import type { UiLanguage } from '../../../shared/domain';
 
 export interface LanWhiteboardText {
   sectionLabel: string;
@@ -69,6 +69,8 @@ const en: LanWhiteboardText = {
   securityNote: 'The address contains a random key for this session and expires when Tessel exits. Live ink uses uncompressed, frame-batched WebSocket updates.'
 };
 
+const lanWhiteboardTextByLanguage = { 'zh-CN': zhCN, en } satisfies Record<UiLanguage, LanWhiteboardText>;
+
 export function lanWhiteboardText(language: UiLanguage): LanWhiteboardText {
-  return language === 'zh-CN' ? zhCN : en;
+  return lanWhiteboardTextByLanguage[language];
 }

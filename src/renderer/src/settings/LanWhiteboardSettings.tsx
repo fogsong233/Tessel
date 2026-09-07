@@ -2,7 +2,7 @@ import { type ReactElement, useEffect, useState } from 'react';
 import { Copy, ExternalLink, Tablet, Wifi } from 'lucide-react';
 import type { UiLanguage } from '../../../shared/domain';
 import type { LanWhiteboardServerInfo } from '../../../shared/lanWhiteboard';
-import { lanWhiteboardText } from '../lanWhiteboardText';
+import { lanWhiteboardText } from '../i18n/lanWhiteboardText';
 import { LanQrCode } from './LanQrCode';
 
 export function LanWhiteboardSettings({ language }: { language: UiLanguage }): ReactElement {
