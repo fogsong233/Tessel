@@ -77,6 +77,7 @@ import { drawingSelectionPng } from './drawing/drawingGeometry';
 import { lanWhiteboardText } from './i18n/lanWhiteboardText';
 import { MarkdownView } from './MarkdownView';
 import { LanWhiteboardSettings } from './settings/LanWhiteboardSettings';
+import { fontStack } from './appearance';
 import {
   formatDateTime,
   readerHomeText,
@@ -124,19 +125,6 @@ function sidebarTheme(color: string): SidebarTheme {
     ink: isLight ? '#39382f' : '#f8f9f5',
     muted: isLight ? '#756f55' : 'rgba(248, 249, 245, 0.72)'
   };
-}
-
-function fontStack(font: AppearanceFont): string {
-  switch (font) {
-    case 'serif':
-      return 'Iowan Old Style, Charter, Georgia, ui-serif, serif';
-    case 'rounded':
-      return 'ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", Inter, system-ui, sans-serif';
-    case 'mono':
-      return 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
-    default:
-      return 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  }
 }
 
 export function App(): ReactElement {

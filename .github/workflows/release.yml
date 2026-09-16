@@ -131,6 +131,9 @@ jobs:
       GH_REPO: ${{ github.repository }}
 
     steps:
+      - name: Checkout release notes
+        uses: actions/checkout@v4
+
       - name: Download package artifacts
         uses: actions/download-artifact@v4
         with:
@@ -150,15 +153,24 @@ jobs:
             exit 1
           fi
 
+          notes_file="docs/releases/$RELEASE_TAG.md"
+          notes_args=(--generate-notes)
+          if [ -f "$notes_file" ]; then
+            notes_args=(--notes-file "$notes_file")
+          fi
+
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+            if [ -f "$notes_file" ]; then
+              gh release edit "$RELEASE_TAG" --notes-file "$notes_file"
+            fi
           else
             release_args=(
               "$RELEASE_TAG"
               "${files[@]}"
               --target "$GITHUB_SHA"
               --title "Tessel v$RELEASE_VERSION"
-              --generate-notes
+              "${notes_args[@]}"
             )
             if [[ "$RELEASE_PRERELEASE" == "true" ]]; then
               release_args+=(--prerelease)

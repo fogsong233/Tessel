@@ -6,8 +6,22 @@
 
 .dock-iconbar .p-button,
 .dock-chat-panel__actions > .p-button {
-  border-radius: 12px;
+  border-radius: var(--ui-radius-tight);
 }
+
+.dock-chat-panel,
+.dock-note-editor-panel,
+.transient-aid-panel { border-color: var(--ui-border); border-radius: var(--ui-radius); }
+.dock-chat-panel > header { padding: 14px 16px; border-color: var(--ui-border); }
+.dock-chat-panel > header span { font-size: var(--ui-caption-size); font-weight: 400; color: var(--ui-muted); }
+.dock-chat-panel > header strong { font-size: var(--ui-label-size); font-weight: 600; color: var(--ui-text); }
+.dock-chat-panel > header .p-badge { min-width: 44px; height: 28px; line-height: 28px; border-radius: 8px; background: var(--ui-surface-soft); font-size: var(--ui-caption-size); font-weight: 500; }
+.dock-chat-panel__actions > .p-button { background: transparent; color: var(--ui-muted); }
+.dock-chat-empty svg { color: var(--ui-accent); }
+.dock-chat-empty { font-size: var(--ui-label-size); color: var(--ui-muted); }
+.dock-chat-messages { scrollbar-width: thin; scrollbar-color: #cbd0c6 transparent; scrollbar-gutter: stable both-edges; }
+.dock-chat-transcript { width: min(100%, calc(var(--chat-content-width) + 40px)); margin-inline: auto; padding-inline: 20px; }
+.dock-chat-panel .dock-chat-anchor { width: min(calc(100% - 40px), var(--chat-content-width)); margin-inline: auto; border-radius: 8px; font-size: var(--ui-caption-size); }
 
 .dock-chat-messages:has(.dock-chat-empty) {
   display: grid;

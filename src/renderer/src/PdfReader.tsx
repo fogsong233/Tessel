@@ -1511,14 +1511,16 @@ export function PdfReader({
       return;
     }
 
-    const dock = container.querySelector<HTMLElement>('.reader-dock-lane');
+    // The lane does not include the user's drag transform. Align the actual
+    // panel, otherwise a retained horizontal offset escapes after a resize.
+    const dock = container.querySelector<HTMLElement>('.reader-float-dock');
     if (!dock) {
       return;
     }
 
     const viewportRect = container.getBoundingClientRect();
     const dockRect = dock.getBoundingClientRect();
-    const delta = dockRect.right - (viewportRect.left + container.clientWidth);
+    const delta = dockRect.right + dockHandleGutter - (viewportRect.left + container.clientWidth);
     if (Math.abs(delta) > 1) {
       container.scrollLeft += delta;
     }
@@ -1533,7 +1535,15 @@ export function PdfReader({
     // delayed frames could otherwise race a click/focus in the model menu.
     alignDockRight();
     const frame = window.requestAnimationFrame(alignDockRight);
-    return () => window.cancelAnimationFrame(frame);
+    // Container queries and font changes can settle after the React commit.
+    // Observe the dock, not the PDF canvas, so PDF zoom/panning remains free.
+    const dock = containerRef.current?.querySelector<HTMLElement>('.reader-float-dock');
+    const observer = new ResizeObserver(alignDockRight);
+    if (dock) observer.observe(dock);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   }, [activeConversationId, alignDockRight, dockTab, hasOpenDock, noteEditorNote?.id, readerViewport.width, readerViewport.height, resolvedDockWidth, source, transientAid?.id]);
 
   useEffect(() => {
@@ -4430,7 +4440,8 @@ function DockChatPanel({
         ...composerPrefill.attachments!.filter((attachment) => !current.some((item) => item.id === attachment.id))
       ]);
     }
-    window.requestAnimationFrame(() => textareaRef.current?.focus());
+    const frame = window.requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
+    return () => window.cancelAnimationFrame(frame);
   }, [composerPrefill?.nonce]);
 
   useEffect(() => {
@@ -4926,15 +4937,16 @@ function DockChatPanel({
                 <button
                   type="button"
                   className="chat-config-trigger chat-config-trigger--model"
+                  title={`${selectedModel?.displayName ?? codexSettings.model ?? text.codexDefaultModel} · ${codexSettings.effort ? reasoningEffortLabel(codexSettings.effort, uiLanguage) : text.codexDefaultEffort}`}
                   aria-label={text.codexModel}
                   aria-expanded={configMenu === 'model'}
                   aria-haspopup="dialog"
                   disabled={busy}
                   onClick={() => setConfigMenu((current) => current === 'model' ? undefined : 'model')}
                 >
-                  <Cpu size={13} />
+                  <Cpu size={15} />
                   <span>{selectedModel?.displayName ?? codexSettings.model ?? text.codexDefaultModel}</span>
-                  <small><Gauge size={11} />{codexSettings.effort ? reasoningEffortLabel(codexSettings.effort, uiLanguage) : text.codexDefaultEffort}</small>
+                  <small><Gauge size={13} />{codexSettings.effort ? reasoningEffortLabel(codexSettings.effort, uiLanguage) : text.codexDefaultEffort}</small>
                   <ChevronDown size={13} />
                 </button>
                 <button

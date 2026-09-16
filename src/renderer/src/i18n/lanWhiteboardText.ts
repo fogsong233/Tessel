@@ -15,6 +15,7 @@ export interface LanWhiteboardText {
   localhost: string;
   otherAddresses: string;
   copyAddress: string;
+  copyHint: string;
   copy: string;
   copied: string;
   preview: string;
@@ -38,6 +39,7 @@ const zhCN: LanWhiteboardText = {
   localhost: '本机地址',
   otherAddresses: '其他网络地址',
   copyAddress: '复制地址',
+  copyHint: '复制的是完整链接，已包含连接密钥。',
   copy: '复制',
   copied: '已复制',
   preview: '在浏览器预览',
@@ -61,6 +63,7 @@ const en: LanWhiteboardText = {
   localhost: 'Localhost',
   otherAddresses: 'Other network addresses',
   copyAddress: 'Copy address',
+  copyHint: 'Copies the full link, including the connection key.',
   copy: 'Copy',
   copied: 'Copied',
   preview: 'Preview in browser',

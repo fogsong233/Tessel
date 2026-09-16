@@ -55,12 +55,30 @@ test('opens a focused start page and launches settings in its own window', async
     const qrCode = settingsPage.locator('.reader-settings__lan-qr img');
     await expect(qrCode).toBeVisible();
     await expect(qrCode).toHaveAttribute('src', /^data:image\/png;base64,/);
-    await expect(settingsPage.locator('.reader-settings__lan-primary-address code')).toContainText(/^http:\/\//);
+    const address = settingsPage.locator('.reader-settings__lan-primary-address code');
+    const fullLink = new URL((await address.getAttribute('title'))!);
+    expect(fullLink.protocol).toBe('http:');
+    expect(fullLink.searchParams.get('token')).toBeTruthy();
+    await expect(address).toHaveText(fullLink.host);
+    // Verify the display simplification never drops the access key on copy,
+    // without writing to the developer's real clipboard.
+    await settingsPage.evaluate(() => {
+      Object.defineProperty(navigator.clipboard, 'writeText', {
+        configurable: true,
+        value: async (value: string) => { document.documentElement.dataset.copiedLanUrl = value; }
+      });
+    });
+    await settingsPage.locator('.reader-settings__lan-primary-address').getByTitle('Copy address').click();
+    await expect(settingsPage.locator('html')).toHaveAttribute('data-copied-lan-url', fullLink.href);
+    await expect(settingsPage.locator('.reader-settings__lan-primary-address')).toContainText('Copied');
 
     await settingsPage.getByRole('button', { name: 'Codex' }).click();
     await expect(settingsPage.getByLabel('Chat model')).toBeVisible();
     await expect(settingsPage.getByLabel('Chat reasoning')).toBeVisible();
     await settingsPage.getByRole('button', { name: 'Appearance' }).click();
+    await expect(settingsPage.locator('.reader-settings__fields').first()).toHaveCSS('border-radius', '16px');
+    await settingsPage.getByLabel('Interface size', { exact: true }).fill('20');
+    await expect(settingsPage.locator('.reader-settings__section-heading span').first()).toHaveCSS('font-size', '19px');
     await settingsPage.getByLabel('Sidebar size').fill('16');
     await settingsPage.getByLabel('Composer size').fill('17');
     await expect.poll(() => settingsPage.locator('.reader-settings').evaluate((element) => ({

@@ -1,0 +1,49 @@
+/* Shared chrome only. PDF text/canvas sizing and user annotation colors are
+   intentionally outside this system. Component files own their geometry. */
+:root,
+.app-shell,
+.reader-settings,
+.remote-app {
+  --ui-font: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  --ui-surface: #ffffff;
+  --ui-surface-soft: #f7f8f5;
+  --ui-border: #e3e5df;
+  --ui-border-strong: #cdd1c7;
+  --ui-text: #292d27;
+  --ui-ink: #292d27;
+  --ui-muted: #686e64;
+  --ui-muted-2: #7b8177;
+  --ui-hover: #f1f3ee;
+  --ui-active: #e9ede5;
+  --ui-accent: #50654a;
+  --ui-radius: 16px;
+  --ui-radius-tight: 10px;
+  --ui-focus: 0 0 0 3px rgb(80 101 74 / 12%);
+  --ui-popover-shadow: 0 12px 32px rgb(29 38 24 / 10%), 0 2px 6px rgb(29 38 24 / 5%);
+  --tessel-control-radius: var(--ui-radius-tight);
+  --tessel-sidebar-pill-radius: var(--ui-radius-tight);
+  --chat-content-width: 720px;
+}
+
+/* Resolve size tokens where preferences are set, not on :root: custom
+   properties containing var() otherwise inherit an already resolved value. */
+.app-shell,
+.reader-settings,
+.remote-app {
+  --ui-caption-size: max(12px, calc(var(--tessel-ui-font-size, 14px) - 2px));
+  --ui-label-size: max(13px, calc(var(--tessel-ui-font-size, 14px) - 1px));
+}
+
+/* Keep native text rasterization: no CSS zoom, text strokes or GPU transforms
+   as a font-smoothing workaround. Those also disturb PDF selection geometry. */
+.app-shell,
+.remote-app {
+  font-family: var(--tessel-ui-font, var(--ui-font));
+  text-rendering: auto;
+  -webkit-font-smoothing: auto;
+}
+
+:is(.reader-settings, .left-panel, .reader-dock-lane) button:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+}

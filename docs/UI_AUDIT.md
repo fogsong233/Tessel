@@ -24,6 +24,10 @@ without discarding its settings screenshots.
 - Expanded book details, network addresses, QR code and Markdown update notes.
 - Chat: empty/multiline input, model/reasoning, permissions, slash commands,
   participant names and a completed transcript; normal and large fonts.
+- Wide chat at 2000 × 1000, resized with the real dock handle: the draft and
+  config are centered at 720px, while the model menu stays within 420px.
+- Connection settings enforce a 12px minimum for helper labels and preserve
+  the full token-bearing link behind the readable host/port display.
 - PDF loading, search, bookmarks, selection actions, translation history/result,
   Markdown note editor at wide and narrow widths, notebook placement, collapsed
   and expanded drawing tools.
@@ -56,7 +60,11 @@ alone do not detect misleading icons or awkward wrapping.
 
 ## Layout ownership
 
+- `design-tokens.css`: shared chrome colors, shape, typography and reading measure.
+- `appearance.ts`: font stacks, including explicit Windows/CJK fallbacks.
 - `appearance.css`: independent font controls and settings content sizing.
+- `settings/settings.css`, `settings/lan-whiteboard.css`: settings and connection UI.
+- `reader/sidebar.css`: directory controls and navigation hierarchy.
 - `reader/chat-composer.css`: composer sizing and per-conversation controls.
 - `reader/dock-layout.css`: responsive dock panel headers and note editor layout.
 - `reader/reader-overrides.css`: notebook paper/toolbar and sidebar layout.

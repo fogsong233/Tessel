@@ -1,0 +1,30 @@
+/* Structure, not another stack of pills: search is an input, tools are quiet
+   controls, and navigation has a persistent ink marker. Honor custom colors. */
+.left-panel {
+  --tessel-directory-line: color-mix(in srgb, var(--tessel-directory-ink) 10%, transparent);
+  --tessel-directory-hover: color-mix(in srgb, var(--tessel-directory-ink) 5%, transparent);
+}
+.left-panel__top { gap: 8px; padding: 16px 12px 14px 16px; }
+.left-panel .reader-title-block strong { font-weight: 600; line-height: 1.5; }
+.left-panel .reader-title-block small { font-size: max(12px, calc(var(--tessel-sidebar-font-size, 13px) - 1px)); font-weight: 400; line-height: 1.5; }
+.left-panel__actions { gap: 2px; }
+.left-panel__actions .icon-button { width: 32px; height: 32px; border-color: transparent; background: transparent; }
+.left-panel .panel-search { min-height: 36px; border-radius: var(--ui-radius-tight); backdrop-filter: none; }
+.left-panel :is(.page-control, .zoom-control) { border-color: transparent; border-radius: var(--ui-radius-tight); background: color-mix(in srgb, var(--tessel-directory-ink) 3%, transparent); }
+.left-panel .reader-controls > .icon-button { background: transparent; border-color: transparent; }
+.left-panel .zoom-control .zoom-readout { font-weight: 500; }
+.left-panel .page-control :is(input, span) { font-variant-numeric: tabular-nums; }
+.left-panel .canvas-placement-menu__trigger { min-height: 38px; border-color: transparent; background: transparent; font-weight: 500; padding-inline: 9px; }
+.left-panel .canvas-placement-menu__options button { font-weight: 500; }
+.left-panel .canvas-placement-menu__options > small { font-size: 12px; line-height: 1.5; }
+.left-panel .panel-breadcrumb { gap: 4px; padding: 0 12px; border-top: 0; }
+.left-panel .panel-breadcrumb button { position: relative; min-height: 42px; padding: 8px 6px 10px; border: 0; border-radius: 0; box-shadow: none; font-weight: 400; }
+.left-panel .panel-breadcrumb button.is-active { background: transparent; font-weight: 600; }
+.left-panel .panel-breadcrumb button.is-active::after { position: absolute; bottom: 0; left: 10px; right: 10px; height: 2px; content: ''; border-radius: 2px; background: currentColor; }
+.left-panel .panel-breadcrumb button small { background: transparent; font-weight: 400; }
+.left-panel .outline-ai-button { min-height: 36px; border-color: var(--tessel-directory-line); background: transparent; font-weight: 500; }
+.left-panel .outline-ai-button:hover { background: var(--tessel-directory-hover); }
+.left-panel .outline-item { border-radius: 8px; font-weight: 400; }
+.left-panel .outline-item.is-active { background: color-mix(in srgb, var(--tessel-directory-ink) 7%, transparent); font-weight: 600; }
+.left-panel :is(.empty-line, .outline-source) { line-height: 1.65; }
+.reader-document-panel { box-shadow: none; }

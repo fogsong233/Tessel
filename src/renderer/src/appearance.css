@@ -25,7 +25,7 @@
 }
 
 .left-panel :is(small, .reader-title-block__brand, .outline-source, .trace-card__meta, .trace-card__brief) {
-  font-size: max(10px, 0.82em);
+  font-size: max(12px, calc(var(--tessel-sidebar-font-size, 13px) - 1px));
 }
 
 .chat-bubble,
@@ -215,11 +215,6 @@
   .reader-settings__update-summary > div {
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;
-  }
-
-  .reader-settings__lan-connect {
-    grid-template-columns: minmax(0, 1fr);
-    justify-items: start;
   }
 
   .reader-settings__lan-status {

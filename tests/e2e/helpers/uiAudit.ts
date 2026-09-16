@@ -28,7 +28,13 @@ export async function auditInterfaces(app: ElectronApplication, reader: Page, ro
       const clippedPanels = await page.locator('.dock-chat-panel, .dock-note-editor-panel, .transient-aid-panel, .remote-brush-panel.is-open').evaluateAll((panels) => panels.filter((panel) => {
         const box = panel.getBoundingClientRect();
         return box.width > 0 && (box.left < -1 || box.top < -1 || box.right > innerWidth + 1 || box.bottom > innerHeight + 1);
-      }).map((panel) => panel.className));
+      }).map((panel) => {
+        const box = panel.getBoundingClientRect();
+        const viewport = document.querySelector('.pdf-viewport');
+        const stage = document.querySelector('.pdf-stage');
+        const dock = document.querySelector('.reader-float-dock');
+        return { class: panel.className, x: box.x, y: box.y, width: box.width, height: box.height, scrollLeft: viewport?.scrollLeft, stageStyle: stage?.getAttribute('style'), dockTransform: dock && getComputedStyle(dock).transform };
+      }));
       expect.soft(clippedPanels, `${name}: panels must remain inside the window`).toEqual([]);
       if (['chat-empty', 'chat-narrow-empty', 'chat-large-type'].includes(name)) {
         const input = page.locator('.chat-composer textarea');
@@ -61,6 +67,13 @@ export async function auditInterfaces(app: ElectronApplication, reader: Page, ro
       await body.evaluate((node) => { node.scrollTop = 0; });
       if (index === 3) {
         await expect(settings.locator('.reader-settings__lan-qr img')).toBeVisible();
+        const address = settings.locator('.reader-settings__lan-primary-address code');
+        expect(await address.innerText()).toMatch(/^[\d.]+:\d+$/);
+        const link = new URL((await address.getAttribute('title'))!);
+        expect(link.searchParams.get('token')).toBeTruthy();
+        const smallText = await settings.locator('.reader-settings__lan :is(code, small, p, button, summary)').evaluateAll((nodes) =>
+          nodes.filter((node) => node.getBoundingClientRect().width > 0 && Number.parseFloat(getComputedStyle(node).fontSize) < 12).map((node) => node.className));
+        expect.soft(smallText, 'Connection settings must not use tiny labels').toEqual([]);
         const addresses = settings.locator('.reader-settings__lan-addresses');
         if (await addresses.count()) await addresses.locator('summary').click();
       }
@@ -131,6 +144,36 @@ export async function auditInterfaces(app: ElectronApplication, reader: Page, ro
 
   await reader.getByRole('button', { name: 'New page chat', exact: true }).click();
   await capture(reader, 'chat-empty');
+  // Exercise the real dock resize handler, not an injected CSS width. Both the
+  // draft and config must stop growing; wide model menus remain content-sized.
+  await resize(reader, 2000, 1000);
+  const resizeHandle = reader.locator('.dock-resize-handle');
+  await expect.poll(() => resizeHandle.evaluate((node) => {
+    const box = node.getBoundingClientRect();
+    return box.left >= 0 && box.right <= innerWidth;
+  })).toBe(true);
+  const resizeBox = (await resizeHandle.boundingBox())!;
+  await reader.mouse.move(resizeBox.x + resizeBox.width / 2, resizeBox.y + 20);
+  await reader.mouse.down();
+  await reader.mouse.move(resizeBox.x + 620, resizeBox.y + 20, { steps: 8 });
+  await reader.mouse.up();
+  await expect.poll(() => reader.locator('.dock-chat-panel').evaluate((node) => node.clientWidth)).toBeGreaterThan(800);
+  const wideGeometry = await reader.locator('.chat-composer').evaluate((node) => {
+    const form = node.getBoundingClientRect();
+    const row = node.querySelector('.chat-composer__row')!.getBoundingClientRect();
+    const config = node.querySelector('.chat-config-shell')!.getBoundingClientRect();
+    const model = node.querySelector('.chat-config-trigger--model')!.getBoundingClientRect();
+    return { width: row.width, center: Math.abs(row.left + row.width / 2 - form.left - form.width / 2), configWidth: config.width, modelWidth: model.width };
+  });
+  expect(wideGeometry.width).toBe(720);
+  expect(wideGeometry.center).toBeLessThanOrEqual(1);
+  expect(wideGeometry.configWidth).toBe(wideGeometry.width);
+  expect(wideGeometry.modelWidth).toBeLessThan(360);
+  await capture(reader, 'chat-wide-empty');
+  await reader.getByRole('button', { name: 'Current chat model', exact: true }).click();
+  expect(await reader.locator('.chat-model-menu').evaluate((node) => node.getBoundingClientRect().width)).toBeLessThanOrEqual(420);
+  await capture(reader, 'chat-wide-model-menu');
+  await reader.keyboard.press('Escape');
   const composer = reader.locator('.chat-composer textarea');
   await composer.fill('A long question about the current page, including typography, paragraph spacing, and how the explanation relates to this document.');
   await resize(reader, 1080, 720);

@@ -1,5 +1,5 @@
 import { type ReactElement, useEffect, useState } from 'react';
-import { Copy, ExternalLink, Tablet, Wifi } from 'lucide-react';
+import { Check, ChevronDown, Copy, ExternalLink, Tablet, Wifi } from 'lucide-react';
 import type { UiLanguage } from '../../../shared/domain';
 import type { LanWhiteboardServerInfo } from '../../../shared/lanWhiteboard';
 import { lanWhiteboardText } from '../i18n/lanWhiteboardText';
@@ -59,29 +59,30 @@ export function LanWhiteboardSettings({ language }: { language: UiLanguage }): R
             <p>{text.scanDescription}</p>
             {recommended ? (
               <div className="reader-settings__lan-primary-address">
-                <code title={recommended.url}>{recommended.url}</code>
+                <code title={recommended.url}>{new URL(recommended.url).host}</code>
                 <button type="button" className={copiedUrl === recommended.url ? 'is-copied' : ''} title={text.copyAddress} onClick={() => copyUrl(recommended.url)}>
-                  <Copy size={14} />{copiedUrl === recommended.url ? text.copied : text.copy}
+                  {copiedUrl === recommended.url ? <Check size={15} /> : <Copy size={15} />}{copiedUrl === recommended.url ? text.copied : text.copy}
                 </button>
-                <button type="button" title={text.preview} onClick={() => window.open(recommended.url, '_blank', 'noopener')}><ExternalLink size={14} /></button>
+                <button type="button" title={text.preview} aria-label={text.preview} onClick={() => window.open(recommended.url, '_blank', 'noopener')}><ExternalLink size={16} /></button>
               </div>
             ) : <p>{info ? text.noAddress : text.loadingAddress}</p>}
+            {recommended && <small className="reader-settings__lan-link-hint">{text.copyHint}</small>}
           </div>
         </div>
-        <div className="reader-settings__lan-steps">
-          <span><strong>1</strong>{text.keepRunning}</span>
-          <span><strong>2</strong>{text.sameWifi}</span>
-          <span><strong>3</strong>{text.openAddress}</span>
-        </div>
+        <ol className="reader-settings__lan-steps">
+          <li><strong aria-hidden="true">1</strong>{text.keepRunning}</li>
+          <li><strong aria-hidden="true">2</strong>{text.sameWifi}</li>
+          <li><strong aria-hidden="true">3</strong>{text.openAddress}</li>
+        </ol>
         {otherAddresses.length > 0 && (
           <details className="reader-settings__lan-addresses">
-            <summary>{text.otherAddresses}<span>{otherAddresses.length}</span></summary>
+            <summary>{text.otherAddresses}<span>{otherAddresses.length}</span><ChevronDown size={15} /></summary>
             <div>
               {otherAddresses.map((address) => (
                 <div key={address.url}>
-                  <span><small>{address.loopback ? text.localhost : address.interfaceName}</small><code>{address.url}</code></span>
+                  <span><small>{address.loopback ? text.localhost : address.interfaceName}</small><code title={address.url}>{new URL(address.url).host}</code></span>
                   <button type="button" className={copiedUrl === address.url ? 'is-copied' : ''} title={text.copyAddress} onClick={() => copyUrl(address.url)}>
-                    <Copy size={14} />{copiedUrl === address.url ? text.copied : text.copy}
+                    {copiedUrl === address.url ? <Check size={15} /> : <Copy size={15} />}{copiedUrl === address.url ? text.copied : text.copy}
                   </button>
                 </div>
               ))}

@@ -2,13 +2,21 @@
    reader stylesheet so composer geometry has one predictable final owner. */
 .chat-composer {
   --chat-control-size: max(34px, calc(var(--tessel-composer-font-size, 14px) * 1.4 + 12px));
-  --chat-control-radius: 12px;
+  --chat-control-radius: var(--ui-radius-tight);
   position: relative;
   display: grid;
   gap: 8px;
-  padding: 10px 14px 12px;
-  border-top: 1px solid #e8eae9;
-  background: rgba(255, 255, 255, 0.98);
+  justify-items: center;
+  padding: 12px 20px 14px;
+  border-top: 0;
+  background: var(--ui-surface);
+}
+
+/* Draft content follows one measure while the panel grows independently. */
+.chat-composer > :is(.chat-composer__row, .chat-config-shell, .composer-attachments, .chat-command-notice, .chat-permission-warning) {
+  width: 100%;
+  max-width: var(--chat-content-width);
+  min-width: 0;
 }
 
 .chat-composer > .chat-composer__row {
@@ -19,16 +27,16 @@
   min-width: 0;
   min-height: 50px;
   padding: 7px;
-  border: 1px solid #dfe2e0;
-  border-radius: 18px;
-  background: #ffffff;
-  box-shadow: 0 4px 16px rgba(25, 29, 27, 0.055);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius);
+  background: var(--ui-surface);
+  box-shadow: 0 2px 8px rgb(29 38 24 / 4%);
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
 .chat-composer > .chat-composer__row:focus-within {
-  border-color: #aeb7b2;
-  box-shadow: 0 0 0 3px rgba(47, 109, 88, 0.09), 0 5px 18px rgba(25, 29, 27, 0.06);
+  border-color: #a4aea0;
+  box-shadow: var(--ui-focus);
 }
 
 .chat-composer > .chat-composer__row > textarea {
@@ -106,8 +114,8 @@
 }
 
 .chat-composer__controls {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(32px, auto);
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 5px;
   min-width: 0;
@@ -115,17 +123,28 @@
 
 .chat-composer .chat-config-trigger,
 .chat-composer .chat-config-trigger--model {
-  width: 100%;
-  max-width: none;
+  width: auto;
+  max-width: 100%;
   min-width: 0;
-  height: 30px;
-  min-height: 30px;
-  border-radius: 10px;
+  height: 32px;
+  min-height: 32px;
+  border-radius: 8px;
+  color: var(--ui-muted);
+  font-size: var(--ui-caption-size);
+  font-weight: 500;
 }
+
+.chat-composer .chat-config-trigger--model {
+  grid-template-columns: 15px minmax(0, auto) auto 13px;
+  gap: 6px;
+}
+
+.chat-config-trigger > small { font-size: inherit; font-weight: 400; color: var(--ui-muted); }
 
 .chat-composer .chat-config-trigger--permission {
   width: auto;
-  max-width: 132px;
+  max-width: 100%;
+  margin-left: auto;
 }
 
 .chat-command-notice {
@@ -137,8 +156,21 @@
 
 .chat-slash-menu,
 .chat-config-popover {
-  border-radius: 14px;
+  border-radius: var(--ui-radius);
+  border-color: var(--ui-border);
+  box-shadow: var(--ui-popover-shadow);
 }
+
+.chat-config-popover { right: auto; width: min(100%, 420px); max-height: min(420px, max(100px, calc(var(--dock-available-height, 100vh) - 270px))); overflow-y: auto; overscroll-behavior: contain; }
+.chat-permission-menu { right: 0; left: auto; }
+.chat-config-popover__heading { color: var(--ui-text); font-size: var(--ui-label-size); font-weight: 600; padding: 10px; }
+.chat-config-popover__heading small { color: var(--ui-muted); font-size: var(--ui-caption-size); font-weight: 400; }
+.chat-config-option strong { color: var(--ui-text); font-size: var(--ui-label-size); font-weight: 500; }
+.chat-config-option small { color: var(--ui-muted); font-size: var(--ui-caption-size); font-weight: 400; white-space: normal; line-height: 1.5; }
+.chat-composer .chat-config-option { padding: 9px 10px; }
+.chat-composer .chat-effort-options button { min-height: 32px; height: auto; font-size: var(--ui-caption-size); padding: 6px; }
+.chat-effort-options { grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); }
+.chat-composer > .chat-slash-menu { left: 20px; right: 20px; width: auto; max-width: var(--chat-content-width); margin-inline: auto; }
 
 .chat-composer .chat-slash-menu button,
 .chat-composer .chat-config-option,
@@ -146,12 +178,13 @@
   border-radius: 9px;
 }
 
-@media (max-width: 640px) {
+@container dock (max-width: 480px) {
   .chat-composer {
-    padding-inline: 10px;
+    padding-inline: 12px;
   }
 
+  .chat-composer > .chat-slash-menu { left: 12px; right: 12px; }
   .chat-composer .chat-config-trigger--permission {
-    max-width: 112px;
+    margin-left: 0;
   }
 }

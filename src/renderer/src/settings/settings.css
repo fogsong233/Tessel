@@ -1,0 +1,46 @@
+/* Settings share the reader's quiet ink, rectangular controls and text scale. */
+.reader-settings__main { border-left: 1px solid var(--ui-border); box-shadow: none; }
+.reader-settings__page-heading h1 { color: var(--ui-text); font-weight: 600; line-height: 1.3; }
+.reader-settings__section-heading strong { color: var(--ui-text); font-weight: 600; }
+.reader-settings__section-heading span,
+.reader-settings__appearance-group > span { color: var(--ui-muted); font-size: var(--ui-label-size); line-height: 1.65; }
+.reader-settings__section-heading { align-items: start; }
+.reader-settings__fields,
+.reader-settings__update-summary { border-color: var(--ui-border); border-radius: var(--ui-radius); }
+.reader-settings__fields > label { color: var(--ui-text); font-size: var(--ui-label-size); font-weight: 500; }
+.reader-settings__fields :is(input, select, button),
+.reader-settings__color-control output { font-size: var(--ui-label-size); }
+.reader-settings__fields input:not([type='checkbox']):not([type='range']):not([type='color']),
+.reader-settings__fields select { border-color: var(--ui-border); border-radius: var(--ui-radius-tight); }
+.reader-settings__fields :is(input, select):focus-visible { outline-color: var(--ui-accent); }
+.reader-settings__appearance-group > strong,
+.reader-settings__typography-grid > section > strong { font-weight: 600; }
+.reader-settings__typography-grid > section { border-color: transparent; border-radius: 12px; background: var(--ui-surface-soft); gap: 12px; }
+.reader-settings__typography-grid > section > label { color: var(--ui-muted); font-size: var(--ui-label-size); }
+.reader-settings__font-size-control { border-color: var(--ui-border); }
+.reader-settings__font-size-control output { font-size: var(--ui-caption-size); font-weight: 500; }
+.reader-settings__font-size-control input[type='range'] { accent-color: var(--ui-accent); }
+.reader-settings__switch input:checked + .reader-settings__switch-control { background: var(--ui-accent); }
+.reader-settings__status,
+.reader-settings__hint { color: var(--ui-muted); font-size: var(--ui-caption-size); line-height: 1.65; }
+.reader-settings__main > .reader-settings__actions { border-color: var(--ui-border); background: white; backdrop-filter: none; }
+.reader-settings__actions :is(.primary-button, .quiet-button) { font-size: var(--ui-label-size); font-weight: 600; }
+
+.reader-settings__sidebar { padding-inline: 12px; }
+.reader-settings__brand { gap: 9px; font-size: 14px; }
+.reader-settings__brand strong { font-weight: 600; }
+.reader-settings__brand small { font-size: 12px; font-weight: 400; }
+.reader-settings__nav-label { padding-block: 0 8px; font-size: 12px; font-weight: 500; }
+.reader-settings__search { box-shadow: none; border-radius: var(--ui-radius-tight); }
+.reader-settings__nav { gap: 4px; }
+.reader-settings__nav button { min-height: 38px; font-size: var(--ui-label-size); font-weight: 400; border-radius: var(--ui-radius-tight); }
+.reader-settings__nav button.is-active {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--tessel-directory-ink) 8%, transparent);
+  box-shadow: inset 2px 0 var(--tessel-directory-ink);
+}
+
+@media (max-width: 760px) {
+  .reader-settings__nav { grid-template-columns: repeat(8, minmax(28px, 1fr)); gap: 2px; }
+  .reader-settings__nav button { font-size: 0; }
+}
