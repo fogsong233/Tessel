@@ -26,6 +26,29 @@
 .reader-settings__main > .reader-settings__actions { border-color: var(--ui-border); background: white; backdrop-filter: none; }
 .reader-settings__actions :is(.primary-button, .quiet-button) { font-size: var(--ui-label-size); font-weight: 600; }
 
+/* Storage and detected paths used to bypass the typography preferences with
+   9–10px labels. Use the same caption scale as connection settings. */
+.reader-settings__codex-path small,
+.reader-settings__storage-summary span,
+.reader-settings__storage-path span,
+.reader-settings__storage-path code,
+.reader-settings__book > summary small,
+.reader-settings__book > summary em,
+.reader-settings__book-detail :is(dt, dd),
+.reader-settings__content-counts span,
+.reader-settings__content-counts strong {
+  font-size: var(--ui-caption-size);
+  font-weight: 400;
+  line-height: 1.5;
+}
+.reader-settings__storage-path code { font-family: var(--tessel-ui-font, var(--ui-font)); }
+.reader-settings__storage-summary strong { font-size: max(18px, var(--tessel-ui-font-size, 14px)); font-weight: 600; }
+.reader-settings__book > summary strong { font-size: var(--ui-label-size); font-weight: 600; }
+.reader-settings__content-counts { grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); }
+.reader-settings__content-counts span { flex-wrap: wrap; gap: 4px 8px; }
+.reader-settings__storage-summary > div,
+.reader-settings__book { border-color: var(--ui-border); border-radius: var(--ui-radius-tight); }
+
 .reader-settings__sidebar { padding-inline: 12px; }
 .reader-settings__brand { gap: 9px; font-size: 14px; }
 .reader-settings__brand strong { font-weight: 600; }

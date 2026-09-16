@@ -15,6 +15,8 @@ Playwright's disposable result directory. Change the phase to preserve a compari
 Open `index.html` in that directory for the screenshot gallery.
 `TESSEL_UI_AUDIT_SURFACES=1` refreshes the reader/tablet portion of an existing audit
 without discarding its settings screenshots.
+`TESSEL_UI_AUDIT_SETTINGS_ONLY=1` checks only settings when iterating on settings
+styles; omit both filters for release/CI verification.
 
 ## Coverage
 
@@ -35,6 +37,8 @@ without discarding its settings screenshots.
   confirmation and the smaller 600-pixel layout.
 - Recent-history home screen at 720 × 520 and 620 × 460.
 - Image-card controls and a dock dragged to the bottom before resizing the window.
+- Focus/click restores the complete chat dock when native scrolling reveals only
+  its model button; deliberate dock dragging and PDF panning remain independent.
 
 The audit records horizontal overflow and asserts that open panels stay in the
 window and empty composer buttons align with the text field. The handwriting

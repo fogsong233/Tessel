@@ -1507,7 +1507,7 @@ export function PdfReader({
 
   const alignDockRight = useCallback((): void => {
     const container = containerRef.current;
-    if (!container) {
+    if (!container || document.body.classList.contains('is-moving-dock')) {
       return;
     }
 
@@ -1525,6 +1525,19 @@ export function PdfReader({
       container.scrollLeft += delta;
     }
   }, []);
+
+  const revealClippedDock = useCallback((): void => {
+    const container = containerRef.current;
+    const dock = container?.querySelector<HTMLElement>('.reader-float-dock');
+    if (!container || !dock) return;
+    const viewport = container.getBoundingClientRect();
+    const panel = dock.getBoundingClientRect();
+    // Native focus/scrollIntoView only reveals the activated control, not its
+    // whole panel. Preserve deliberate positioning if it is already visible.
+    if (panel.left < viewport.left || panel.right + dockHandleGutter > viewport.left + container.clientWidth + 1) {
+      alignDockRight();
+    }
+  }, [alignDockRight]);
 
   useLayoutEffect(() => {
     if (!source || !hasOpenDock) {
@@ -2568,7 +2581,7 @@ export function PdfReader({
                     />
 
                     <div className="workspace-canvas-spacer" aria-hidden="true" style={{ flexBasis: workspaceCanvasTail }} />
-                    <div className="reader-dock-lane">
+                    <div className="reader-dock-lane" onClickCapture={revealClippedDock} onFocusCapture={revealClippedDock}>
                       <ReaderDock
                         activeConversation={activeConversation}
                         activeConversationId={activeConversationId}

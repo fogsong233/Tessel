@@ -85,6 +85,44 @@ test.describe('PDF reader flow', () => {
     await auditInterfaces(app, page, rootDir, () => selectPdfText(page));
   });
 
+  test('reveals the whole dock when a clipped control receives focus or opens its model menu', async () => {
+    await expect(page.locator('.textLayer').first()).toContainText('Reader fixture');
+    await page.evaluate(async () => {
+      const preferences = await window.sidelight.getAppPreferences();
+      await window.sidelight.saveAppPreferences({ ...preferences, translationBackend: 'codex', experimentalCodexAgent: { ...preferences.experimentalCodexAgent, enabled: true } });
+    });
+    await page.getByRole('button', { name: 'New page chat', exact: true }).click();
+    const window = await app.browserWindow(page);
+    await window.evaluate((window) => window.setContentSize(1080, 720));
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(1080);
+    const contained = () => page.locator('.reader-float-dock').evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      const viewport = document.querySelector('.pdf-viewport')!.getBoundingClientRect();
+      return box.left >= viewport.left - 1 && box.right + 24 <= viewport.right + 1;
+    });
+    await expect.poll(contained).toBe(true);
+    const model = page.getByRole('button', { name: 'Current chat model', exact: true });
+    // Native focus can reveal only a button after the reader was panned. Make
+    // that state deterministic instead of depending on platform timing.
+    const partiallyReveal = async () => {
+      await page.locator('.pdf-viewport').evaluate((node) => { node.scrollLeft -= 160; });
+      await expect.poll(contained).toBe(false);
+    };
+    await model.evaluate((node) => node.blur());
+    await partiallyReveal();
+    await model.focus();
+    await expect.poll(contained).toBe(true);
+    await partiallyReveal();
+    await model.click();
+    await expect(page.locator('.chat-model-menu')).toBeVisible();
+    await expect.poll(contained).toBe(true);
+    await page.keyboard.press('Escape');
+    // Merely panning the PDF is still allowed; alignment is interaction-driven.
+    await partiallyReveal();
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    expect(await contained()).toBe(false);
+  });
+
   test('clears PDF search highlights when the search field is emptied', async () => {
     await expect(page.locator('.textLayer').first()).toContainText('Reader fixture');
     const search = page.getByPlaceholder('Search in PDF');

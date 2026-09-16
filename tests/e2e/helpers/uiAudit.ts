@@ -7,7 +7,7 @@ import { join } from 'node:path';
 export async function auditInterfaces(app: ElectronApplication, reader: Page, root: string, selectText: () => Promise<void>): Promise<void> {
   const directory = join(root, 'tmp/ui-audit', process.env.TESSEL_UI_AUDIT_PHASE ?? 'current');
   await mkdir(directory, { recursive: true });
-  const report: Record<string, unknown> = process.env.TESSEL_UI_AUDIT_SURFACES === '1'
+  const report: Record<string, unknown> = process.env.TESSEL_UI_AUDIT_SURFACES === '1' || process.env.TESSEL_UI_AUDIT_SETTINGS_ONLY === '1'
     ? JSON.parse(await readFile(join(directory, 'overflow.json'), 'utf8').catch(() => '{}'))
     : {};
   const capture = async (page: Page, name: string): Promise<void> => {
@@ -80,6 +80,9 @@ export async function auditInterfaces(app: ElectronApplication, reader: Page, ro
       if (index === 4) {
         await expect(settings.locator('.reader-settings__book')).not.toHaveCount(0);
         await settings.locator('.reader-settings__book summary').first().click();
+        const smallText = await settings.locator('.reader-settings__storage-summary span, .reader-settings__storage-path code, .reader-settings__book :is(small, dt, dd)').evaluateAll((nodes) =>
+          nodes.filter((node) => node.getBoundingClientRect().width > 0 && Number.parseFloat(getComputedStyle(node).fontSize) < 12).map((node) => node.className));
+        expect.soft(smallText, 'Storage metadata must follow the readable caption scale').toEqual([]);
       }
       await body.evaluate((node) => { node.scrollTop = 0; });
       await capture(settings, `settings-${index}-${suffix}-top`);
@@ -136,6 +139,7 @@ export async function auditInterfaces(app: ElectronApplication, reader: Page, ro
     await capture(settings, 'settings-update-release-notes');
     await settings.getByRole('button', { name: '取消', exact: true }).click();
   }
+  if (process.env.TESSEL_UI_AUDIT_SETTINGS_ONLY === '1') return;
 
   await reader.evaluate(async () => {
     const preferences = await window.sidelight.getAppPreferences();
@@ -186,6 +190,7 @@ export async function auditInterfaces(app: ElectronApplication, reader: Page, ro
   await reader.mouse.down();
   await reader.mouse.move(moveBox!.x, 700, { steps: 8 });
   await reader.mouse.up();
+  expect((await moveDock.boundingBox())!.x - moveBox!.x, 'Auto-alignment must not fight a deliberate dock drag').toBeLessThan(-5);
   await capture(reader, 'chat-dragged-to-bottom');
   await resize(reader, 1080, 600);
   await capture(reader, 'chat-dragged-window-resized');
