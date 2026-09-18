@@ -354,7 +354,7 @@ function registerIpc(
   });
   ipcMain.handle('media:resolveRemoteImage', (_event, url: string) => resolveRemoteImageDataUrl(url));
   ipcMain.handle('app:update:getState', () => appUpdater.getState());
-  ipcMain.handle('app:update:check', () => appUpdater.check());
+  ipcMain.handle('app:update:check', (_event, manual?: boolean) => appUpdater.check(Boolean(manual)));
   ipcMain.handle('app:update:download', () => appUpdater.download());
   ipcMain.handle('app:update:dismiss', () => appUpdater.dismiss());
   ipcMain.handle('app:update:install', () => appUpdater.install());
@@ -366,6 +366,7 @@ function registerIpc(
   ipcMain.handle('settings:getAppPreferences', () => store.getAppPreferences());
   ipcMain.handle('settings:saveAppPreferences', async (_event, config: AppPreferences) => {
     const preferences = await runStoreMutation(() => store.saveAppPreferences(config));
+    await appUpdater.setEnabled(preferences.autoUpdate);
     codexAgent.resetConfiguration();
     for (const window of BrowserWindow.getAllWindows()) {
       sendToRenderer(window.webContents, 'settings:changed');
@@ -638,7 +639,7 @@ if (hasSingleInstanceLock) {
       for (const window of BrowserWindow.getAllWindows()) {
         sendToRenderer(window.webContents, 'app:update:state', state);
       }
-    });
+    }, async () => (await store.getAppPreferences()).autoUpdate);
     const lanWhiteboardServer = new LanWhiteboardServer({
       rendererDirectory: join(__dirname, '../renderer'),
       store,

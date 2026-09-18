@@ -25,6 +25,51 @@
 .left-panel .outline-ai-button { min-height: 36px; border-color: var(--tessel-directory-line); background: transparent; font-weight: 500; }
 .left-panel .outline-ai-button:hover { background: var(--tessel-directory-hover); }
 .left-panel .outline-item { border-radius: 8px; font-weight: 400; }
-.left-panel .outline-item.is-active { background: color-mix(in srgb, var(--tessel-directory-ink) 7%, transparent); font-weight: 600; }
+.left-panel .outline-list {
+  scrollbar-color: color-mix(in srgb, var(--tessel-directory-ink) 28%, transparent) var(--tessel-sidebar-color, transparent);
+  scrollbar-width: thin;
+}
+.left-panel .outline-list::-webkit-scrollbar { width: 8px; }
+.left-panel .outline-list::-webkit-scrollbar-track { background: var(--tessel-sidebar-color, transparent); }
+.left-panel .outline-list::-webkit-scrollbar-thumb {
+  border: 2px solid var(--tessel-sidebar-color, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tessel-directory-ink) 28%, transparent);
+}
+.left-panel .outline-item.is-active {
+  border-color: color-mix(in srgb, var(--tessel-directory-ink) 22%, transparent);
+  background: color-mix(in srgb, var(--tessel-directory-ink) 9%, transparent);
+  background-image: none;
+  box-shadow: none;
+  font-weight: 600;
+}
 .left-panel :is(.empty-line, .outline-source) { line-height: 1.65; }
 .reader-document-panel { box-shadow: none; }
+
+/* Keep the rail's reveal animation after the layout stabilization overrides. */
+.reader-splitter > .reader-left-panel {
+  transition: flex-basis 360ms cubic-bezier(0.16, 1, 0.3, 1), width 360ms cubic-bezier(0.16, 1, 0.3, 1), min-width 360ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.reader-splitter > .p-splitter-gutter {
+  transition: flex-basis 360ms cubic-bezier(0.16, 1, 0.3, 1), width 360ms cubic-bezier(0.16, 1, 0.3, 1), opacity 180ms ease;
+}
+
+.dock-iconbar .p-button,
+.dock-iconbar__actions .p-button {
+  border-radius: 50%;
+}
+
+.reader-float-dock .trace-card.p-button.is-active,
+.reader-float-dock .trace-card.is-active,
+.notes-panel__tabs button.is-active,
+.document-row.is-active,
+.reader-settings__nav button.is-active {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-active);
+  background-image: none;
+  box-shadow: none;
+}
+
+.reader-settings__nav button.is-active {
+  border-color: color-mix(in srgb, var(--tessel-directory-ink) 22%, transparent);
+}

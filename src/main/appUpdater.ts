@@ -20,8 +20,14 @@ export class AppUpdateService {
   private operation: 'check' | 'download' | undefined;
   private downloadedInstallerPath?: string;
   private installTimer?: ReturnType<typeof setTimeout>;
+  private configured = false;
+  private enabled = false;
+  private automaticChecksScheduled = false;
 
-  constructor(private readonly publish: (state: AppUpdateState) => void) {}
+  constructor(
+    private readonly publish: (state: AppUpdateState) => void,
+    private readonly readEnabled: () => Promise<boolean> = async () => true
+  ) {}
 
   getState(): AppUpdateState {
     return this.state;
@@ -49,50 +55,41 @@ export class AppUpdateService {
       return;
     }
 
-    configureUpdaterLogging();
-    // Keep installation explicit. The restart helper below launches the exact
-    // executable that initiated the update, so a stale Start Menu shortcut cannot
-    // reopen another copy after updating a custom installation directory.
-    autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = false;
-    autoUpdater.autoRunAppAfterInstall = false;
-    (autoUpdater as typeof autoUpdater & { installDirectory?: string }).installDirectory = dirname(process.execPath);
-    autoUpdater.allowPrerelease = app.getVersion().includes('-');
-    autoUpdater.on('checking-for-update', () => this.setState({ status: 'checking' }));
-    autoUpdater.on('update-available', (info) => {
-      this.downloadedInstallerPath = undefined;
-      this.setState({
-        status: 'available',
-        availableVersion: info.version,
-        releaseNotes: releaseNotes(info)
-      });
+    void this.readEnabled().then((enabled) => {
+      this.enabled = enabled;
+      if (enabled) {
+        this.configureUpdater();
+      }
+    }).catch(() => {
+      this.enabled = true;
+      this.configureUpdater();
     });
-    autoUpdater.on('update-not-available', (info) => {
-      this.downloadedInstallerPath = undefined;
-      this.setState({
-        status: 'not-available',
-        availableVersion: info.version
-      });
-    });
-    autoUpdater.on('download-progress', (progress) => this.handleDownloadProgress(progress));
-    autoUpdater.on('update-downloaded', (info: UpdateDownloadedEvent) => {
-      this.downloadedInstallerPath = info.downloadedFile;
-      this.setState({
-        status: 'ready',
-        availableVersion: info.version,
-        releaseNotes: releaseNotes(info),
-        downloadPercent: 100
-      });
-    });
-    autoUpdater.on('error', (error) => this.handleError(error));
-
-    setTimeout(() => void this.check(), 2_000).unref();
-    setInterval(() => void this.check(), updateIntervalMs).unref();
   }
 
-  async check(): Promise<AppUpdateState> {
+  async setEnabled(enabled: boolean): Promise<AppUpdateState> {
+    this.enabled = enabled;
+    if (!enabled) {
+      this.downloadedInstallerPath = undefined;
+      this.setState({ status: 'idle' });
+      return this.state;
+    }
+    if (!this.configured) {
+      this.configureUpdater();
+    }
+    this.scheduleAutomaticChecks();
+    void this.check();
+    return this.state;
+  }
+
+  async check(manual = false): Promise<AppUpdateState> {
     if (!app.isPackaged || process.platform !== 'win32') {
       return this.state;
+    }
+    if (!this.enabled && !manual) {
+      return this.state;
+    }
+    if (!this.configured) {
+      this.configureUpdater();
     }
     if (this.checking || this.state.status === 'downloading' || this.state.status === 'ready' || this.state.status === 'installing') {
       return this.state;
@@ -229,6 +226,60 @@ export class AppUpdateService {
       ...next
     };
     this.publish(this.state);
+  }
+
+  private configureUpdater(): void {
+    if (this.configured) {
+      return;
+    }
+    this.configured = true;
+    configureUpdaterLogging();
+    // Keep installation explicit. The restart helper below launches the exact
+    // executable that initiated the update, so a stale Start Menu shortcut cannot
+    // reopen another copy after updating a custom installation directory.
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = false;
+    autoUpdater.autoRunAppAfterInstall = false;
+    (autoUpdater as typeof autoUpdater & { installDirectory?: string }).installDirectory = dirname(process.execPath);
+    autoUpdater.allowPrerelease = app.getVersion().includes('-');
+    autoUpdater.on('checking-for-update', () => this.setState({ status: 'checking' }));
+    autoUpdater.on('update-available', (info) => {
+      this.downloadedInstallerPath = undefined;
+      this.setState({
+        status: 'available',
+        availableVersion: info.version,
+        releaseNotes: releaseNotes(info)
+      });
+    });
+    autoUpdater.on('update-not-available', (info) => {
+      this.downloadedInstallerPath = undefined;
+      this.setState({
+        status: 'not-available',
+        availableVersion: info.version
+      });
+    });
+    autoUpdater.on('download-progress', (progress) => this.handleDownloadProgress(progress));
+    autoUpdater.on('update-downloaded', (info: UpdateDownloadedEvent) => {
+      this.downloadedInstallerPath = info.downloadedFile;
+      this.setState({
+        status: 'ready',
+        availableVersion: info.version,
+        releaseNotes: releaseNotes(info),
+        downloadPercent: 100
+      });
+    });
+    autoUpdater.on('error', (error) => this.handleError(error));
+
+    this.scheduleAutomaticChecks();
+  }
+
+  private scheduleAutomaticChecks(): void {
+    if (!this.enabled || this.automaticChecksScheduled) {
+      return;
+    }
+    this.automaticChecksScheduled = true;
+    setTimeout(() => void this.check(), 2_000).unref();
+    setInterval(() => void this.check(), updateIntervalMs).unref();
   }
 }
 

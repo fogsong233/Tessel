@@ -7,6 +7,20 @@
 .reader-settings__section-heading { align-items: start; }
 .reader-settings__fields,
 .reader-settings__update-summary { border-color: var(--ui-border); border-radius: var(--ui-radius); }
+.reader-settings__update-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 14px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  background: var(--ui-surface-soft);
+}
+.reader-settings__update-toggle > div { display: grid; gap: 3px; min-width: 0; }
+.reader-settings__update-toggle strong { color: var(--ui-text); font-size: var(--ui-label-size); font-weight: 600; }
+.reader-settings__update-toggle span { color: var(--ui-muted); font-size: var(--ui-caption-size); line-height: 1.5; }
 .reader-settings__fields > label { color: var(--ui-text); font-size: var(--ui-label-size); font-weight: 500; }
 .reader-settings__fields :is(input, select, button),
 .reader-settings__color-control output { font-size: var(--ui-label-size); }

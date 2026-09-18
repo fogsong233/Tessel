@@ -1757,6 +1757,7 @@ function ReaderSettingsPanel({
   const [settingsSection, setSettingsSection] = useState<ReaderSettingsSection>('provider');
   const [settingsQuery, setSettingsQuery] = useState('');
   const [updateState, setUpdateState] = useState<AppUpdateState>();
+  const [autoUpdate, setAutoUpdate] = useState(preferences.autoUpdate !== false);
   const [storageOverview, setStorageOverview] = useState<WorkspaceStorageOverview>();
   const [storageLoading, setStorageLoading] = useState(false);
   const [storageError, setStorageError] = useState<string>();
@@ -1904,6 +1905,7 @@ function ReaderSettingsPanel({
       },
       {
         uiLanguage,
+        autoUpdate,
         aiLanguage,
         translationBackend: translationBackend === 'codex' && codexEnabled && Boolean(codexAvailability?.available)
           ? 'codex'
@@ -2163,6 +2165,10 @@ function ReaderSettingsPanel({
             {settingsSection === 'updates' && (
             <section className="reader-settings__section">
               <div className="reader-settings__section-heading"><RefreshCw size={17} /><div><strong>{t.updates}</strong><span>{t.updateDescription}</span></div></div>
+              <div className="reader-settings__update-toggle">
+                <div><strong>{t.autoUpdate}</strong><span>{t.autoUpdateDescription}</span></div>
+                <SettingsToggle label={t.autoUpdate} checked={autoUpdate} onChange={(event) => setAutoUpdate(event.target.checked)} />
+              </div>
               <div className="reader-settings__update-summary">
                 <div><span>{t.currentVersion}</span><output aria-label={t.currentVersion}>{updateState?.currentVersion ?? '...'}</output></div>
                 <div><span>{t.updateStatus}</span><output aria-label={t.updateStatus}>{updateStatusText(updateState, t)}</output></div>
@@ -2175,7 +2181,7 @@ function ReaderSettingsPanel({
                 </div>
               )}
               <div className="reader-settings__actions reader-settings__actions--inline">
-                <button className="quiet-button" type="button" disabled={updateState?.status === 'checking' || updateState?.status === 'downloading' || updateState?.status === 'installing'} onClick={() => void window.sidelight.checkForAppUpdates()}>{t.checkForUpdates}</button>
+                <button className="quiet-button" type="button" disabled={updateState?.status === 'checking' || updateState?.status === 'downloading' || updateState?.status === 'installing'} onClick={() => void window.sidelight.checkForAppUpdates(true)}>{t.checkForUpdates}</button>
                 {updateState?.status === 'available' && <>
                   <button className="primary-button" type="button" onClick={() => void window.sidelight.downloadAppUpdate()}>{t.downloadUpdate}</button>
                 </>}

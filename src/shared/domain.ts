@@ -373,6 +373,7 @@ export interface MetadataSyncResult {
 }
 
 export interface AppPreferences {
+  autoUpdate: boolean;
   uiLanguage: UiLanguage;
   aiLanguage: AiPreferredLanguage;
   translationBackend: TranslationBackend;
@@ -653,7 +654,7 @@ export interface TesselApi {
   steerAiStream(request: AiStreamSteerRequest): Promise<void>;
   cancelAiStream(streamId: string): Promise<void>;
   getAppUpdateState(): Promise<AppUpdateState>;
-  checkForAppUpdates(): Promise<AppUpdateState>;
+  checkForAppUpdates(manual?: boolean): Promise<AppUpdateState>;
   downloadAppUpdate(): Promise<AppUpdateState>;
   dismissAppUpdate(): Promise<AppUpdateState>;
   installAppUpdate(): Promise<AppUpdateState>;
@@ -681,6 +682,7 @@ export const defaultWebDavSync: SafeWebDavSyncConfig = {
 };
 
 export const defaultAppPreferences: AppPreferences = {
+  autoUpdate: true,
   uiLanguage: 'en',
   aiLanguage: 'Simplified Chinese',
   translationBackend: 'provider',

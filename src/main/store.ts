@@ -785,6 +785,7 @@ function normalizeAiLanguage(language: string): AppPreferences['aiLanguage'] {
 
 function normalizeAppPreferences(config: AppPreferences): AppPreferences {
   return {
+    autoUpdate: config.autoUpdate !== false,
     uiLanguage: config.uiLanguage === 'zh-CN' ? 'zh-CN' : 'en',
     aiLanguage: normalizeAiLanguage(config.aiLanguage),
     translationBackend: config.translationBackend === 'codex' ? 'codex' : 'provider',
