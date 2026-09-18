@@ -1533,7 +1533,9 @@ export function PdfReader({
     const viewport = container.getBoundingClientRect();
     const panel = dock.getBoundingClientRect();
     // Native focus/scrollIntoView only reveals the activated control, not its
-    // whole panel. Preserve deliberate positioning if it is already visible.
+    // whole panel. Run after click/key-up, never during pointer focus: moving
+    // the target between mouse-down and mouse-up would swallow its click.
+    // Preserve deliberate positioning if it is already visible.
     if (panel.left < viewport.left || panel.right + dockHandleGutter > viewport.left + container.clientWidth + 1) {
       alignDockRight();
     }
@@ -1557,7 +1559,7 @@ export function PdfReader({
       window.cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [activeConversationId, alignDockRight, dockTab, hasOpenDock, noteEditorNote?.id, readerViewport.width, readerViewport.height, resolvedDockWidth, source, transientAid?.id]);
+  }, [activeConversationId, alignDockRight, composerPrefill?.nonce, dockTab, hasOpenDock, noteEditorNote?.id, readerViewport.width, readerViewport.height, resolvedDockWidth, source, transientAid?.id]);
 
   useEffect(() => {
     if (leftPanelOpen || hasOpenDock || status !== 'ready') {
@@ -2581,7 +2583,7 @@ export function PdfReader({
                     />
 
                     <div className="workspace-canvas-spacer" aria-hidden="true" style={{ flexBasis: workspaceCanvasTail }} />
-                    <div className="reader-dock-lane" onClickCapture={revealClippedDock} onFocusCapture={revealClippedDock}>
+                    <div className="reader-dock-lane" onClickCapture={revealClippedDock} onKeyUpCapture={revealClippedDock}>
                       <ReaderDock
                         activeConversation={activeConversation}
                         activeConversationId={activeConversationId}

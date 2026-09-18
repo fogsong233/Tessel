@@ -175,6 +175,7 @@ export async function auditInterfaces(app: ElectronApplication, reader: Page, ro
   expect(wideGeometry.modelWidth).toBeLessThan(360);
   await capture(reader, 'chat-wide-empty');
   await reader.getByRole('button', { name: 'Current chat model', exact: true }).click();
+  await expect(reader.locator('.chat-model-menu')).toBeVisible();
   expect(await reader.locator('.chat-model-menu').evaluate((node) => node.getBoundingClientRect().width)).toBeLessThanOrEqual(420);
   await capture(reader, 'chat-wide-model-menu');
   await reader.keyboard.press('Escape');
@@ -201,6 +202,7 @@ export async function auditInterfaces(app: ElectronApplication, reader: Page, ro
   await reader.mouse.up();
   await resize(reader, 1080, 720);
   await reader.getByRole('button', { name: 'Current chat model', exact: true }).click();
+  await expect(reader.locator('.chat-model-menu')).toBeVisible();
   await capture(reader, 'chat-model-menu');
   await reader.keyboard.press('Escape');
   await reader.getByRole('button', { name: 'Permissions', exact: true }).click();

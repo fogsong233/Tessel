@@ -108,10 +108,13 @@ test.describe('PDF reader flow', () => {
       await page.locator('.pdf-viewport').evaluate((node) => { node.scrollLeft -= 160; });
       await expect.poll(contained).toBe(false);
     };
-    await model.evaluate((node) => node.blur());
-    await partiallyReveal();
     await model.focus();
+    await page.keyboard.press('Shift+Tab');
+    await partiallyReveal();
+    await page.keyboard.press('Tab');
+    await expect(model).toBeFocused();
     await expect.poll(contained).toBe(true);
+    await model.evaluate((node) => node.blur());
     await partiallyReveal();
     await model.click();
     await expect(page.locator('.chat-model-menu')).toBeVisible();
@@ -182,10 +185,32 @@ test.describe('PDF reader flow', () => {
     await expect(page.locator('.dock-chat-panel')).toBeVisible();
 
     await page.waitForTimeout(350);
+    const dockContained = async (): Promise<boolean> => page.locator('.reader-float-dock').evaluate((node) => {
+      const dock = node.getBoundingClientRect();
+      const viewport = document.querySelector('.pdf-viewport')!.getBoundingClientRect();
+      return dock.right + 24 <= viewport.right + 1;
+    });
+    const clipped = await page.locator('.pdf-viewport').evaluate((node) => {
+      const maxScroll = Math.max(0, node.scrollWidth - node.clientWidth);
+      const initial = node.scrollLeft;
+      const candidates = [initial - 160, initial + 160, 0, maxScroll];
+      for (const candidate of candidates) {
+        node.scrollLeft = Math.max(0, Math.min(maxScroll, candidate));
+        const dock = node.querySelector<HTMLElement>('.reader-float-dock')?.getBoundingClientRect();
+        const viewport = node.getBoundingClientRect();
+        if (dock && (dock.left < viewport.left - 1 || dock.right + 24 > viewport.right + 1)) {
+          return true;
+        }
+      }
+      return false;
+    });
+    expect(clipped).toBe(true);
+    await expect.poll(dockContained).toBe(false);
     await selectPdfText(page);
     await page.locator('.selection-toolbar').getByRole('button', { name: /^Quote$/i }).click();
     const composer = page.locator('.dock-chat-panel textarea');
     await expect(composer).toContainText('Reader fixture quote Alpha Beta');
+    await expect.poll(dockContained).toBe(true);
     await expect(page.locator('.chat-message')).toHaveCount(0);
   });
 
