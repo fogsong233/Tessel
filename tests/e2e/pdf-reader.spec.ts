@@ -657,7 +657,10 @@ test.describe('PDF reader flow', () => {
   });
 
   test('streams tablet handwriting and manages notebook sheets over the LAN page', async () => {
-    test.setTimeout(90_000);
+    // Hidden Electron windows on Linux CI pace mouse actions at roughly one
+    // frame per second; this full workflow can finish just after 90 seconds.
+    // Keep the individual assertion deadlines while allowing the whole flow.
+    test.setTimeout(180_000);
     await expect(page.locator('.pdfViewer .page[data-page-number="1"]')).toBeVisible();
     const info = await expect.poll(async () => page.evaluate(() => window.sidelight.getLanWhiteboardInfo())).toMatchObject({
       running: true,
