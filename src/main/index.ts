@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type WebContents } from 'electron';
-import { open, rm, stat } from 'node:fs/promises';
+import { open, readFile, rm, stat } from 'node:fs/promises';
 import { extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -26,7 +26,7 @@ import {
   pdfRangeChunkSize
 } from '../shared/domain';
 import { AiService } from './aiService';
-import { extractPdfPageTextRange, extractPdfPageTextRanges, readPdfOutline } from './pdfTools';
+import { clearPdfTextCache, extractPdfPageTextRange, extractPdfPageTextRanges, readPdfOutline } from './pdfTools';
 import { JsonWorkspaceStore } from './store';
 import { CodexAgent } from './codexAgent';
 import { AppUpdateService } from './appUpdater';
@@ -353,6 +353,16 @@ function registerIpc(
     }
   });
   ipcMain.handle('media:resolveRemoteImage', (_event, url: string) => resolveRemoteImageDataUrl(url));
+  ipcMain.handle('media:resolveLocalImage', async (_event, path: string) => {
+    if (typeof path !== 'string' || !isAbsolute(path) || /^(?:\\\\|\/\/)/.test(path)) return undefined;
+    const mime = ({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.avif': 'image/avif' } as Record<string, string>)[extname(path).toLowerCase()];
+    if (!mime) return undefined;
+    try {
+      const info = await stat(path);
+      if (!info.isFile() || info.size > 12 * 1024 * 1024) return undefined;
+      return `data:${mime};base64,${(await readFile(path)).toString('base64')}`;
+    } catch { return undefined; }
+  });
   ipcMain.handle('app:update:getState', () => appUpdater.getState());
   ipcMain.handle('app:update:check', (_event, manual?: boolean) => appUpdater.check(Boolean(manual)));
   ipcMain.handle('app:update:download', () => appUpdater.download());
@@ -365,9 +375,10 @@ function registerIpc(
   ipcMain.handle('settings:saveWebDavSync', (_event, config) => runStoreMutation(() => store.saveWebDavSync(config)));
   ipcMain.handle('settings:getAppPreferences', () => store.getAppPreferences());
   ipcMain.handle('settings:saveAppPreferences', async (_event, config: AppPreferences) => {
+    const previous = await store.getAppPreferences();
     const preferences = await runStoreMutation(() => store.saveAppPreferences(config));
     await appUpdater.setEnabled(preferences.autoUpdate);
-    codexAgent.resetConfiguration();
+    if (previous.experimentalCodexAgent.executablePath !== preferences.experimentalCodexAgent.executablePath) codexAgent.resetConfiguration();
     for (const window of BrowserWindow.getAllWindows()) {
       sendToRenderer(window.webContents, 'settings:changed');
     }
@@ -500,8 +511,9 @@ function registerIpc(
       if (useCodex) {
         const task = input.task ?? (input.request.mode === 'translate' ? 'translate' : 'chat');
         const useTranslationConfig = task === 'translate';
-        const translationModel = preferences.experimentalCodexAgent.translationModel
-          ?? await codexAgent.preferredFastModel();
+        const translationModel = useTranslationConfig
+          ? preferences.experimentalCodexAgent.translationModel ?? await codexAgent.preferredFastModel()
+          : undefined;
         await codexAgent.stream({
           streamId: input.streamId,
           conversationId: input.conversationId ?? input.streamId,
@@ -657,6 +669,7 @@ if (hasSingleInstanceLock) {
     appUpdater.start();
     app.once('before-quit', () => {
       void codexAgent.shutdown();
+      clearPdfTextCache();
       void lanWhiteboardServer.stop();
     });
     const startupPdfPaths = pdfPathsFromArgv(process.argv);
@@ -780,8 +793,12 @@ function resolveRemoteImageDataUrl(url: string): Promise<string | undefined> {
     return cached;
   }
 
-  const pending = loadRemoteImageDataUrl(url).catch(() => undefined);
+  const pending = loadRemoteImageDataUrl(url).catch(() => undefined).then((value) => {
+    if (!value && remoteImageCache.get(url) === pending) remoteImageCache.delete(url);
+    return value;
+  });
   remoteImageCache.set(url, pending);
+  if (remoteImageCache.size > 32) remoteImageCache.delete(remoteImageCache.keys().next().value!);
   return pending;
 }
 
@@ -969,6 +986,7 @@ function createBatchedStreamSender(
   };
   const send = (chunk: Omit<AiStreamEvent, 'streamId'>): boolean => {
     const isPlainDelta = Boolean(chunk.delta)
+      && chunk.content === undefined
       && !chunk.toolCall
       && !chunk.activity
       && !chunk.artifacts?.length

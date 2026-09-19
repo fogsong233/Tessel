@@ -11,6 +11,8 @@ export interface LanDrawingStroke {
   smoothing?: number;
   /** Pointer trailing/streamlining used when this stroke was created (0..1). */
   streamline?: number;
+  /** Stable chunk outlines shared by the live preview and saved vector ink. */
+  rendering?: 'segmented';
   points: LanDrawingPoint[];
   simulatePressure: boolean;
   createdAt: string;
@@ -103,6 +105,7 @@ export function isLanDrawingStroke(value: unknown): value is LanDrawingStroke {
     && stroke.size <= 96
     && optionalUnitInterval(stroke.smoothing)
     && optionalUnitInterval(stroke.streamline)
+    && (stroke.rendering === undefined || stroke.rendering === 'segmented')
     && typeof stroke.simulatePressure === 'boolean'
     && typeof stroke.createdAt === 'string'
     && Array.isArray(stroke.points)

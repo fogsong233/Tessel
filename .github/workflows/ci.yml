@@ -43,8 +43,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install Linux browser dependencies for Electron
-        run: pnpm exec playwright install-deps chromium
+      - name: Install Chromium and Linux browser dependencies
+        run: pnpm exec playwright install --with-deps chromium
 
       - name: Typecheck
         run: pnpm typecheck

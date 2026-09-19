@@ -751,6 +751,7 @@ function drawingBlockPayload(block: WorkspaceBlock): DrawingPayload {
         size: typeof stroke.size === 'number' ? clamp(stroke.size, 1, 40) : 4,
         smoothing: typeof stroke.smoothing === 'number' ? clamp(stroke.smoothing, 0, 1) : undefined,
         streamline: typeof stroke.streamline === 'number' ? clamp(stroke.streamline, 0, 1) : undefined,
+        rendering: stroke.rendering === 'segmented' ? 'segmented' : undefined,
         points,
         simulatePressure: stroke.simulatePressure !== false,
         createdAt: typeof stroke.createdAt === 'string' ? stroke.createdAt : new Date().toISOString()

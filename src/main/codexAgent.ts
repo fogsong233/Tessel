@@ -4,6 +4,7 @@ import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { delimiter, extname, join, relative, resolve } from 'node:path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { PdfToolBridge } from './pdfToolBridge';
 import {
   AgentActivityEvent,
   AiDocumentToolContext,
@@ -33,10 +34,14 @@ interface PdfRuntime {
 
 interface ThreadContext {
   input: CodexStreamRequest;
+  runtime: PdfRuntime;
   onEvent: (event: Omit<AiStreamEvent, 'streamId'>) => void;
 }
 
 interface ActiveTurn {
+  streamId: string;
+  collectImages: boolean;
+  messages: Map<string, string>;
   threadId: string;
   turnId: string;
   workspaceDirectory: string;
@@ -48,6 +53,9 @@ interface ActiveTurn {
 }
 
 interface ActiveExecTurn {
+  collectImages: boolean;
+  messages: Map<string, string>;
+  disposeTools(): void;
   child: ChildProcessWithoutNullStreams;
   workspaceDirectory: string;
   workspaceImages: Map<string, string>;
@@ -208,10 +216,11 @@ function spawnCodex(executable: string, args: string[], stdio: ['pipe' | 'ignore
     ].join(' ');
     return spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${shellCommand}"`], {
       stdio,
-      windowsVerbatimArguments: true
+      windowsVerbatimArguments: true,
+      windowsHide: true
     }) as ChildProcessWithoutNullStreams;
   }
-  return spawn(executable, args, { stdio }) as ChildProcessWithoutNullStreams;
+  return spawn(executable, args, { stdio, windowsHide: true }) as ChildProcessWithoutNullStreams;
 }
 
 const windowsShellMetaCharacters = /([()\][%!^"`<>&|;, *?])/g;
@@ -269,6 +278,7 @@ export class CodexAgent {
   private nextRequestId = 1;
   private stdoutBuffer = '';
   private initializePromise?: Promise<void>;
+  private connectionGeneration = 0;
   private readonly pending = new Map<number, {
     resolve(value: unknown): void;
     reject(error: Error): void;
@@ -279,7 +289,7 @@ export class CodexAgent {
   private readonly queuedSteers = new Map<string, PendingSteer[]>();
   private readonly workspaceImageSnapshots = new Map<string, Map<string, string>>();
   private modelListPromise?: Promise<CodexModelInfo[]>;
-  private transportDetectionPromise?: Promise<'app-server' | 'exec'>;
+  private readonly pdfBridge = new PdfToolBridge(dynamicPdfTools());
   private executablePromise?: Promise<string>;
   private appServerUnavailable = false;
 
@@ -318,27 +328,16 @@ export class CodexAgent {
 
   async preferredFastModel(): Promise<string | undefined> {
     const models = await this.listModels();
-    return models.find((model) => /(?:mini|nano|flash|haiku)/i.test(`${model.id} ${model.displayName}`))?.id;
+    return models.find((model) => /(?:mini|nano|flash|haiku|luna|spark)/i.test(`${model.id} ${model.displayName}`))?.id;
   }
 
   warmup(): void {
     void this.listModels();
-    if (codexTransportOverride() === 'exec') {
-      void this.initialTransport();
-      return;
-    }
-    // Prioritize the reusable app-server process. Starting a separate
-    // `codex login status` process at the same time caused noticeable cold
-    // start contention on Windows; utility-task transport detection can warm
-    // immediately after the interactive server is ready.
-    void this.initialize()
-      .then(() => this.initialTransport())
-      .catch(() => undefined);
+    if (codexTransportOverride() !== 'exec') void this.initialize().catch(() => undefined);
   }
 
   resetConfiguration(): void {
     this.modelListPromise = undefined;
-    this.transportDetectionPromise = undefined;
     this.executablePromise = undefined;
     this.appServerUnavailable = false;
     void this.shutdown().finally(() => this.warmup());
@@ -388,12 +387,9 @@ export class CodexAgent {
     onEvent: (event: Omit<AiStreamEvent, 'streamId'>) => void
   ): Promise<void> {
     const forcedTransport = codexTransportOverride();
-    const interactiveChat = !input.task || input.task === 'chat';
     const transport = this.appServerUnavailable || forcedTransport === 'exec'
       ? 'exec'
-      : forcedTransport === 'app-server' || interactiveChat
-        ? 'app-server'
-        : await this.initialTransport();
+      : 'app-server';
 
     if (transport === 'exec') {
       onEvent({ activity: activity('transport:exec', 'reading', 'Starting a local Codex session', 'started') });
@@ -441,19 +437,6 @@ export class CodexAgent {
     this.queuedSteers.set(streamId, [...(this.queuedSteers.get(streamId) ?? []), pending]);
   }
 
-  private async initialTransport(): Promise<'app-server' | 'exec'> {
-    const forcedTransport = codexTransportOverride();
-    if (forcedTransport) {
-      return forcedTransport;
-    }
-    if (!this.transportDetectionPromise) {
-      this.transportDetectionPromise = this.executable().then((executable) => runCodex(executable, ['login', 'status']))
-        .then(({ stdout }) => /api key/i.test(stdout) ? 'exec' : 'app-server')
-        .catch(() => 'app-server');
-    }
-    return this.transportDetectionPromise;
-  }
-
   private async streamWithAppServer(
     input: CodexStreamRequest,
     onEvent: (event: Omit<AiStreamEvent, 'streamId'>) => void
@@ -464,17 +447,20 @@ export class CodexAgent {
       this.resolvePdf(input.documentId)
     ]);
     const documentWorkspace = await this.documentWorkspace(runtime.document);
-    const reusingThread = Boolean(input.codexThreadId && this.threadContexts.has(input.codexThreadId));
-    const [threadId, workspaceImages, turnInput] = await Promise.all([
+    const [thread, workspaceImages] = await Promise.all([
       this.resolveThread(input, documentWorkspace, onEvent),
-      this.workspaceImageVersions(documentWorkspace),
-      this.prepareTurnInput(input, runtime, onEvent, !reusingThread)
+      isChat(input) ? this.workspaceImageVersions(documentWorkspace) : new Map<string, string>()
     ]);
-    this.threadContexts.set(threadId, { input, onEvent });
+    const threadId = thread.id;
+    const turnInput = await this.prepareTurnInput(input, runtime, onEvent, !thread.reused);
+    this.threadContexts.set(threadId, { input, runtime, onEvent });
     onEvent({ agentThreadId: threadId, usedProvider: 'Codex' });
 
     await new Promise<void>((resolve, reject) => {
       const active: ActiveTurn = {
+        streamId: input.streamId,
+        collectImages: isChat(input),
+        messages: new Map(),
         threadId,
         turnId: '',
         workspaceDirectory: documentWorkspace,
@@ -515,59 +501,73 @@ export class CodexAgent {
   }
 
   async shutdown(): Promise<void> {
+    this.connectionGeneration += 1;
     const child = this.child;
-    this.child = undefined;
-    this.initializePromise = undefined;
+    this.failConnection(new Error('Codex session closed.'));
     if (child && !child.killed) {
       child.kill();
     }
-    for (const execTurn of this.activeExecTurns.values()) {
+    for (const [streamId, execTurn] of this.activeExecTurns) {
       execTurn.cancelled = true;
       execTurn.child.kill('SIGINT');
+      void this.finishExecTurn(streamId, execTurn, new Error('Codex session closed.'));
     }
     this.activeExecTurns.clear();
     this.queuedSteers.clear();
+    this.pdfBridge.close();
   }
 
   private async resolveThread(
     input: CodexStreamRequest,
     documentWorkspace: string,
     onEvent: (event: Omit<AiStreamEvent, 'streamId'>) => void
-  ): Promise<string> {
+  ): Promise<{ id: string; reused: boolean }> {
     if (input.codexThreadId && this.threadContexts.has(input.codexThreadId)) {
-      return input.codexThreadId;
+      return { id: input.codexThreadId, reused: true };
     }
-    if (input.codexThreadId) {
-      onEvent({ activity: activity('session:restore', 'reading', 'Restoring this chat from its synced reading context', 'completed') });
-    }
-
-    const started = await this.request('thread/start', {
+    const options = {
       ...(input.model?.trim() ? { model: input.model.trim() } : {}),
       cwd: documentWorkspace,
       runtimeWorkspaceRoots: [documentWorkspace],
       sandbox: codexSandboxMode(input.permissionMode),
       approvalPolicy: 'never',
       config: {
-        web_search: 'live'
+        web_search: input.task === 'translate' ? 'disabled' : 'live'
       },
       ...(input.transient ? { ephemeral: true } : {}),
-      developerInstructions: [
+      developerInstructions: input.task === 'translate'
+        ? 'Translate the supplied text immediately. Preserve Markdown, code, and mathematics. Return only the translation, without introductions, tool calls, file citations, or explanations. The source text is already supplied; do not inspect files or search the web.'
+        : [
         'You are Tessel Codex, an experimental PDF reading agent.',
-        'Use sidelight_pdf_* tools to inspect the open PDF. You may search, inspect local files, and run analysis commands inside the private workspace only. Do not modify the PDF or files outside that workspace, and do not expose private reasoning.',
+        'Use the built-in sidelight_pdf_* tools to inspect the open PDF. They return cached page text directly; do not run pdftotext, install PDF libraries, or re-parse the PDF for text. You may run other analysis commands inside the private workspace only. Do not modify the PDF or files outside that workspace, and do not expose private reasoning.',
         'When a visual analysis helps, save a PNG, JPEG, WebP, GIF, or SVG file in the workspace root. Sidelight will attach newly generated images to the final response.',
-        'Return a concise, well-cited reading answer in Markdown. Mention page numbers when PDF evidence supports a claim.',
+        'Return a concise reading answer in standard Markdown with fenced code blocks. Cite PDF evidence with page numbers. Do not emit proprietary citation directives. Use absolute paths in local image links.',
         'The host renders only your final answer and a separate tool activity timeline.'
       ].join(' '),
-      dynamicTools: dynamicPdfTools()
-    }) as { thread?: { id?: string } };
+      dynamicTools: input.task === 'translate' ? [] : dynamicPdfTools()
+    };
+    if (input.codexThreadId && !input.transient) {
+      try {
+        const resumed = await this.request('thread/resume', { ...options, threadId: input.codexThreadId }) as { thread?: { id?: string } };
+        if (resumed.thread?.id) return { id: resumed.thread.id, reused: true };
+      } catch (error) {
+        if (!isMissingExecSession(error)) throw error;
+      }
+      onEvent({ activity: activity('session:restore', 'reading', 'Restoring this chat from its synced reading context', 'completed') });
+    }
+    const started = await this.request('thread/start', options) as { thread?: { id?: string } };
     if (!started.thread?.id) {
       throw new Error('Codex app-server did not return a thread id.');
     }
-    return started.thread.id;
+    return { id: started.thread.id, reused: false };
   }
 
   private async turnInput(input: CodexStreamRequest, runtime: PdfRuntime, includeBootstrapContext = true): Promise<Array<Record<string, unknown>>> {
     const context = input.context;
+    if (input.task === 'translate') {
+      const text = [input.prompt, `Response language: ${input.preferredLanguage ?? 'auto'}`, context.selectedText || context.pdfText || ''].filter(Boolean).join('\n\n');
+      return [{ type: 'text', text, text_elements: [] }, ...await Promise.all((input.attachments ?? []).map((attachment) => this.writeInputImage(input.streamId, attachment)))];
+    }
     const documentHash = runtime.document.fingerprint?.hash ?? runtime.document.sha256;
     const isChatTask = !input.task || input.task === 'chat';
     const pageSamples = input.task === 'outline'
@@ -618,7 +618,8 @@ export class CodexAgent {
       'User request:',
       input.prompt,
       '',
-      'Tessel response requirement: when the user asks to display a web image, photo, portrait, or avatar, do not merely describe it or link to its webpage. Download a direct PNG, JPEG, WebP, GIF, or SVG image into the current workspace before saying it is displayed. Tessel attaches newly created workspace images to the response. Include the public source page as a Markdown link. If no direct image can be downloaded, state that it cannot be displayed.'
+      'Use the built-in sidelight_pdf_* tools (provided directly or by the tessel_pdf MCP server) for cached PDF text. Do not run pdftotext or install a PDF parser. Use standard Markdown and page numbers for citations.',
+      isChatTask ? 'For requested images, save a PNG, JPEG, WebP, GIF, or SVG in the workspace and include an absolute local image path in Markdown. Tessel attaches newly created images. Cite public sources as Markdown links.' : undefined
     ].filter((part): part is string => Boolean(part)).join('\n');
     const attachments = await Promise.all((input.attachments ?? []).map((attachment) => this.writeInputImage(input.streamId, attachment)));
     return [
@@ -797,10 +798,10 @@ export class CodexAgent {
       if (previousVersion === imageVersion(details)) {
         return undefined;
       }
-      const content = await readFile(filePath);
-      if (content.byteLength > 12 * 1024 * 1024) {
+      if (details.size > 12 * 1024 * 1024) {
         return undefined;
       }
+      const content = await readFile(filePath);
       const mimeType = imageMimeType(filePath);
       if (!mimeType) {
         return undefined;
@@ -829,7 +830,7 @@ export class CodexAgent {
     ]);
     const workspaceDirectory = await this.documentWorkspace(runtime.document);
     const [workspaceImages, turnInput] = await Promise.all([
-      this.workspaceImageVersions(workspaceDirectory),
+      isChat(input) ? this.workspaceImageVersions(workspaceDirectory) : new Map<string, string>(),
       this.prepareTurnInput(input, runtime, onEvent)
     ]);
     const prompt = turnInput.find((item) => item.type === 'text')?.text;
@@ -840,12 +841,17 @@ export class CodexAgent {
       .filter((item) => item.type === 'localImage' && typeof item.path === 'string')
       .map((item) => item.path as string);
     const args = execArgs(input, workspaceDirectory, imagePaths);
+    const bridge = input.task === 'translate' ? undefined : await this.pdfBridge.register((tool, arguments_) => this.runPdfTool(tool, arguments_, input, runtime));
+    if (bridge) args.splice(input.codexThreadId && !input.transient ? 2 : 1, 0, '--config', `mcp_servers.tessel_pdf.url=${JSON.stringify(bridge.url)}`, '--config', 'mcp_servers.tessel_pdf.startup_timeout_sec=5');
     const child = spawnCodex(executable, args, ['pipe', 'pipe', 'pipe']);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
 
     await new Promise<void>((resolve, reject) => {
       const active: ActiveExecTurn = {
+        collectImages: isChat(input),
+        messages: new Map(),
+        disposeTools: () => bridge?.dispose(),
         child,
         workspaceDirectory,
         workspaceImages,
@@ -902,8 +908,11 @@ export class CodexAgent {
         clearTimeout(startupTimeout);
         void this.finishExecTurn(input.streamId, active, error);
       });
-      child.once('exit', (code, signal) => {
+      child.once('close', (code, signal) => {
         clearTimeout(startupTimeout);
+        if (buffer.trim()) {
+          try { this.handleExecEvent(input.streamId, JSON.parse(buffer) as Record<string, unknown>); } catch { /* Non-protocol diagnostics. */ }
+        }
         if (!active.settled && !active.checkpointing) {
           const detail = active.stderr.trim() || `Codex exec exited (${code ?? signal ?? 'unknown'}).`;
           void this.finishExecTurn(input.streamId, active, new Error(detail));
@@ -967,7 +976,7 @@ export class CodexAgent {
     if (type === 'item.started' || type === 'item.completed') {
       const item = event.item as { id?: unknown; type?: unknown; text?: unknown } | undefined;
       if (type === 'item.completed' && item?.type === 'agent_message' && typeof item.text === 'string') {
-        active.onEvent({ delta: item.text, usedProvider: 'Codex' });
+        this.emitMessage(active, String(item.id ?? 'answer'), item.text, true);
       }
       const activityEvent = activityFromExecItem(item, type === 'item.started' ? 'started' : 'completed');
       if (activityEvent) {
@@ -984,6 +993,10 @@ export class CodexAgent {
         return;
       }
       void this.finishExecTurn(streamId, active);
+    }
+    if (type === 'turn.failed' || type === 'error') {
+      const error = event.error as { message?: string } | undefined;
+      void this.finishExecTurn(streamId, active, new Error(error?.message ?? String(event.message ?? 'Codex could not complete this turn.')));
     }
   }
 
@@ -1011,6 +1024,7 @@ export class CodexAgent {
       return;
     }
     active.settled = true;
+    active.disposeTools();
     this.activeExecTurns.delete(streamId);
     if (error) {
       if (active.cancelled) {
@@ -1027,7 +1041,7 @@ export class CodexAgent {
       return;
     }
     try {
-      const artifacts = await this.collectArtifacts(active);
+      const artifacts = active.collectImages ? await this.collectArtifacts(active) : [];
       if (artifacts.length) {
         active.onEvent({ artifacts });
         active.onEvent({ activity: activity(`artifact:${streamId}`, 'artifact', 'Generated visual analysis', 'completed') });
@@ -1044,28 +1058,33 @@ export class CodexAgent {
 
   private async initialize(): Promise<void> {
     if (!this.initializePromise) {
-      this.initializePromise = this.start().catch((error) => {
-        this.initializePromise = undefined;
+      const attempt = this.start().catch((error) => {
+        if (this.initializePromise === attempt) this.initializePromise = undefined;
         throw error;
       });
+      this.initializePromise = attempt;
     }
     return this.initializePromise;
   }
 
   private async start(): Promise<void> {
-    const child = spawnCodex(await this.executable(), ['app-server', '--stdio'], ['pipe', 'pipe', 'pipe']);
+    const generation = this.connectionGeneration;
+    const executable = await this.executable();
+    if (generation !== this.connectionGeneration) throw new Error('Codex session configuration changed.');
+    const child = spawnCodex(executable, ['app-server', '--stdio'], ['pipe', 'pipe', 'pipe']);
     this.child = child;
+    this.stdoutBuffer = '';
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => this.readStdout(chunk));
+    child.stdout.on('data', (chunk: string) => { if (this.child === child) this.readStdout(chunk); });
     child.stderr.on('data', (chunk: string) => {
       if (chunk.trim()) {
         console.warn(`[codex-app-server] ${chunk.trim()}`);
       }
     });
-    child.once('error', (error) => this.failConnection(error));
+    child.once('error', (error) => { if (this.child === child) this.failConnection(error); });
     child.once('exit', (code, signal) => {
-      this.failConnection(new Error(`Codex app-server exited (${code ?? signal ?? 'unknown'}).`));
+      if (this.child === child) this.failConnection(new Error(`Codex app-server exited (${code ?? signal ?? 'unknown'}).`));
     });
 
     await this.request('initialize', {
@@ -1126,17 +1145,21 @@ export class CodexAgent {
 
   private handleNotification(method: string | undefined, params: Record<string, unknown>): void {
     const threadId = typeof params.threadId === 'string' ? params.threadId : undefined;
+    if (method === 'thread/closed' && threadId) this.threadContexts.delete(threadId);
     const active = threadId ? this.activeTurnForThread(threadId) : undefined;
     if (!active) {
       return;
     }
 
     if (method === 'item/agentMessage/delta' && typeof params.delta === 'string') {
-      active.onEvent({ delta: params.delta, usedProvider: 'Codex' });
+      this.emitMessage(active, String(params.itemId ?? 'answer'), params.delta, false);
       return;
     }
     if (method === 'item/started' || method === 'item/completed') {
-      const item = params.item as { id?: unknown; type?: unknown; tool?: unknown; command?: unknown } | undefined;
+      const item = params.item as { id?: unknown; type?: unknown; text?: unknown; tool?: unknown; command?: unknown } | undefined;
+      if (method === 'item/completed' && item?.type === 'agentMessage' && typeof item.text === 'string') {
+        this.emitMessage(active, String(item.id ?? 'answer'), item.text, true);
+      }
       const event = activityFromCodexItem(item, method === 'item/started' ? 'started' : 'completed');
       if (event) {
         active.onEvent({ activity: event });
@@ -1155,6 +1178,10 @@ export class CodexAgent {
   ): Promise<void> {
     if (!this.activeTurns.delete(active.streamId)) {
       return;
+    }
+    if (this.threadContexts.get(active.threadId)?.input.transient) {
+      this.threadContexts.delete(active.threadId);
+      void this.request('thread/unsubscribe', { threadId: active.threadId }).catch(() => undefined);
     }
 
     const failed = turn?.status === 'failed';
@@ -1176,7 +1203,7 @@ export class CodexAgent {
     }
 
     try {
-      const artifacts = await this.collectArtifacts(active);
+      const artifacts = active.collectImages ? await this.collectArtifacts(active) : [];
       if (artifacts.length > 0) {
         active.onEvent({ artifacts });
         active.onEvent({ activity: activity(`artifact:${active.streamId}`, 'artifact', 'Generated visual analysis', 'completed') });
@@ -1207,7 +1234,7 @@ export class CodexAgent {
     const label = dynamicToolLabel(tool);
     context.onEvent({ activity: activity(callId, 'tool', label, 'started') });
     try {
-      const result = await this.runPdfTool(tool, params.arguments, context.input);
+      const result = await this.runPdfTool(tool, params.arguments, context.input, context.runtime);
       this.reply(message.id, {
         contentItems: [{ type: 'inputText', text: JSON.stringify(result) }],
         success: true
@@ -1223,9 +1250,9 @@ export class CodexAgent {
     }
   }
 
-  private async runPdfTool(tool: string, rawArguments: unknown, input: CodexStreamRequest): Promise<unknown> {
-    const runtime = await this.resolvePdf(input.documentId);
-    const args = rawArguments && typeof rawArguments === 'object' ? rawArguments as Record<string, unknown> : {};
+  private async runPdfTool(tool: string, rawArguments: unknown, input: CodexStreamRequest, runtime: PdfRuntime): Promise<unknown> {
+    const parsed = typeof rawArguments === 'string' ? JSON.parse(rawArguments) : rawArguments;
+    const args = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
     if (tool === 'sidelight_pdf_describe') {
       return {
         document_id: runtime.document.id,
@@ -1259,7 +1286,7 @@ export class CodexAgent {
   private activeTurnForThread(threadId: string): (ActiveTurn & { streamId: string }) | undefined {
     for (const [streamId, active] of this.activeTurns) {
       if (active.threadId === threadId) {
-        return { ...active, streamId };
+        return active;
       }
     }
     return undefined;
@@ -1268,10 +1295,18 @@ export class CodexAgent {
   private request(method: string, params: Record<string, unknown>): Promise<unknown> {
     const id = this.nextRequestId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Codex ${method} timed out. Check the local Codex connection and try again.`));
+      }, 30_000);
+      this.pending.set(id, {
+        resolve: (value) => { clearTimeout(timer); resolve(value); },
+        reject: (error) => { clearTimeout(timer); reject(error); }
+      });
       try {
         this.write({ id, method, params });
       } catch (error) {
+        clearTimeout(timer);
         this.pending.delete(id);
         reject(error instanceof Error ? error : new Error(String(error)));
       }
@@ -1318,6 +1353,21 @@ export class CodexAgent {
     }
     return this.executablePromise;
   }
+
+  private emitMessage(active: Pick<ActiveTurn, 'messages' | 'onEvent'>, id: string, text: string, completed: boolean): void {
+    const before = [...active.messages.values()].join('\n\n');
+    const previous = active.messages.get(id) ?? '';
+    active.messages.set(id, completed ? text : previous + text);
+    const after = [...active.messages.values()].join('\n\n');
+    if (after === before) return;
+    active.onEvent(after.startsWith(before)
+      ? { delta: after.slice(before.length), usedProvider: 'Codex' }
+      : { content: after, usedProvider: 'Codex' });
+  }
+}
+
+function isChat(input: CodexStreamRequest): boolean {
+  return !input.task || input.task === 'chat';
 }
 
 function codexTransportOverride(): 'app-server' | 'exec' | undefined {
@@ -1468,7 +1518,7 @@ function execArgs(input: CodexStreamRequest, workspaceDirectory: string, imagePa
     '--config',
     'approval_policy="never"',
     '--config',
-    'web_search="live"',
+    `web_search="${input.task === 'translate' ? 'disabled' : 'live'}"`,
     ...(sandboxMode === 'workspace-write'
       ? ['--config', 'sandbox_workspace_write.network_access=true']
       : [])
@@ -1497,7 +1547,7 @@ function execArgs(input: CodexStreamRequest, workspaceDirectory: string, imagePa
     '--config',
     'approval_policy="never"',
     '--config',
-    'web_search="live"',
+    `web_search="${input.task === 'translate' ? 'disabled' : 'live'}"`,
     ...(sandboxMode === 'workspace-write'
       ? ['--config', 'sandbox_workspace_write.network_access=true']
       : []),
@@ -1570,7 +1620,7 @@ function isAppServerClientForbidden(error: unknown): boolean {
 
 function isMissingExecSession(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /no rollout found for thread id|thread\/resume failed/i.test(message);
+  return /no rollout found for thread id|thread.*not found|unknown thread|thread\/resume failed/i.test(message);
 }
 
 async function readCachedCodexModels(): Promise<CodexModelInfo[]> {
@@ -1718,6 +1768,7 @@ async function listWorkspaceImages(directory: string): Promise<string[]> {
     await Promise.all(entries.map(async (entry) => {
       const filePath = resolve(current, entry.name);
       if (entry.isDirectory()) {
+        if (['.git', 'node_modules', '.cache', '__pycache__'].includes(entry.name)) return;
         await visit(filePath, depth + 1);
       } else if (entry.isFile() && imageMimeType(filePath)) {
         files.push(filePath);

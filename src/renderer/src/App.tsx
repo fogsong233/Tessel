@@ -1,3 +1,4 @@
+import { reconcileStreamText } from './streamText';
 import { type ComponentPropsWithoutRef, type CSSProperties, type FormEvent, type ReactElement, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
@@ -629,6 +630,7 @@ export function App(): ReactElement {
       if (event.delta) {
         streamedContent += event.delta;
       }
+      if (event.content !== undefined) streamedContent = event.content;
 
       if (event.error) {
         finish({
@@ -814,6 +816,7 @@ export function App(): ReactElement {
     };
     let streamedContent = '';
     let activeAssistantMessageId = assistantMessage.id;
+    const streamMessageIds = new Set([assistantMessage.id]);
     let draftConversation: Conversation = {
       ...conversation,
       messages: [...conversation.messages, assistantMessage],
@@ -864,6 +867,7 @@ export function App(): ReactElement {
           createdAt
         };
         activeAssistantMessageId = continuationMessage.id;
+        streamMessageIds.add(continuationMessage.id);
         streamedContent = '';
         draftConversation = {
           ...draftConversation,
@@ -979,6 +983,19 @@ export function App(): ReactElement {
         };
       }
 
+      if (event.content !== undefined) {
+        const parts = draftConversation.messages.filter((message) => streamMessageIds.has(message.id));
+        const corrected = reconcileStreamText(parts.map((message) => message.content), event.content);
+        const replacements = new Map(parts.map((message, index) => [message.id, corrected[index]]));
+        draftConversation = {
+          ...draftConversation,
+          messages: draftConversation.messages.map((message) => replacements.has(message.id)
+            ? { ...message, content: replacements.get(message.id)!, agentTimeline: replaceAgentTimelineOutput(message.agentTimeline, replacements.get(message.id)!) }
+            : message)
+        };
+        streamedContent = replacements.get(activeAssistantMessageId) ?? streamedContent;
+      }
+
       if (event.error) {
         streamedContent = `AI request failed: ${presentableAiError(event.error)}`;
         draftConversation = {
@@ -996,7 +1013,7 @@ export function App(): ReactElement {
         streamedContent = stoppedGenerationText(appPreferences.aiLanguage);
       }
 
-      if (event.delta || event.error || event.done) {
+      if (event.delta || event.content !== undefined || event.error || event.done) {
         draftConversation = {
           ...draftConversation,
           messages: draftConversation.messages.map((message) =>
@@ -1302,6 +1319,7 @@ export function App(): ReactElement {
         if (event.delta) {
           content += event.delta;
         }
+        if (event.content !== undefined) content = event.content;
         if (event.error) {
           finish(new Error(event.error));
           return;
@@ -2755,6 +2773,25 @@ function appendAgentTimelineOutput(
   }
   const now = new Date().toISOString();
   return [...entries, { id: createId('timeline-output'), type: 'output', content, createdAt: now }];
+}
+
+function replaceAgentTimelineOutput(current: AgentTimelineEntry[] | undefined, content: string): AgentTimelineEntry[] {
+  let offset = 0;
+  const entries = current ?? [];
+  let lastOutput = -1;
+  entries.forEach((entry, index) => { if (entry.type === 'output') lastOutput = index; });
+  const output: AgentTimelineEntry[] = [];
+  for (const [index, entry] of entries.entries()) {
+    if (entry.type !== 'output') { output.push(entry); continue; }
+    if (index !== lastOutput && content.startsWith(entry.content, offset)) {
+      output.push(entry);
+      offset += entry.content.length;
+    } else {
+      output.push({ ...entry, content: content.slice(offset) });
+      offset = content.length;
+    }
+  }
+  return lastOutput < 0 ? appendAgentTimelineOutput(output, content) : output;
 }
 
 function mergeAgentTimelineActivity(

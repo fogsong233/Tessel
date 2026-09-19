@@ -1,1159 +1,337 @@
-import {
-  type CSSProperties,
-  type PointerEvent as ReactPointerEvent,
-  type ReactElement,
-  type WheelEvent as ReactWheelEvent,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState
-} from 'react';
-import { createPortal } from 'react-dom';
-import {
-  ArrowLeftRight,
-  ChevronDown,
-  ChevronUp,
-  LassoSelect,
-  Eraser,
-  Hand,
-  Scan,
-  Maximize2,
-  Minus,
-  PenLine,
-  Plus,
-  Redo2,
-  Slash,
-  Star,
-  Trash2,
-  Undo2,
-  X
-} from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react';
+import { ArrowLeftRight, BookOpen, Check, ChevronDown, Eraser, Lasso, Minus, MoreHorizontal, PenLine, Plus, Redo2, Scan, Star, Trash2, Undo2, X } from 'lucide-react';
 import type { WorkspaceBlock } from '../../../shared/domain';
-import type { LanDrawingPoint, LanDrawingStroke, LanWhiteboardClientMessage } from '../../../shared/lanWhiteboard';
-import {
-  drawingSelectionBounds,
-  drawingStrokeNearPoint,
-  strokeIntersectsPolygon,
-  transformDrawingSelection,
-  type DrawingBounds
-} from '../drawing/drawingGeometry';
-import { DrawingStrokePath } from '../drawing/DrawingStrokePath';
-import { createStylusPressureState, normalizeStylusPressure, type StylusPressureState } from '../reader/drawingPressure';
+import type { LanDrawingStroke, LanWhiteboardClientMessage } from '../../../shared/lanWhiteboard';
+import { drawingStrokePath } from '../drawing/drawingGeometry';
+import { RemoteDrawingPage, type RemoteBrush, type RemotePageHandle, type RemoteTool } from './RemoteDrawingPage';
 import { remoteDrawingPayload } from './remoteDrawing';
+import { clamp } from './remoteInk';
 
-type DrawingTool = 'pen' | 'eraser' | 'lasso' | 'hand';
-
-interface RemoteCanvasProps {
-  block: WorkspaceBlock;
-  canMove: boolean;
-  canNavigateNext: boolean;
-  canNavigatePrevious: boolean;
+interface Props {
+  blocks: WorkspaceBlock[];
+  selectedId: string;
+  navigation?: { id: string; sequence: number };
   connected: boolean;
-  entryDirection?: 'next' | 'previous';
-  sheetNumber: number;
-  totalSheets: number;
-  remoteStrokes: LanDrawingStroke[];
+  remoteStrokes: Record<string, Record<string, LanDrawingStroke>>;
   send(message: LanWhiteboardClientMessage): boolean;
-  onDelete(): void;
-  onMove(): void;
-  onNavigate(direction: 'next' | 'previous'): void;
+  onSelect(id: string): void;
+  onDelete(block: WorkspaceBlock): void;
+  onMove(block: WorkspaceBlock): void;
+  onCreate(): void;
 }
-
-interface PanState {
-  clientX: number;
-  clientY: number;
-  pointerId: number;
-  scrollLeft: number;
-  scrollTop: number;
-}
-
-interface PageSwipeState {
-  pointerId: number;
-  startClientX: number;
-  startClientY: number;
-}
-
-interface PinchState {
-  distance: number;
-  midpointX: number;
-  midpointY: number;
-  scrollLeft: number;
-  scrollTop: number;
-  zoom: number;
-}
-
-interface SelectionGesture {
-  bounds: DrawingBounds;
-  mode: 'move' | 'resize';
-  originalStrokes: LanDrawingStroke[];
-  pointerId: number;
-  startX: number;
-  startY: number;
-}
-
-interface FavoriteBrush {
-  color: string;
-  follow: number;
-  size: number;
-  smoothing: number;
-}
-
+interface ZoomAnchor { id: string; x: number; y: number; clientX: number; clientY: number }
+const brushKey = 'tessel.lan-whiteboard.brush';
+const favoritesKey = 'tessel.lan-whiteboard.favorite-brushes';
+const fingerKey = 'tessel.lan-whiteboard.finger-writing';
 const colors = ['#171a16', '#2563eb', '#e0453b', '#16a36a', '#8b4bd6', '#e99620'];
-const canvasPadding = 56;
-const brushSettingsKey = 'tessel.lan-whiteboard.brush';
-const favoriteBrushesKey = 'tessel.lan-whiteboard.favorite-brushes';
+const defaultBrush: RemoteBrush = { color: colors[0], size: 4, follow: 1, smoothing: 0.5 };
 
-export function RemoteCanvas({
-  block,
-  canMove,
-  canNavigateNext,
-  canNavigatePrevious,
-  connected,
-  entryDirection,
-  sheetNumber,
-  totalSheets,
-  remoteStrokes,
-  send,
-  onDelete,
-  onMove,
-  onNavigate
-}: RemoteCanvasProps): ReactElement {
-  const payload = remoteDrawingPayload(block);
-  const initialBrushRef = useRef(readStoredBrush());
-  const [strokes, setStrokes] = useState(payload.strokes);
-  const strokesRef = useRef(payload.strokes);
-  const [activeStroke, setActiveStroke] = useState<LanDrawingStroke>();
-  const activeStrokeRef = useRef<LanDrawingStroke>();
-  const [lassoPoints, setLassoPoints] = useState<Array<[number, number]>>([]);
-  const lassoPointsRef = useRef<Array<[number, number]>>([]);
-  const [selectedStrokeIds, setSelectedStrokeIds] = useState<Set<string>>(new Set());
-  const [tool, setTool] = useState<DrawingTool>('pen');
-  const [color, setColor] = useState(initialBrushRef.current.color);
-  const [size, setSize] = useState(initialBrushRef.current.size);
-  const [smoothing, setSmoothing] = useState(initialBrushRef.current.smoothing);
-  const [follow, setFollow] = useState(initialBrushRef.current.follow);
-  const [favoriteBrushes, setFavoriteBrushes] = useState<FavoriteBrush[]>(readFavoriteBrushes);
-  const [brushPanelOpen, setBrushPanelOpen] = useState(false);
-  const toolbarRef = useRef<HTMLDivElement>(null);
-  const [brushPanelTop, setBrushPanelTop] = useState(72);
-  useLayoutEffect(() => {
-    if (!brushPanelOpen) return;
-    const measure = (): void => setBrushPanelTop((toolbarRef.current?.getBoundingClientRect().bottom ?? 64) + 8);
-    const escape = (event: KeyboardEvent): void => { if (event.key === 'Escape') setBrushPanelOpen(false); };
-    measure();
-    window.addEventListener('resize', measure);
-    window.addEventListener('keydown', escape);
-    return () => {
-      window.removeEventListener('resize', measure);
-      window.removeEventListener('keydown', escape);
-    };
-  }, [brushPanelOpen]);
-  const [penOnly, setPenOnly] = useState(payload.penOnly);
+export function RemoteCanvas({ blocks, selectedId, navigation, connected, remoteStrokes, send, onSelect, onDelete, onMove, onCreate }: Props): ReactElement {
+  const [brush, setBrush] = useState<RemoteBrush>(() => normalizeBrush(readStorage(brushKey)));
+  const [favorites, setFavorites] = useState<RemoteBrush[]>(() => {
+    const saved = readStorage(favoritesKey);
+    return Array.isArray(saved) ? saved.slice(0, 6).map(normalizeBrush) : [];
+  });
+  const [tool, setTool] = useState<RemoteTool>('pen');
+  const [browsing, setBrowsing] = useState(false);
+  const [fingerWriting, setFingerWriting] = useState(() => readStorage(fingerKey) === true);
+  const [brushOpen, setBrushOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [zoom, setZoom] = useState(1);
-  const [selectionNotice, setSelectionNotice] = useState<string>();
-  const [temporaryEraser, setTemporaryEraser] = useState(false);
-  const [pageSwipeOffset, setPageSwipeOffset] = useState(0);
-  const pageSwipeOffsetRef = useRef(0);
-  const zoomRef = useRef(1);
+  const [fitWidth, setFitWidth] = useState(true);
+  const rootRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
-  const svgRef = useRef<SVGSVGElement>(null);
-  const activePointerRef = useRef<number>();
-  const activePointerTypeRef = useRef<string>();
-  const pressureStateRef = useRef<StylusPressureState>(createStylusPressureState());
-  const pendingTransmissionRef = useRef<LanDrawingPoint[]>([]);
-  const frameRef = useRef<number>();
-  const panRef = useRef<PanState>();
-  const pageSwipeRef = useRef<PageSwipeState>();
-  const wheelNavigationRef = useRef({ accumulated: 0, lastEventAt: 0, lastNavigationAt: 0 });
-  const touchPointsRef = useRef(new Map<number, { x: number; y: number }>());
-  const pinchRef = useRef<PinchState>();
-  const eraserChangedRef = useRef(false);
-  const stylusHoldRef = useRef<{
-    pointerId: number;
-    startClientX: number;
-    startClientY: number;
-    strokeId: string;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
-  const temporaryEraserPointerRef = useRef<number>();
-  const undoRef = useRef<LanDrawingStroke[][]>([]);
-  const redoRef = useRef<LanDrawingStroke[][]>([]);
-  const selectionGestureRef = useRef<SelectionGesture>();
-  const deferredFitRef = useRef(false);
+  const brushRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const pages = useRef(new Map<string, RemotePageHandle>());
+  const pageRefs = useRef(new Map<string, (handle: RemotePageHandle | null) => void>());
+  const zoomRef = useRef(zoom);
+  const anchorRef = useRef<ZoomAnchor>();
+  const scrollFrame = useRef<number>();
+  const gestureRef = useRef<{ distance: number; zoom: number; anchor: ZoomAnchor }>();
+  const navigating = useRef<string>();
+  const selectedRef = useRef(selectedId);
+  selectedRef.current = selectedId;
+  const selected = blocks.find((block) => block.id === selectedId) ?? blocks[0];
+  const index = Math.max(0, blocks.findIndex((block) => block.id === selectedId));
+  const widest = useMemo(() => Math.max(...blocks.map((block) => remoteDrawingPayload(block).canvasWidth)), [blocks]);
+  const widestRef = useRef(widest);
+  widestRef.current = widest;
+  const favorite = favorites.some((item) => sameBrush(item, brush));
+  const preview = useMemo(() => drawingStrokePath({
+    id: 'preview', ...brush, streamline: 1 - brush.follow, simulatePressure: false, createdAt: '',
+    points: Array.from({ length: 70 }, (_, i) => [18 + i * 3.6, 34 + Math.sin(i / 9) * 13, 0.1 + Math.sin(i / 69 * Math.PI) * 0.8])
+  }), [brush]);
 
+  useEffect(() => writeStorage(brushKey, brush), [brush]);
+  useEffect(() => writeStorage(favoritesKey, favorites), [favorites]);
+  useEffect(() => writeStorage(fingerKey, fingerWriting), [fingerWriting]);
   useEffect(() => {
-    if (activePointerRef.current === undefined) {
-      strokesRef.current = payload.strokes;
-      setStrokes(payload.strokes);
-      setPenOnly(payload.penOnly);
-    }
-  }, [block.updatedAt]);
-
-  useEffect(() => {
-    localStorage.setItem(brushSettingsKey, JSON.stringify({ color, follow, size, smoothing } satisfies FavoriteBrush));
-  }, [color, follow, size, smoothing]);
-
-  useEffect(() => {
-    localStorage.setItem(favoriteBrushesKey, JSON.stringify(favoriteBrushes));
-  }, [favoriteBrushes]);
-
-  const selectionBounds = drawingSelectionBounds(strokes, selectedStrokeIds);
-
-  const applyStrokes = useCallback((next: LanDrawingStroke[], remember = true): void => {
-    if (remember) {
-      undoRef.current.push(strokesRef.current);
-      if (undoRef.current.length > 80) {
-        undoRef.current.shift();
-      }
-      redoRef.current = [];
-    }
-    strokesRef.current = next;
-    setStrokes(next);
-  }, []);
-
-  const replaceStrokes = useCallback((next: LanDrawingStroke[], remember = true): void => {
-    applyStrokes(next, remember);
-    send({
-      type: 'replace-strokes',
-      requestId: createRemoteId('replace'),
-      canvasId: block.id,
-      strokes: next
-    });
-  }, [applyStrokes, block.id, send]);
-
-  const flushFrame = useCallback((): void => {
-    if (frameRef.current !== undefined) {
-      cancelAnimationFrame(frameRef.current);
-      frameRef.current = undefined;
-    }
-    const stroke = activeStrokeRef.current;
-    if (stroke) {
-      setActiveStroke({ ...stroke, points: [...stroke.points] });
-    }
-    const points = pendingTransmissionRef.current;
-    pendingTransmissionRef.current = [];
-    if (stroke && points.length > 0) {
-      send({ type: 'stroke-points', canvasId: block.id, strokeId: stroke.id, points });
-    }
-  }, [block.id, send]);
-
-  const scheduleFrame = useCallback((): void => {
-    if (frameRef.current === undefined) {
-      frameRef.current = requestAnimationFrame(flushFrame);
-    }
-  }, [flushFrame]);
-
-  useEffect(() => () => {
-    if (frameRef.current !== undefined) {
-      cancelAnimationFrame(frameRef.current);
-    }
-    if (stylusHoldRef.current) {
-      clearTimeout(stylusHoldRef.current.timer);
-    }
-  }, []);
-
-  const canvasPoint = (clientX: number, clientY: number, pressure: number, simulatePressure: boolean): LanDrawingPoint => {
-    const rect = svgRef.current?.getBoundingClientRect();
-    if (!rect?.width || !rect.height) {
-      return [0, 0, 0.5];
-    }
-    const resolvedPressure = simulatePressure ? 0.5 : normalizeStylusPressure(pressure, pressureStateRef.current);
-    return [
-      clamp((clientX - rect.left) * payload.canvasWidth / rect.width, 0, payload.canvasWidth),
-      clamp((clientY - rect.top) * payload.canvasHeight / rect.height, 0, payload.canvasHeight),
-      resolvedPressure
-    ];
-  };
-
-  const cancelStylusHold = (pointerId?: number): void => {
-    const hold = stylusHoldRef.current;
-    if (!hold || (pointerId !== undefined && hold.pointerId !== pointerId)) {
-      return;
-    }
-    clearTimeout(hold.timer);
-    stylusHoldRef.current = undefined;
-  };
-
-  const updatePageSwipeOffset = (offset: number): void => {
-    pageSwipeOffsetRef.current = offset;
-    setPageSwipeOffset(offset);
-  };
-
-  const eraseAt = (point: LanDrawingPoint): void => {
-    const next = strokesRef.current.filter((stroke) => !drawingStrokeNearPoint(stroke, point, Math.max(8, size * 1.8)));
-    if (next.length !== strokesRef.current.length) {
-      eraserChangedRef.current = true;
-      strokesRef.current = next;
-      setStrokes(next);
-    }
-  };
-
-  const armStylusEraser = (event: ReactPointerEvent<SVGSVGElement>, stroke: LanDrawingStroke, point: LanDrawingPoint): void => {
-    if (event.pointerType !== 'pen') {
-      return;
-    }
-    const pointerId = event.pointerId;
-    const timer = setTimeout(() => {
-      if (activePointerRef.current !== pointerId || activeStrokeRef.current?.id !== stroke.id) {
-        return;
-      }
-      stylusHoldRef.current = undefined;
-      if (frameRef.current !== undefined) {
-        cancelAnimationFrame(frameRef.current);
-        frameRef.current = undefined;
-      }
-      pendingTransmissionRef.current = [];
-      send({ type: 'stroke-cancel', canvasId: block.id, strokeId: stroke.id });
-      activeStrokeRef.current = undefined;
-      setActiveStroke(undefined);
-      undoRef.current.push(strokesRef.current);
-      redoRef.current = [];
-      eraserChangedRef.current = false;
-      temporaryEraserPointerRef.current = pointerId;
-      setTemporaryEraser(true);
-      eraseAt(point);
-      navigator.vibrate?.(12);
-    }, 480);
-    stylusHoldRef.current = {
-      pointerId,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      strokeId: stroke.id,
-      timer
+    if (!brushOpen && !menuOpen) return;
+    const dismiss = (event: PointerEvent): void => {
+      if (!brushRef.current?.contains(event.target as Node)) setBrushOpen(false);
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
     };
-  };
-
-  const cancelActive = (): void => {
-    cancelStylusHold();
-    const stroke = activeStrokeRef.current;
-    if (stroke) {
-      send({ type: 'stroke-cancel', canvasId: block.id, strokeId: stroke.id });
-    }
-    activeStrokeRef.current = undefined;
-    activePointerRef.current = undefined;
-    activePointerTypeRef.current = undefined;
-    pendingTransmissionRef.current = [];
-    setActiveStroke(undefined);
-    lassoPointsRef.current = [];
-    setLassoPoints([]);
-    temporaryEraserPointerRef.current = undefined;
-    setTemporaryEraser(false);
-    pageSwipeRef.current = undefined;
-    updatePageSwipeOffset(0);
-  };
-
-  const beginPinchIfReady = (): boolean => {
-    if (touchPointsRef.current.size < 2) {
-      return false;
-    }
-    const viewport = viewportRef.current;
-    const [first, second] = [...touchPointsRef.current.values()];
-    if (!viewport || !first || !second) {
-      return false;
-    }
-    if (activePointerTypeRef.current !== 'pen') {
-      cancelActive();
-    }
-    pinchRef.current = {
-      distance: Math.max(1, distance(first, second)),
-      midpointX: (first.x + second.x) / 2,
-      midpointY: (first.y + second.y) / 2,
-      scrollLeft: viewport.scrollLeft,
-      scrollTop: viewport.scrollTop,
-      zoom: zoomRef.current
+    const escape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') { setBrushOpen(false); setMenuOpen(false); }
     };
-    return true;
-  };
+    document.addEventListener('pointerdown', dismiss);
+    document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', escape); };
+  }, [brushOpen, menuOpen]);
 
-  const startInteraction = (event: ReactPointerEvent<SVGSVGElement>): void => {
-    if (tool === 'pen' && event.pointerType === 'pen' && activePointerTypeRef.current === 'touch') {
-      cancelActive();
-      touchPointsRef.current.clear();
-      pinchRef.current = undefined;
-    }
-    if (event.pointerType === 'touch') {
-      if (activePointerTypeRef.current === 'pen') {
-        return;
-      }
-      touchPointsRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
-      capturePointer(event);
-      if (beginPinchIfReady()) {
-        event.preventDefault();
-        return;
-      }
-    }
-    if (event.button !== 0 || activePointerRef.current !== undefined) {
-      return;
-    }
-    if (tool === 'pen' && penOnly && event.pointerType === 'touch') {
-      event.preventDefault();
-      capturePointer(event);
-      activePointerRef.current = event.pointerId;
-      activePointerTypeRef.current = event.pointerType;
-      const viewport = viewportRef.current;
-      if (viewport) {
-        panRef.current = {
-          clientX: event.clientX,
-          clientY: event.clientY,
-          pointerId: event.pointerId,
-          scrollLeft: viewport.scrollLeft,
-          scrollTop: viewport.scrollTop
-        };
-        pageSwipeRef.current = {
-          pointerId: event.pointerId,
-          startClientX: event.clientX,
-          startClientY: event.clientY
-        };
-      }
-      return;
-    }
-    event.preventDefault();
-    capturePointer(event);
-    activePointerRef.current = event.pointerId;
-    activePointerTypeRef.current = event.pointerType;
-
-    if (tool === 'hand') {
-      const viewport = viewportRef.current;
-      if (viewport) {
-        panRef.current = {
-          clientX: event.clientX,
-          clientY: event.clientY,
-          pointerId: event.pointerId,
-          scrollLeft: viewport.scrollLeft,
-          scrollTop: viewport.scrollTop
-        };
-        if (event.pointerType === 'touch') {
-          pageSwipeRef.current = {
-            pointerId: event.pointerId,
-            startClientX: event.clientX,
-            startClientY: event.clientY
-          };
-        }
-      }
-      return;
-    }
-
-    const simulatePressure = event.pointerType !== 'pen';
-    pressureStateRef.current = createStylusPressureState();
-    const point = canvasPoint(event.clientX, event.clientY, event.pressure, simulatePressure);
-    if (tool === 'pen') {
-      const stroke: LanDrawingStroke = {
-        id: createRemoteId('stroke'),
-        color,
-        size,
-        smoothing,
-        streamline: 1 - follow,
-        points: [point],
-        simulatePressure,
-        createdAt: new Date().toISOString()
-      };
-      activeStrokeRef.current = stroke;
-      setActiveStroke(stroke);
-      setSelectedStrokeIds(new Set());
-      send({ type: 'stroke-begin', canvasId: block.id, stroke });
-      armStylusEraser(event, stroke, point);
-      return;
-    }
-    if (tool === 'eraser') {
-      undoRef.current.push(strokesRef.current);
-      redoRef.current = [];
-      eraserChangedRef.current = false;
-      eraseAt(point);
-      return;
-    }
-    lassoPointsRef.current = [[point[0], point[1]]];
-    setLassoPoints(lassoPointsRef.current);
-  };
-
-  const moveInteraction = (event: ReactPointerEvent<SVGSVGElement>): void => {
-    if (event.pointerType === 'touch' && touchPointsRef.current.has(event.pointerId)) {
-      touchPointsRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
-      if (pinchRef.current && touchPointsRef.current.size >= 2) {
-        event.preventDefault();
-        updatePinch();
-        return;
-      }
-    }
-    const selectionGesture = selectionGestureRef.current;
-    if (selectionGesture?.pointerId === event.pointerId) {
-      event.preventDefault();
-      const [x, y] = canvasPoint(event.clientX, event.clientY, 0.5, true);
-      if (selectionGesture.mode === 'move') {
-        const next = transformDrawingSelection(selectionGesture.originalStrokes, selectedStrokeIds, {
-          originX: selectionGesture.bounds.x,
-          originY: selectionGesture.bounds.y,
-          scale: 1,
-          translateX: clamp(
-            x - selectionGesture.startX,
-            -selectionGesture.bounds.x,
-            payload.canvasWidth - selectionGesture.bounds.x - selectionGesture.bounds.width
-          ),
-          translateY: clamp(
-            y - selectionGesture.startY,
-            -selectionGesture.bounds.y,
-            payload.canvasHeight - selectionGesture.bounds.y - selectionGesture.bounds.height
-          )
-        }, payload.canvasWidth, payload.canvasHeight);
-        strokesRef.current = next;
-        setStrokes(next);
-      } else {
-        const scaleX = (x - selectionGesture.bounds.x) / selectionGesture.bounds.width;
-        const scaleY = (y - selectionGesture.bounds.y) / selectionGesture.bounds.height;
-        const maximumScale = Math.min(
-          (payload.canvasWidth - selectionGesture.bounds.x) / selectionGesture.bounds.width,
-          (payload.canvasHeight - selectionGesture.bounds.y) / selectionGesture.bounds.height,
-          8
-        );
-        const next = transformDrawingSelection(selectionGesture.originalStrokes, selectedStrokeIds, {
-          originX: selectionGesture.bounds.x,
-          originY: selectionGesture.bounds.y,
-          scale: clamp(Math.max(scaleX, scaleY), 0.2, maximumScale),
-          translateX: 0,
-          translateY: 0
-        }, payload.canvasWidth, payload.canvasHeight);
-        strokesRef.current = next;
-        setStrokes(next);
-      }
-      return;
-    }
-    if (activePointerRef.current !== event.pointerId) {
-      return;
-    }
-    event.preventDefault();
-    const hold = stylusHoldRef.current;
-    if (hold?.pointerId === event.pointerId
-      && Math.hypot(event.clientX - hold.startClientX, event.clientY - hold.startClientY) > 8) {
-      cancelStylusHold(event.pointerId);
-    }
-    const pan = panRef.current;
-    if ((tool === 'hand' || (tool === 'pen' && penOnly)) && pan?.pointerId === event.pointerId) {
-      const viewport = viewportRef.current;
-      if (viewport) {
-        const deltaX = event.clientX - pan.clientX;
-        const deltaY = event.clientY - pan.clientY;
-        const maximumScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
-        const verticalGesture = Math.abs(deltaY) > Math.abs(deltaX) * 1.15;
-        const pullingPrevious = deltaY > 0 && pan.scrollTop <= 1 && canNavigatePrevious;
-        const pullingNext = deltaY < 0 && pan.scrollTop >= maximumScrollTop - 1 && canNavigateNext;
-        if (pageSwipeRef.current?.pointerId === event.pointerId && verticalGesture && (pullingPrevious || pullingNext)) {
-          updatePageSwipeOffset(clamp(deltaY * 0.48, -76, 76));
-        } else {
-          updatePageSwipeOffset(0);
-          viewport.scrollLeft = pan.scrollLeft - deltaX;
-          viewport.scrollTop = pan.scrollTop - deltaY;
-        }
-      }
-      return;
-    }
-
-    const simulatePressure = event.pointerType !== 'pen';
-    const coalesced = event.nativeEvent.getCoalescedEvents?.();
-    const samples = coalesced?.length ? coalesced : [event.nativeEvent];
-    const points = samples.map((sample) => canvasPoint(sample.clientX, sample.clientY, sample.pressure, simulatePressure));
-    if (temporaryEraserPointerRef.current === event.pointerId) {
-      for (const point of points) {
-        eraseAt(point);
-      }
-      return;
-    }
-    if (tool === 'pen' && activeStrokeRef.current) {
-      activeStrokeRef.current.points.push(...points);
-      pendingTransmissionRef.current.push(...points);
-      scheduleFrame();
-    } else if (tool === 'eraser') {
-      for (const point of points) {
-        eraseAt(point);
-      }
-    } else if (tool === 'lasso') {
-      lassoPointsRef.current.push(...points.map(([x, y]) => [x, y] as [number, number]));
-      setLassoPoints([...lassoPointsRef.current]);
-    }
-  };
-
-  const finishInteraction = (event: ReactPointerEvent<SVGSVGElement>): void => {
-    if (event.pointerType === 'touch') {
-      touchPointsRef.current.delete(event.pointerId);
-      if (touchPointsRef.current.size < 2) {
-        pinchRef.current = undefined;
-      }
-    }
-    const selectionGesture = selectionGestureRef.current;
-    if (selectionGesture?.pointerId === event.pointerId) {
-      event.preventDefault();
-      releasePointer(event);
-      selectionGestureRef.current = undefined;
-      undoRef.current.push(selectionGesture.originalStrokes);
-      redoRef.current = [];
-      replaceStrokes(strokesRef.current, false);
-      finishDeferredFit();
-      return;
-    }
-    if (activePointerRef.current !== event.pointerId) {
-      releasePointer(event);
-      return;
-    }
-    event.preventDefault();
-    releasePointer(event);
-    cancelStylusHold(event.pointerId);
-    const pageSwipe = pageSwipeRef.current?.pointerId === event.pointerId
-      ? pageSwipeRef.current
-      : undefined;
-    const completedPageSwipe = event.type === 'pointerup' && pageSwipe && Math.abs(pageSwipeOffsetRef.current) >= 48
-      ? pageSwipeOffsetRef.current < 0 ? 'next' : 'previous'
-      : undefined;
-    pageSwipeRef.current = undefined;
-    updatePageSwipeOffset(0);
-    activePointerRef.current = undefined;
-    activePointerTypeRef.current = undefined;
-    panRef.current = undefined;
-
-    if (completedPageSwipe) {
-      onNavigate(completedPageSwipe);
-      return;
-    }
-
-    if (temporaryEraserPointerRef.current === event.pointerId) {
-      temporaryEraserPointerRef.current = undefined;
-      setTemporaryEraser(false);
-      if (eraserChangedRef.current) {
-        send({
-          type: 'replace-strokes',
-          requestId: createRemoteId('erase'),
-          canvasId: block.id,
-          strokes: strokesRef.current
-        });
-      } else {
-        undoRef.current.pop();
-      }
-      eraserChangedRef.current = false;
-    } else if (tool === 'pen') {
-      flushFrame();
-      const stroke = activeStrokeRef.current;
-      if (stroke && stroke.points.length > 0) {
-        applyStrokes([...strokesRef.current, stroke]);
-        send({ type: 'stroke-commit', requestId: createRemoteId('commit'), canvasId: block.id, stroke });
-      }
-      activeStrokeRef.current = undefined;
-      pendingTransmissionRef.current = [];
-      setActiveStroke(undefined);
-    } else if (tool === 'eraser') {
-      if (eraserChangedRef.current) {
-        send({
-          type: 'replace-strokes',
-          requestId: createRemoteId('erase'),
-          canvasId: block.id,
-          strokes: strokesRef.current
-        });
-      } else {
-        undoRef.current.pop();
-      }
-    } else if (tool === 'lasso') {
-      const polygon = lassoPointsRef.current;
-      setSelectedStrokeIds(new Set(polygon.length >= 3
-        ? strokesRef.current.filter((stroke) => strokeIntersectsPolygon(stroke, polygon)).map((stroke) => stroke.id)
-        : []));
-      lassoPointsRef.current = [];
-      setLassoPoints([]);
-    }
-    finishDeferredFit();
-  };
-
-  const updatePinch = (): void => {
+  const sheetElement = useCallback((id: string): HTMLElement | undefined =>
+    Array.from(viewportRef.current?.querySelectorAll<HTMLElement>('.remote-sheet') ?? []).find((node) => node.dataset.canvasId === id), []);
+  const captureAnchor = useCallback((clientX?: number, clientY?: number): ZoomAnchor | undefined => {
     const viewport = viewportRef.current;
-    const pinch = pinchRef.current;
-    const [first, second] = [...touchPointsRef.current.values()];
-    if (!viewport || !pinch || !first || !second) {
-      return;
+    if (!viewport) return;
+    const rect = viewport.getBoundingClientRect();
+    const x = clientX ?? rect.left + rect.width / 2;
+    const y = clientY ?? rect.top + rect.height / 2;
+    let closest: { sheet: HTMLElement; rect: DOMRect; distance: number } | undefined;
+    for (const sheet of viewport.querySelectorAll<HTMLElement>('.remote-sheet')) {
+      const box = sheet.getBoundingClientRect();
+      const distance = Math.max(box.top - y, y - box.bottom, 0);
+      if (!closest || distance < closest.distance) closest = { sheet, rect: box, distance };
     }
-    const midpointX = (first.x + second.x) / 2;
-    const midpointY = (first.y + second.y) / 2;
-    const nextZoom = clamp(pinch.zoom * distance(first, second) / pinch.distance, 0.16, 4);
-    zoomRef.current = nextZoom;
-    setZoom(nextZoom);
-    viewport.scrollLeft = (pinch.scrollLeft + pinch.midpointX) * nextZoom / pinch.zoom - midpointX;
-    viewport.scrollTop = (pinch.scrollTop + pinch.midpointY) * nextZoom / pinch.zoom - midpointY;
-  };
-
-  const setZoomAround = (nextZoom: number, clientX?: number, clientY?: number): void => {
-    const viewport = viewportRef.current;
-    const paper = svgRef.current;
-    if (!viewport || !paper) {
-      return;
-    }
-    const bounded = clamp(nextZoom, 0.16, 4);
-    const viewportRect = viewport.getBoundingClientRect();
-    const paperRect = paper.getBoundingClientRect();
-    const anchorClientX = clientX ?? viewportRect.left + viewportRect.width / 2;
-    const anchorClientY = clientY ?? viewportRect.top + viewportRect.height / 2;
-    const anchorX = clamp((anchorClientX - paperRect.left) / Math.max(1, paperRect.width), 0, 1);
-    const anchorY = clamp((anchorClientY - paperRect.top) / Math.max(1, paperRect.height), 0, 1);
-    zoomRef.current = bounded;
-    setZoom(bounded);
-    requestAnimationFrame(() => {
-      const nextPaperRect = paper.getBoundingClientRect();
-      viewport.scrollLeft += nextPaperRect.left + nextPaperRect.width * anchorX - anchorClientX;
-      viewport.scrollTop += nextPaperRect.top + nextPaperRect.height * anchorY - anchorClientY;
-    });
-  };
-
-  const fitCanvas = useCallback((): void => {
-    const viewport = viewportRef.current;
-    if (!viewport) {
-      return;
-    }
-    const next = clamp(Math.min(
-      (viewport.clientWidth - canvasPadding * 2) / payload.canvasWidth,
-      (viewport.clientHeight - canvasPadding * 2) / payload.canvasHeight
-    ), 0.16, 2.5);
+    if (!closest) return;
+    return { id: closest.sheet.dataset.canvasId!, x: (x - closest.rect.left) / closest.rect.width,
+      y: (y - closest.rect.top) / closest.rect.height, clientX: x, clientY: y };
+  }, []);
+  const changeZoom = useCallback((value: number, anchor?: ZoomAnchor): void => {
+    if (rootRef.current?.dataset.writing === 'pen') return;
+    const next = clamp(value, 0.2, 4);
+    if (Math.abs(next - zoomRef.current) < 0.0001) return;
+    anchorRef.current = anchor ?? captureAnchor();
     zoomRef.current = next;
     setZoom(next);
-    requestAnimationFrame(() => {
-      viewport.scrollLeft = Math.max(0, (payload.canvasWidth * next + canvasPadding * 2 - viewport.clientWidth) / 2);
-      viewport.scrollTop = Math.max(0, (payload.canvasHeight * next + canvasPadding * 2 - viewport.clientHeight) / 2);
-    });
-  }, [payload.canvasHeight, payload.canvasWidth]);
-
-  const finishDeferredFit = (): void => {
-    if (!deferredFitRef.current) {
-      return;
-    }
-    deferredFitRef.current = false;
-    requestAnimationFrame(fitCanvas);
-  };
-
-  useEffect(() => {
-    fitCanvas();
+  }, [captureAnchor]);
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current;
     const viewport = viewportRef.current;
-    if (!viewport || typeof ResizeObserver === 'undefined') {
-      return;
+    if (!anchor || !viewport) return;
+    const box = sheetElement(anchor.id)?.getBoundingClientRect();
+    if (box) {
+      viewport.scrollLeft += box.left + box.width * anchor.x - anchor.clientX;
+      viewport.scrollTop += box.top + box.height * anchor.y - anchor.clientY;
     }
-    const observer = new ResizeObserver(() => {
-      if (activePointerRef.current !== undefined || selectionGestureRef.current) {
-        deferredFitRef.current = true;
-        return;
-      }
-      fitCanvas();
-    });
-    observer.observe(viewport);
+    anchorRef.current = undefined;
+  }, [zoom, sheetElement]);
+  const fit = useCallback((): void => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const rect = viewport.getBoundingClientRect();
+    changeZoom(Math.min(1.5, (viewport.clientWidth - (viewport.clientWidth < 600 ? 32 : 96)) / widestRef.current), captureAnchor(rect.left + viewport.clientWidth / 2, rect.top));
+  }, [changeZoom, captureAnchor]);
+  useLayoutEffect(() => {
+    if (!fitWidth || !viewportRef.current) return;
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(viewportRef.current);
     return () => observer.disconnect();
-  }, [block.id, fitCanvas]);
-
-  const undo = (): void => {
-    const previous = undoRef.current.pop() ?? (strokesRef.current.length > 0 ? strokesRef.current.slice(0, -1) : undefined);
-    if (!previous) {
-      return;
-    }
-    redoRef.current.push(strokesRef.current);
-    replaceStrokes(previous, false);
-  };
-
-  const redo = (): void => {
-    const next = redoRef.current.pop();
-    if (!next) {
-      return;
-    }
-    undoRef.current.push(strokesRef.current);
-    replaceStrokes(next, false);
-  };
-
-  const deleteSelection = (): void => {
-    if (selectedStrokeIds.size === 0) {
-      return;
-    }
-    replaceStrokes(strokesRef.current.filter((stroke) => !selectedStrokeIds.has(stroke.id)));
-    setSelectedStrokeIds(new Set());
-  };
-
-  const beginSelectionGesture = (mode: SelectionGesture['mode'], event: ReactPointerEvent<SVGElement>): void => {
-    if (!selectionBounds || event.button !== 0) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    const [startX, startY] = canvasPoint(event.clientX, event.clientY, 0.5, true);
-    selectionGestureRef.current = {
-      bounds: selectionBounds,
-      mode,
-      originalStrokes: strokesRef.current,
-      pointerId: event.pointerId,
-      startX,
-      startY
-    };
-    try {
-      svgRef.current?.setPointerCapture(event.pointerId);
-    } catch {
-      // Synthetic test pointers do not always have an OS pointer to capture.
-    }
-  };
-
-  const togglePenOnly = (): void => {
-    const next = !penOnly;
-    setPenOnly(next);
-    send({ type: 'set-pen-only', requestId: createRemoteId('pen-only'), canvasId: block.id, penOnly: next });
-  };
-
-  const currentBrush = { color, follow, size, smoothing };
-  const currentBrushFavorite = favoriteBrushes.some((brush) => sameBrush(brush, currentBrush));
-
-  const toggleFavoriteBrush = (): void => {
-    const brush = currentBrush;
-    setFavoriteBrushes((current) => current.some((candidate) => sameBrush(candidate, brush))
-      ? current.filter((candidate) => !sameBrush(candidate, brush))
-      : [...current, brush].slice(-6));
-  };
-
-  const selectBrush = (brush: FavoriteBrush): void => {
-    setColor(brush.color);
-    setSize(brush.size);
-    setSmoothing(brush.smoothing);
-    setFollow(brush.follow);
-    setTool('pen');
-  };
-
-  const adjustBrushSize = (delta: number): void => {
-    setSize((current) => clamp(Math.round((current + delta) * 2) / 2, 1, 40));
-    setTool('pen');
-  };
-
-  const shareSelection = (): void => {
-    if (selectedStrokeIds.size === 0 || !connected) {
-      return;
-    }
-    send({
-      type: 'share-selection',
-      requestId: createRemoteId('share'),
-      canvasId: block.id,
-      strokes: strokesRef.current.filter((stroke) => selectedStrokeIds.has(stroke.id))
-    });
-    setSelectionNotice('已放入电脑端 AI 输入框');
-    window.setTimeout(() => setSelectionNotice(undefined), 2_200);
-  };
-
-  const wheel = (event: ReactWheelEvent<HTMLDivElement>): void => {
-    if (event.ctrlKey || event.metaKey) {
-      event.preventDefault();
-      setZoomAround(zoomRef.current * Math.exp(-event.deltaY * 0.0024), event.clientX, event.clientY);
-      return;
-    }
-    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) {
-      return;
-    }
+  }, [fitWidth, fit, widest]);
+  const reportVisiblePage = useCallback((): void => {
+    scrollFrame.current = undefined;
     const viewport = viewportRef.current;
-    if (!viewport) {
-      return;
+    if (!viewport) return;
+    const box = viewport.getBoundingClientRect();
+    const target = box.top + box.height * 0.4;
+    let best: { id: string; distance: number } | undefined;
+    for (const node of viewport.querySelectorAll<HTMLElement>('.remote-sheet')) {
+      const rect = node.getBoundingClientRect();
+      const distance = Math.max(rect.top - target, target - rect.bottom, 0);
+      if (!best || distance < best.distance) best = { id: node.dataset.canvasId!, distance };
     }
-    const maximumScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
-    const direction = event.deltaY > 0 ? 'next' : 'previous';
-    const atBoundary = direction === 'next'
-      ? viewport.scrollTop >= maximumScrollTop - 1 && canNavigateNext
-      : viewport.scrollTop <= 1 && canNavigatePrevious;
-    if (!atBoundary) {
-      wheelNavigationRef.current.accumulated = 0;
-      return;
-    }
-    event.preventDefault();
-    const now = performance.now();
-    const state = wheelNavigationRef.current;
-    if (now - state.lastEventAt > 240 || Math.sign(state.accumulated) !== Math.sign(event.deltaY)) {
-      state.accumulated = 0;
-    }
-    state.lastEventAt = now;
-    state.accumulated += event.deltaY;
-    if (Math.abs(state.accumulated) >= 72 && now - state.lastNavigationAt > 420) {
-      state.accumulated = 0;
-      state.lastNavigationAt = now;
-      onNavigate(direction);
-    }
-  };
-
-  return (
-    <section className={`remote-canvas${entryDirection ? ` is-entering-${entryDirection}` : ''}`}>
-      <div className="remote-tools" ref={toolbarRef} aria-label="手写工具栏">
-        <ToolButton active={tool === 'pen' && !temporaryEraser} pressed={brushPanelOpen} label="画笔设置" onClick={() => { setTool('pen'); setBrushPanelOpen((value) => !value); }}>
-          <span className="remote-pen-tool-icon"><PenLine /><i style={{ background: color }} /></span>
-        </ToolButton>
-        <ToolButton active={tool === 'eraser' || temporaryEraser} label="橡皮" onClick={() => { setTool('eraser'); setBrushPanelOpen(false); }}><Eraser /></ToolButton>
-        <ToolButton active={tool === 'lasso'} label="圈选" onClick={() => { setTool('lasso'); setBrushPanelOpen(false); }}><LassoSelect /></ToolButton>
-        <ToolButton active={tool === 'hand'} label="移动" onClick={() => { setTool('hand'); setBrushPanelOpen(false); }}><Hand /></ToolButton>
-        <ToolButton active={penOnly} pressed={penOnly} label={penOnly ? '已禁用手指书写' : '禁用手指书写'} onClick={togglePenOnly}>
-          <span className="remote-touch-block-icon"><Hand /><Slash /></span>
-        </ToolButton>
-        <span className="remote-tools__divider" />
-        {createPortal(<section className={`remote-brush-panel${brushPanelOpen ? ' is-open' : ''}`} style={{ '--remote-brush-top': `${brushPanelTop}px` } as CSSProperties} aria-label="画笔设置" aria-hidden={!brushPanelOpen}>
-          <header>
-            <strong>画笔</strong>
-            <small>调节后仅影响新笔迹</small>
-            <button type="button" className="remote-brush-panel__close" aria-label="关闭画笔设置" title="关闭画笔设置" onClick={() => setBrushPanelOpen(false)}><X /></button>
-          </header>
-        <div className="remote-color-row" aria-label="颜色">
-          {colors.map((preset) => (
-            <button
-              type="button"
-              key={preset}
-              className={`remote-color${color === preset ? ' is-active' : ''}`}
-              style={{ '--ink': preset } as CSSProperties}
-              aria-label={`颜色 ${preset}`}
-              onClick={() => { setColor(preset); setTool('pen'); }}
-            />
-          ))}
-          <label className="remote-color remote-color--custom" style={{ '--ink': color } as CSSProperties}>
-            <input type="color" value={color} aria-label="自定义颜色" onChange={(event) => { setColor(event.target.value); setTool('pen'); }} />
-          </label>
-        </div>
-        <span className="remote-tools__divider" />
-        <ToolButton active={currentBrushFavorite} pressed={currentBrushFavorite} label={currentBrushFavorite ? '取消收藏当前笔刷' : '收藏当前笔刷'} onClick={toggleFavoriteBrush}>
-          <Star fill={currentBrushFavorite ? 'currentColor' : 'none'} />
-        </ToolButton>
-        {favoriteBrushes.length > 0 && (
-          <div className="remote-brush-favorites" aria-label="收藏的笔刷">
-            {favoriteBrushes.map((brush) => (
-              <button
-                type="button"
-                key={`${brush.color}-${brush.size}`}
-                className={sameBrush(brush, currentBrush) ? 'is-active' : undefined}
-                aria-label={`使用收藏笔刷 ${brush.color} ${formatBrushSize(brush.size)} 像素`}
-                title={`${brush.color} · ${formatBrushSize(brush.size)} px`}
-                onClick={() => selectBrush(brush)}
-              >
-                <span style={{ background: brush.color, height: clamp(brush.size / 2, 2, 12) }} />
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="remote-size" title={`笔触 ${formatBrushSize(size)}px`}>
-          <span style={{ width: clamp(size, 3, 22), height: clamp(size, 3, 22) }} />
-          <button type="button" aria-label="减小笔刷宽度" onClick={() => adjustBrushSize(-1)}><Minus /></button>
-          <input type="range" min="1" max="40" step="0.5" value={size} aria-label="笔刷宽度" onChange={(event) => { setSize(Number(event.target.value)); setTool('pen'); }} />
-          <button type="button" aria-label="增大笔刷宽度" onClick={() => adjustBrushSize(1)}><Plus /></button>
-          <output>{formatBrushSize(size)}</output>
-        </div>
-          <label className="remote-brush-tuning">
-            <span><strong>跟手</strong><output>{Math.round(follow * 100)}</output></span>
-            <input type="range" min="0" max="100" step="1" value={Math.round(follow * 100)} aria-label="笔触跟手程度" onChange={(event) => setFollow(Number(event.target.value) / 100)} />
-          </label>
-          <label className="remote-brush-tuning">
-            <span><strong>平滑</strong><output>{Math.round(smoothing * 100)}</output></span>
-            <input type="range" min="0" max="100" step="1" value={Math.round(smoothing * 100)} aria-label="笔触平滑程度" onChange={(event) => setSmoothing(Number(event.target.value) / 100)} />
-          </label>
-        </section>, document.body) as unknown as ReactElement}
-        <span className="remote-tools__spacer" />
-        <ToolButton disabled={undoRef.current.length === 0 && strokes.length === 0} label="撤销" onClick={undo}><Undo2 /></ToolButton>
-        <ToolButton disabled={redoRef.current.length === 0} label="重做" onClick={redo}><Redo2 /></ToolButton>
-      </div>
-
-      <div className="remote-canvas__viewport" ref={viewportRef} onWheel={wheel}>
-        <div
-          className={`remote-canvas__space${pageSwipeOffset ? ' is-page-swiping' : ''}`}
-          style={{
-            width: payload.canvasWidth * zoom + canvasPadding * 2,
-            height: payload.canvasHeight * zoom + canvasPadding * 2
-          }}
-        >
-          <div
-            className="remote-canvas__stage"
-            style={{
-              width: payload.canvasWidth * zoom,
-              height: payload.canvasHeight * zoom,
-              transform: `translateY(${pageSwipeOffset}px)`
-            }}
-          >
-            <svg
-              ref={svgRef}
-              className={`remote-canvas__paper is-${temporaryEraser ? 'eraser' : tool}`}
-              viewBox={`0 0 ${payload.canvasWidth} ${payload.canvasHeight}`}
-              preserveAspectRatio="none"
-              onPointerDown={startInteraction}
-              onPointerMove={moveInteraction}
-              onPointerUp={finishInteraction}
-              onPointerCancel={finishInteraction}
-            >
-              <rect width={payload.canvasWidth} height={payload.canvasHeight} fill="#fff" />
-              {strokes.map((stroke) => (
-                <DrawingStrokePath
-                  key={stroke.id}
-                  className={selectedStrokeIds.has(stroke.id) ? 'is-selected' : undefined}
-                  stroke={stroke}
-                />
-              ))}
-              {remoteStrokes.map((stroke) => <DrawingStrokePath key={`remote-${stroke.id}`} active stroke={stroke} opacity={0.78} />)}
-              {activeStroke && <DrawingStrokePath active stroke={activeStroke} />}
-              {lassoPoints.length > 1 && <polyline className="remote-canvas__lasso" points={lassoPoints.map((point) => point.join(',')).join(' ')} />}
-              {selectionBounds && (
-                <g className="remote-canvas__selection">
-                  <rect
-                    className="remote-canvas__selection-box"
-                    x={selectionBounds.x}
-                    y={selectionBounds.y}
-                    width={selectionBounds.width}
-                    height={selectionBounds.height}
-                    aria-label="移动选区"
-                    onPointerDown={(event) => beginSelectionGesture('move', event)}
-                  />
-                  <g
-                    className="remote-canvas__selection-handle"
-                    aria-label="缩放选区"
-                    transform={`translate(${selectionBounds.x + selectionBounds.width} ${selectionBounds.y + selectionBounds.height})`}
-                    onPointerDown={(event) => beginSelectionGesture('resize', event)}
-                  >
-                    <circle r="11" />
-                    <Maximize2 x={-6} y={-6} width="12" height="12" />
-                  </g>
-                </g>
-              )}
-            </svg>
-            {selectionBounds && (
-              <div
-                className="remote-selection-actions"
-                style={{
-                  left: (selectionBounds.x + 7) * zoom,
-                  top: (selectionBounds.y + 7) * zoom
-                }}
-              >
-                <span>{selectedStrokeIds.size} 条</span>
-                <button type="button" disabled={!connected} onClick={shareSelection}>发送到 AI</button>
-                <button type="button" className="is-danger" onClick={deleteSelection}>删除</button>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {totalSheets > 1 && (
-        <nav className="remote-page-flow" aria-label="同页纸张导航">
-          <button type="button" aria-label="上一张纸" disabled={!canNavigatePrevious} onClick={() => onNavigate('previous')}><ChevronUp /></button>
-          <span><strong>{sheetNumber}</strong><small>/{totalSheets}</small></span>
-          <button type="button" aria-label="下一张纸" disabled={!canNavigateNext} onClick={() => onNavigate('next')}><ChevronDown /></button>
-        </nav>
-      )}
-
-      <div className="remote-canvas__identity">
-        <span><strong>PDF {block.pageNumber ?? '—'} · 纸张 {sheetNumber}/{totalSheets}</strong></span>
-        <button type="button" disabled={!canMove} title={`把笔记窗口移到${payload.side === 'left' ? '右' : '左'}侧`} onClick={onMove}><ArrowLeftRight />换侧</button>
-        <button type="button" className="is-danger" title="删除这张纸" onClick={onDelete}><Trash2 />删除</button>
-      </div>
-
-      <div className="remote-zoom">
-        <button type="button" aria-label="缩小" onClick={() => setZoomAround(zoomRef.current / 1.18)}><Minus /></button>
-        <button type="button" className="remote-zoom__value" onClick={fitCanvas}>{Math.round(zoom * 100)}%</button>
-        <button type="button" aria-label="放大" onClick={() => setZoomAround(zoomRef.current * 1.18)}><Plus /></button>
-        <button type="button" aria-label="适合屏幕" onClick={fitCanvas}><Scan /></button>
-      </div>
-      {!connected && <div className="remote-canvas__offline">正在重新连接，笔迹会在连接恢复后继续同步</div>}
-      {selectionNotice && <div className="remote-canvas__notice" role="status">{selectionNotice}</div>}
-    </section>
-  );
-}
-
-function ToolButton({
-  active = false,
-  children,
-  danger = false,
-  disabled = false,
-  label,
-  onClick,
-  pressed
-}: {
-  active?: boolean;
-  children: ReactElement;
-  danger?: boolean;
-  disabled?: boolean;
-  label: string;
-  onClick(): void;
-  pressed?: boolean;
-}): ReactElement {
-  return (
-    <button
-      type="button"
-      className={`remote-tool${active ? ' is-active' : ''}${danger ? ' is-danger' : ''}`}
-      aria-label={label}
-      aria-pressed={pressed}
-      title={label}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      {children}
-      <span>{label}</span>
-    </button>
-  );
-}
-
-function releasePointer(event: ReactPointerEvent<SVGSVGElement>): void {
-  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-    event.currentTarget.releasePointerCapture(event.pointerId);
-  }
-}
-
-function capturePointer(event: ReactPointerEvent<SVGSVGElement>): void {
-  try {
-    event.currentTarget.setPointerCapture(event.pointerId);
-  } catch {
-    // A browser may reject capture for synthetic events; normal pen and touch
-    // events still take the fast captured-pointer path.
-  }
-}
-
-function distance(first: { x: number; y: number }, second: { x: number; y: number }): number {
-  return Math.hypot(first.x - second.x, first.y - second.y);
-}
-
-function createRemoteId(prefix: string): string {
-  const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
-  return `${prefix}_${suffix}`;
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.max(minimum, Math.min(maximum, value));
-}
-
-function readStoredBrush(): FavoriteBrush {
-  try {
-    return normalizeBrush(JSON.parse(localStorage.getItem(brushSettingsKey) ?? 'null')) ?? defaultBrush();
-  } catch {
-    return defaultBrush();
-  }
-}
-
-function readFavoriteBrushes(): FavoriteBrush[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(favoriteBrushesKey) ?? '[]');
-    return Array.isArray(parsed) ? parsed.flatMap((value) => normalizeBrush(value) ?? []).slice(-6) : [];
-  } catch {
-    return [];
-  }
-}
-
-function normalizeBrush(value: unknown): FavoriteBrush | undefined {
-  if (!value || typeof value !== 'object') {
-    return undefined;
-  }
-  const brush = value as Partial<FavoriteBrush>;
-  return typeof brush.color === 'string' && /^#[0-9a-f]{6}$/i.test(brush.color)
-    && typeof brush.size === 'number' && Number.isFinite(brush.size)
-    ? {
-        color: brush.color.toLowerCase(),
-        follow: unitInterval(brush.follow, 0.9),
-        size: clamp(Math.round(brush.size * 2) / 2, 1, 40),
-        smoothing: unitInterval(brush.smoothing, 0.5)
+    if (best && best.id !== selectedRef.current && !rootRef.current?.dataset.writing && !navigating.current) onSelect(best.id);
+  }, [onSelect]);
+  useEffect(() => {
+    if (!navigation) return;
+    const node = sheetElement(navigation.id);
+    const viewport = viewportRef.current;
+    if (!node || !viewport) return;
+    navigating.current = navigation.id;
+    const top = node.getBoundingClientRect().top - viewport.getBoundingClientRect().top + viewport.scrollTop - 20;
+    viewport.scrollTo({ top, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+    const done = (): void => { navigating.current = undefined; };
+    viewport.addEventListener('scrollend', done, { once: true });
+    const fallback = window.setTimeout(done, 1000);
+    return () => { clearTimeout(fallback); viewport.removeEventListener('scrollend', done); navigating.current = undefined; };
+  }, [navigation, sheetElement]);
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    let pan: { id: number; x: number; y: number; left: number; top: number } | undefined;
+    const wheel = (event: WheelEvent): void => {
+      if (rootRef.current?.dataset.writing === 'pen') { event.preventDefault(); return; }
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      setFitWidth(false);
+      changeZoom(zoomRef.current * Math.exp(-event.deltaY * 0.002), captureAnchor(event.clientX, event.clientY));
+    };
+    const touchStart = (event: TouchEvent): void => {
+      if (rootRef.current?.dataset.writing === 'pen') { event.preventDefault(); return; }
+      if (event.touches.length !== 2) return;
+      pages.current.forEach((page) => page.cancel());
+      event.preventDefault();
+      const [a, b] = Array.from(event.touches);
+      const anchor = captureAnchor((a.clientX + b.clientX) / 2, (a.clientY + b.clientY) / 2);
+      if (anchor) gestureRef.current = { distance: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), zoom: zoomRef.current, anchor };
+      setFitWidth(false);
+    };
+    const touchMove = (event: TouchEvent): void => {
+      if (rootRef.current?.dataset.writing === 'pen') { event.preventDefault(); return; }
+      const pinch = gestureRef.current;
+      if (!pinch || event.touches.length !== 2) return;
+      event.preventDefault();
+      const [a, b] = Array.from(event.touches);
+      const anchor = { ...pinch.anchor, clientX: (a.clientX + b.clientX) / 2, clientY: (a.clientY + b.clientY) / 2 };
+      changeZoom(pinch.zoom * Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / Math.max(1, pinch.distance), anchor);
+    };
+    const touchEnd = (): void => { gestureRef.current = undefined; };
+    const pointerDown = (event: PointerEvent): void => {
+      if (gestureRef.current) return;
+      if (event.pointerType !== 'mouse' || (!browsing && event.button !== 1 && !event.ctrlKey && !event.metaKey)) return;
+      if ((event.target as Element).closest('button')) return;
+      event.preventDefault(); event.stopPropagation();
+      pan = { id: event.pointerId, x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
+      viewport.setPointerCapture(event.pointerId);
+      viewport.classList.add('is-panning');
+    };
+    const pointerMove = (event: PointerEvent): void => {
+      if (!pan || pan.id !== event.pointerId) return;
+      viewport.scrollLeft = pan.left + pan.x - event.clientX;
+      viewport.scrollTop = pan.top + pan.y - event.clientY;
+    };
+    const pointerEnd = (): void => { pan = undefined; viewport.classList.remove('is-panning'); };
+    viewport.addEventListener('wheel', wheel, { passive: false });
+    viewport.addEventListener('touchstart', touchStart, { passive: false });
+    viewport.addEventListener('touchmove', touchMove, { passive: false });
+    viewport.addEventListener('touchend', touchEnd);
+    viewport.addEventListener('touchcancel', touchEnd);
+    viewport.addEventListener('pointerdown', pointerDown, true);
+    viewport.addEventListener('pointermove', pointerMove);
+    viewport.addEventListener('pointerup', pointerEnd);
+    viewport.addEventListener('pointercancel', pointerEnd);
+    return () => {
+      viewport.removeEventListener('wheel', wheel); viewport.removeEventListener('touchstart', touchStart);
+      viewport.removeEventListener('touchmove', touchMove); viewport.removeEventListener('touchend', touchEnd);
+      viewport.removeEventListener('touchcancel', touchEnd); viewport.removeEventListener('pointerdown', pointerDown, true);
+      viewport.removeEventListener('pointermove', pointerMove); viewport.removeEventListener('pointerup', pointerEnd);
+      viewport.removeEventListener('pointercancel', pointerEnd);
+    };
+  }, [browsing, captureAnchor, changeZoom]);
+  useEffect(() => () => { if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current); }, []);
+  useEffect(() => {
+    const keys = (event: KeyboardEvent): void => {
+      if ((event.target as Element)?.closest('input, textarea, select, [contenteditable]')) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+        event.preventDefault();
+        if (event.shiftKey) pages.current.get(selectedRef.current)?.redo();
+        else pages.current.get(selectedRef.current)?.undo();
       }
-    : undefined;
+    };
+    document.addEventListener('keydown', keys);
+    return () => document.removeEventListener('keydown', keys);
+  }, []);
+  function selectTool(next: RemoteTool): void { setTool(next); setBrowsing(false); }
+  function patchBrush(patch: Partial<RemoteBrush>): void { setBrush((current) => ({ ...current, ...patch })); }
+  function pageRef(id: string): (handle: RemotePageHandle | null) => void {
+    if (!pageRefs.current.has(id)) pageRefs.current.set(id, (handle) => {
+      if (handle) pages.current.set(id, handle);
+      else pages.current.delete(id);
+    });
+    return pageRefs.current.get(id)!;
+  }
+
+  return <div ref={rootRef} className={`remote-canvas${browsing ? ' is-browsing' : ''}`}>
+    <div className="remote-tools" role="toolbar" aria-label="手写工具">
+      <div className="remote-mode" aria-label="操作模式">
+        <button type="button" aria-label="手写模式" aria-pressed={!browsing} onClick={() => setBrowsing(false)}><PenLine /><span>手写</span></button>
+        <button type="button" aria-label="浏览模式" aria-pressed={browsing} onClick={() => { pages.current.forEach((page) => page.cancel()); setBrowsing(true); setBrushOpen(false); }}><BookOpen /><span>浏览</span></button>
+      </div>
+      <span className="remote-tools__divider" />
+      <div ref={brushRef} className="remote-brush-anchor">
+        <button type="button" className={`remote-tool remote-pen${tool === 'pen' && !browsing ? ' is-active' : ''}`} aria-label="画笔设置" aria-expanded={brushOpen}
+          onClick={() => { selectTool('pen'); setBrushOpen((value) => !value); }}>
+          <span className="remote-pen__nib" style={{ color: brush.color }}><PenLine /></span><span>{brush.size} <small>px</small></span><ChevronDown />
+        </button>
+        {brushOpen && <section className="remote-brush-panel" role="region" aria-label="画笔设置">
+          <header><div><strong>画笔</strong><small>颜色、粗细与书写偏好</small></div><button type="button" aria-label="关闭画笔设置" onClick={() => setBrushOpen(false)}><X /></button></header>
+          <div className="remote-brush-preview"><svg viewBox="0 0 290 70" aria-label="笔触预览"><path d={preview} fill={brush.color} /></svg></div>
+          <div className="remote-brush-colors">{colors.map((color) => <button type="button" key={color} aria-label={`墨水颜色 ${color}`} aria-pressed={brush.color === color} style={{ '--ink': color } as CSSProperties} onClick={() => patchBrush({ color })}>{brush.color === color && <Check />}</button>)}
+            <label className="remote-custom-color" title="自定义墨水颜色"><Plus /><input type="color" aria-label="自定义墨水颜色" value={brush.color} onChange={(event) => patchBrush({ color: event.target.value })} /></label>
+          </div>
+          <div className="remote-brush-label"><span>粗细</span><output>{brush.size} px</output></div>
+          <div className="remote-brush-width"><button type="button" aria-label="减小笔刷宽度" onClick={() => patchBrush({ size: clamp(brush.size - 1, 1, 40) })}><Minus /></button>
+            <input type="range" min="1" max="40" step="0.5" aria-label="笔刷宽度" value={brush.size} onChange={(event) => patchBrush({ size: Number(event.target.value) })} />
+            <button type="button" aria-label="增大笔刷宽度" onClick={() => patchBrush({ size: clamp(brush.size + 1, 1, 40) })}><Plus /></button>
+          </div>
+          <div className="remote-width-presets">{[2, 4, 8, 12].map((size) => <button type="button" key={size} aria-label={`${size} 像素笔刷`} aria-pressed={brush.size === size} onClick={() => patchBrush({ size })}><i style={{ width: size + 2, height: size + 2, background: brush.color }} /><span>{size}</span></button>)}</div>
+          <div className="remote-favorites"><button type="button" aria-label={favorite ? '取消收藏当前笔刷' : '收藏当前笔刷'} aria-pressed={favorite}
+            onClick={() => setFavorites((current) => favorite ? current.filter((item) => !sameBrush(item, brush)) : [...current, brush].slice(-6))}><Star />{favorite ? '已收藏' : '收藏笔刷'}</button>
+            {favorites.map((item, i) => <button type="button" key={i} className="remote-favorite" aria-label={`使用收藏笔刷 ${item.color} ${item.size} 像素`} onClick={() => setBrush(item)}><i style={{ background: item.color, width: Math.min(20, item.size + 5), height: Math.min(20, item.size + 5) }} /></button>)}
+          </div>
+          <label className="remote-finger-setting"><span>手指书写<small>关闭时，单指滑动纸张</small></span><input type="checkbox" checked={fingerWriting} onChange={(event) => setFingerWriting(event.target.checked)} /></label>
+          <details className="remote-brush-advanced"><summary>笔触调节<ChevronDown /></summary>
+            <label><span>跟手程度 <output>{Math.round(brush.follow * 100)}%</output></span><input type="range" min="0" max="100" aria-label="笔触跟手程度" value={Math.round(brush.follow * 100)} onChange={(event) => patchBrush({ follow: Number(event.target.value) / 100 })} /></label>
+            <label><span>笔触平滑 <output>{Math.round(brush.smoothing * 100)}%</output></span><input type="range" min="0" max="100" aria-label="笔触平滑程度" value={Math.round(brush.smoothing * 100)} onChange={(event) => patchBrush({ smoothing: Number(event.target.value) / 100 })} /></label>
+          </details>
+        </section>}
+      </div>
+      <ToolButton label="橡皮擦" active={!browsing && tool === 'eraser'} onClick={() => selectTool('eraser')}><Eraser /></ToolButton>
+      <ToolButton label="圈选" active={!browsing && tool === 'lasso'} onClick={() => selectTool('lasso')}><Lasso /></ToolButton>
+      <span className="remote-tools__divider" />
+      <ToolButton label="撤销" onClick={() => pages.current.get(selectedId)?.undo()}><Undo2 /></ToolButton>
+      <ToolButton label="重做" onClick={() => pages.current.get(selectedId)?.redo()}><Redo2 /></ToolButton>
+      <span className="remote-tools__spacer" />
+      <div ref={menuRef} className="remote-page-menu">
+        <ToolButton label="纸张选项" active={menuOpen} onClick={() => setMenuOpen((value) => !value)}><MoreHorizontal /></ToolButton>
+        {menuOpen && <div role="menu" aria-label="纸张选项">
+          <button type="button" role="menuitem" onClick={() => { onCreate(); setMenuOpen(false); }}><Plus />新增纸张</button>
+          <button type="button" role="menuitem" title={`把笔记窗口移到${remoteDrawingPayload(selected).side === 'left' ? '右' : '左'}侧`} onClick={() => { onMove(selected); setMenuOpen(false); }}><ArrowLeftRight />移到电脑{remoteDrawingPayload(selected).side === 'left' ? '右' : '左'}侧</button>
+          <button type="button" role="menuitem" className="is-danger" onClick={() => { onDelete(selected); setMenuOpen(false); }}><Trash2 />删除当前纸张</button>
+        </div>}
+      </div>
+    </div>
+    <div ref={viewportRef} className="remote-canvas__viewport" onScroll={() => { if (scrollFrame.current === undefined) scrollFrame.current = requestAnimationFrame(reportVisiblePage); }}>
+      <div className="remote-canvas__pages" style={{ width: `max(100%, ${widest * zoom + 32}px)` }}>
+        {blocks.map((block, position) => {
+          const payload = remoteDrawingPayload(block);
+          return <article className="remote-sheet" key={block.id} data-canvas-id={block.id} style={{ width: payload.canvasWidth * zoom }}>
+            <header className="remote-sheet__label"><span>PDF 第 {block.pageNumber ?? 1} 页</span><span>{String(position + 1).padStart(2, '0')}</span></header>
+            <div style={{ height: payload.canvasHeight * zoom }}>
+              <RemoteDrawingPage ref={pageRef(block.id)}
+                block={block} brush={brush} tool={tool} browsing={browsing} fingerWriting={fingerWriting} active={selectedId === block.id}
+                remoteStrokes={remoteStrokes[block.id]} send={send} onActivate={onSelect} />
+            </div>
+          </article>;
+        })}
+        <button type="button" className="remote-add-page" onClick={onCreate}><Plus />新增纸张</button>
+      </div>
+    </div>
+    <footer className="remote-canvas__footer">
+      <div className="remote-canvas__identity"><span>纸张 {index + 1}/{blocks.length}</span><i /><span>连续滚动</span></div>
+      <span className="remote-gesture-hint">{browsing ? '滑动浏览 · 双指缩放' : fingerWriting ? '手指或手写笔书写 · 双指缩放' : '手写笔书写 · 单指滑动 · 双指缩放'}</span>
+      <div className="remote-zoom">
+        <ToolButton label="缩小" onClick={() => { setFitWidth(false); changeZoom(zoomRef.current / 1.15); }}><Minus /></ToolButton>
+        <button type="button" className="remote-zoom__value" title="恢复 100%" onClick={() => { setFitWidth(false); changeZoom(1); }}>{Math.round(zoom * 100)}%</button>
+        <ToolButton label="放大" onClick={() => { setFitWidth(false); changeZoom(zoomRef.current * 1.15); }}><Plus /></ToolButton>
+        <ToolButton label="适合宽度" active={fitWidth} onClick={() => { setFitWidth(true); fit(); }}><Scan /></ToolButton>
+      </div>
+    </footer>
+    {!connected && <div className="remote-canvas__offline" role="status">连接中断，当前页面的笔迹将在重连后同步</div>}
+  </div>;
 }
 
-function sameBrush(left: FavoriteBrush, right: FavoriteBrush): boolean {
-  return left.color.toLowerCase() === right.color.toLowerCase()
-    && Math.abs(left.size - right.size) < 0.01
-    && Math.abs(left.follow - right.follow) < 0.01
-    && Math.abs(left.smoothing - right.smoothing) < 0.01;
+function ToolButton({ label, active, onClick, children }: { label: string; active?: boolean; onClick(): void; children: ReactElement }): ReactElement {
+  return <button type="button" className={`remote-tool${active ? ' is-active' : ''}`} title={label} aria-label={label} aria-pressed={active} onClick={onClick}>{children}</button>;
 }
-
-function defaultBrush(): FavoriteBrush {
-  return { color: colors[0], follow: 0.9, size: 4, smoothing: 0.5 };
+function sameBrush(a: RemoteBrush, b: RemoteBrush): boolean { return a.color === b.color && a.size === b.size && a.follow === b.follow && a.smoothing === b.smoothing; }
+function normalizeBrush(value: unknown): RemoteBrush {
+  const item = value && typeof value === 'object' ? value as Partial<RemoteBrush> : {};
+  const number = (value: unknown, fallback: number, min: number, max: number): number => typeof value === 'number' && Number.isFinite(value) ? clamp(value, min, max) : fallback;
+  return { color: typeof item.color === 'string' && /^#[0-9a-f]{6}$/i.test(item.color) ? item.color : defaultBrush.color,
+    size: number(item.size, 4, 1, 40), follow: number(item.follow, 1, 0, 1), smoothing: number(item.smoothing, 0.5, 0, 1) };
 }
-
-function unitInterval(value: number | undefined, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? clamp(value, 0, 1) : fallback;
-}
-
-function formatBrushSize(size: number): string {
-  return Number.isInteger(size) ? String(size) : size.toFixed(1);
-}
+function readStorage(key: string): unknown { try { return JSON.parse(localStorage.getItem(key) ?? 'null'); } catch { return undefined; } }
+function writeStorage(key: string, value: unknown): void { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* Private browsing can disable persistence. */ } }

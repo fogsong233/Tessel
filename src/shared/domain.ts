@@ -503,6 +503,8 @@ export interface AiStreamRequest {
 export interface AiStreamEvent {
   streamId: string;
   delta?: string;
+  /** Authoritative text correction, replacing earlier deltas for this turn. */
+  content?: string;
   toolCall?: AiToolCallEvent;
   activity?: AgentActivityEvent;
   artifacts?: ConversationAttachment[];
@@ -634,6 +636,7 @@ export interface TesselApi {
   getLanWhiteboardSnapshot(): Promise<import('./lanWhiteboard').LanWhiteboardSnapshot>;
   openLocalPath(path: string): Promise<void>;
   resolveRemoteImage(url: string): Promise<string | undefined>;
+  resolveLocalImage(path: string): Promise<string | undefined>;
   getAiProvider(): Promise<SafeAiProviderConfig>;
   saveAiProvider(config: AiProviderConfig): Promise<SafeAiProviderConfig>;
   getWebDavSync(): Promise<SafeWebDavSyncConfig>;

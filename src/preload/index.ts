@@ -56,6 +56,7 @@ const api: TesselApi = {
   getLanWhiteboardSnapshot: () => ipcRenderer.invoke('lanWhiteboard:getSnapshot'),
   openLocalPath: (path) => ipcRenderer.invoke('shell:openLocalPath', path),
   resolveRemoteImage: (url) => ipcRenderer.invoke('media:resolveRemoteImage', url),
+  resolveLocalImage: (path) => ipcRenderer.invoke('media:resolveLocalImage', path),
   getAiProvider: () => ipcRenderer.invoke('settings:getAiProvider'),
   saveAiProvider: (config: AiProviderConfig) => ipcRenderer.invoke('settings:saveAiProvider', config),
   getWebDavSync: () => ipcRenderer.invoke('settings:getWebDavSync'),

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LanDrawingStroke, LanWhiteboardClientMessage, LanWhiteboardServerMessage, LanWhiteboardSnapshot } from '../../../shared/lanWhiteboard';
+import { preserveInkIdentity, withPendingInk, type PendingInk } from './remoteSync';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'invalid';
 
@@ -23,6 +24,7 @@ export function useLanWhiteboardSocket(token: string): SocketState & {
   const socketRef = useRef<WebSocket>();
   const retryRef = useRef(0);
   const pendingRef = useRef<LanWhiteboardClientMessage[]>([]);
+  const pendingInkRef = useRef(new Map<string, PendingInk>());
   const [state, setState] = useState<SocketState>({
     clientCount: 0,
     status: token || readTrustedCredential() ? 'connecting' : 'invalid',
@@ -61,6 +63,9 @@ export function useLanWhiteboardSocket(token: string): SocketState & {
         for (const pending of pendingRef.current.splice(0)) {
           socket.send(JSON.stringify(pending));
         }
+        // A closed socket may have accepted send() without receiving an ack.
+        // Stroke IDs make replay idempotent; replay in edit order, including undo.
+        for (const pending of pendingInkRef.current.values()) socket.send(JSON.stringify(pending));
         const ping = (): void => {
           if (socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'ping', sentAt: Date.now() } satisfies LanWhiteboardClientMessage));
@@ -74,6 +79,12 @@ export function useLanWhiteboardSocket(token: string): SocketState & {
           const message = JSON.parse(String(event.data)) as LanWhiteboardServerMessage;
           if (message.type === 'device-trusted') {
             localStorage.setItem(trustedCredentialKey, message.credential);
+          }
+          if (message.type === 'ack') pendingInkRef.current.delete(message.requestId);
+          if (message.type === 'canvas-upsert') message.block = withPendingInk(message.block, pendingInkRef.current.values());
+          if (message.type === 'snapshot') message.snapshot.canvases = message.snapshot.canvases.map((block) => withPendingInk(block, pendingInkRef.current.values()));
+          if (message.type === 'canvas-delete') {
+            for (const [id, pending] of pendingInkRef.current) if (pending.canvasId === message.blockId) pendingInkRef.current.delete(id);
           }
           applyMessage(message, setState);
         } catch (error) {
@@ -116,13 +127,18 @@ export function useLanWhiteboardSocket(token: string): SocketState & {
   }, [token]);
 
   const send = useCallback((message: LanWhiteboardClientMessage): boolean => {
+    const ink = message.type === 'stroke-commit' || message.type === 'replace-strokes';
+    if (ink) {
+      pendingInkRef.current.set(message.requestId, message);
+      setState((current) => current.snapshot ? {
+        ...current,
+        snapshot: { ...current.snapshot, canvases: current.snapshot.canvases.map((block) => withPendingInk(block, [message])) }
+      } : current);
+    }
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      if (isDurableMessage(message)) {
+      if (!ink && isDurableMessage(message)) {
         pendingRef.current.push(message);
-        if (pendingRef.current.length > 100) {
-          pendingRef.current.shift();
-        }
       }
       return false;
     }
@@ -154,7 +170,10 @@ function isDurableMessage(message: LanWhiteboardClientMessage): boolean {
 function applyMessage(message: LanWhiteboardServerMessage, setState: React.Dispatch<React.SetStateAction<SocketState>>): void {
   switch (message.type) {
     case 'snapshot':
-      setState((current) => ({ ...current, snapshot: message.snapshot, transientStrokes: {} }));
+      setState((current) => ({ ...current, snapshot: {
+        ...message.snapshot,
+        canvases: message.snapshot.canvases.map((block) => preserveInkIdentity(block, current.snapshot?.canvases.find((old) => old.id === block.id)))
+      }, transientStrokes: {} }));
       return;
     case 'context':
       setState((current) => current.snapshot ? {
@@ -168,7 +187,7 @@ function applyMessage(message: LanWhiteboardServerMessage, setState: React.Dispa
         snapshot: {
           ...current.snapshot,
           revision: message.revision,
-          canvases: [message.block, ...current.snapshot.canvases.filter((block) => block.id !== message.block.id)]
+          canvases: [preserveInkIdentity(message.block, current.snapshot.canvases.find((block) => block.id === message.block.id)), ...current.snapshot.canvases.filter((block) => block.id !== message.block.id)]
         }
       } : current);
       return;

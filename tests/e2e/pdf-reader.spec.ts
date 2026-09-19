@@ -703,8 +703,7 @@ test.describe('PDF reader flow', () => {
     ]);
     expect(tabletHeaderBox).toBeTruthy();
     expect(tabletToolsBox).toBeTruthy();
-    expect(tabletToolsBox!.y).toBeGreaterThanOrEqual(tabletHeaderBox!.y);
-    expect(tabletToolsBox!.y + tabletToolsBox!.height).toBeLessThanOrEqual(tabletHeaderBox!.y + tabletHeaderBox!.height + 1);
+    expect(tabletToolsBox!.y).toBeGreaterThanOrEqual(tabletHeaderBox!.y + tabletHeaderBox!.height);
     expect(await tablet.locator('.remote-tools').evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
     await expect.poll(async () => {
       const [paper, viewport] = await Promise.all([
@@ -712,8 +711,8 @@ test.describe('PDF reader flow', () => {
         tablet.locator('.remote-canvas__viewport').boundingBox()
       ]);
       return Boolean(paper && viewport
-        && Math.abs(paper.x + paper.width / 2 - (viewport.x + viewport.width / 2)) < 1
-        && Math.abs(paper.y + paper.height / 2 - (viewport.y + viewport.height / 2)) < 1);
+        && Math.abs(paper.x + paper.width / 2 - (viewport.x + viewport.width / 2)) < 10
+        && paper.height > viewport.height);
     }).toBe(true);
 
     await tablet.getByRole('button', { name: '画笔设置', exact: true }).click();
@@ -732,6 +731,7 @@ test.describe('PDF reader flow', () => {
     await expect(brushWidth).toHaveValue('5');
     await tablet.getByRole('button', { name: '使用收藏笔刷 #171a16 4 像素' }).click();
     await expect(brushWidth).toHaveValue('4');
+    await tablet.locator('.remote-brush-advanced summary').click();
     await tablet.getByRole('slider', { name: '笔触跟手程度' }).fill('100');
     await tablet.getByRole('slider', { name: '笔触平滑程度' }).fill('35');
     await tablet.getByRole('button', { name: '画笔设置', exact: true }).click();
@@ -761,8 +761,7 @@ test.describe('PDF reader flow', () => {
       return { ready: (stroke?.points?.length ?? 0) > 2, smoothing: stroke?.smoothing, streamline: stroke?.streamline };
     }).toEqual({ ready: true, smoothing: 0.35, streamline: 0 });
 
-    await tablet.getByRole('button', { name: '禁用手指书写' }).click();
-    await expect(tablet.getByRole('button', { name: '已禁用手指书写' })).toHaveClass(/is-active/);
+    // Fingers scroll by default, while a pen can begin writing over a resting palm.
     await tabletSurface.dispatchEvent('pointerdown', { pointerId: 60, pointerType: 'touch', button: 0, buttons: 1, clientX: startX + 20, clientY: startY + 120 });
     await tabletSurface.dispatchEvent('pointermove', { pointerId: 60, pointerType: 'touch', button: 0, buttons: 1, clientX: startX + 90, clientY: startY + 150 });
     await tabletSurface.dispatchEvent('pointerdown', { pointerId: 62, pointerType: 'pen', button: 0, buttons: 1, clientX: startX + 170, clientY: startY + 120, pressure: 0.35 });
@@ -783,7 +782,7 @@ test.describe('PDF reader flow', () => {
       pressure: 0.5
     });
     await tablet.waitForTimeout(540);
-    await expect(tabletSurface).toHaveClass(/is-eraser/);
+    await expect(tabletSurface).toHaveClass(/is-pen/);
     await tabletSurface.dispatchEvent('pointerup', {
       pointerId: 61,
       pointerType: 'pen',
@@ -793,21 +792,21 @@ test.describe('PDF reader flow', () => {
       clientY: startY + 32,
       pressure: 0
     });
-    await expect(tabletSurface.locator('path')).toHaveCount(0);
+    await expect(tabletSurface.locator('.remote-ink-persisted path')).toHaveCount(2);
     await tablet.getByRole('button', { name: '撤销' }).click();
     await expect(tabletSurface.locator('path')).toHaveCount(1);
     await tablet.getByRole('button', { name: '重做' }).click();
-    await expect(tabletSurface.locator('path')).toHaveCount(0);
+    await expect(tabletSurface.locator('path')).toHaveCount(2);
     await tablet.getByRole('button', { name: '撤销' }).click();
     await expect(tabletSurface.locator('path')).toHaveCount(1);
 
     await tablet.getByRole('button', { name: '圈选' }).click();
     const lassoBox = await tabletSurface.boundingBox();
     expect(lassoBox).toBeTruthy();
-    const lassoLeft = lassoBox!.x + 1;
-    const lassoRight = lassoBox!.x + lassoBox!.width + 8;
-    const lassoTop = lassoBox!.y + 1;
-    const lassoBottom = lassoBox!.y + lassoBox!.height + 8;
+    const lassoLeft = startX - 30;
+    const lassoRight = startX + 150;
+    const lassoTop = startY - 30;
+    const lassoBottom = startY + 100;
     await tablet.mouse.move(lassoLeft, lassoTop);
     await tablet.mouse.down();
     await tablet.mouse.move(lassoRight, lassoTop, { steps: 4 });
@@ -823,39 +822,25 @@ test.describe('PDF reader flow', () => {
     await tablet.getByRole('button', { name: '显示纸张列表' }).click();
     await tablet.getByRole('button', { name: '新增纸张' }).click();
     await expect(tablet.locator('.remote-canvas__identity')).toContainText('纸张 2/2');
-    await expect(tablet.getByRole('navigation', { name: '同页纸张导航' })).toBeVisible();
-    await tablet.locator('.remote-canvas__viewport').dispatchEvent('wheel', { deltaY: -120, deltaX: 0 });
-    await expect(tablet.locator('.remote-canvas__identity')).toContainText('纸张 1/2');
-    const swipeSurfaceBox = await tabletSurface.boundingBox();
-    expect(swipeSurfaceBox).toBeTruthy();
-    const swipeX = swipeSurfaceBox!.x + swipeSurfaceBox!.width / 2;
-    const swipeY = swipeSurfaceBox!.y + swipeSurfaceBox!.height / 2;
-    await tabletSurface.dispatchEvent('pointerdown', {
-      pointerId: 71,
-      pointerType: 'touch',
-      button: 0,
-      buttons: 1,
-      clientX: swipeX,
-      clientY: swipeY
+    await expect(tablet.locator('.remote-canvas__paper')).toHaveCount(2);
+    await tablet.waitForTimeout(1100);
+    await tablet.locator('.remote-canvas__viewport').evaluate((node) => {
+      const second = node.querySelectorAll('.remote-sheet')[1].getBoundingClientRect();
+      node.scrollTop += second.top - node.getBoundingClientRect().top - node.clientHeight / 2;
     });
-    await tabletSurface.dispatchEvent('pointermove', {
-      pointerId: 71,
-      pointerType: 'touch',
-      button: 0,
-      buttons: 1,
-      clientX: swipeX,
-      clientY: swipeY - 130
-    });
-    await expect(tablet.locator('.remote-canvas__stage')).toHaveAttribute('style', /translateY\(-/);
-    await tabletSurface.dispatchEvent('pointerup', {
-      pointerId: 71,
-      pointerType: 'touch',
-      button: 0,
-      buttons: 0,
-      clientX: swipeX,
-      clientY: swipeY - 130
-    });
-    await expect(tablet.locator('.remote-canvas__identity')).toContainText('纸张 2/2');
+    const paperPositions = await tablet.locator('.remote-canvas__paper').evaluateAll((nodes) => nodes.map((node) => {
+      const rect = node.getBoundingClientRect();
+      const viewport = node.closest('.remote-canvas__viewport')!.getBoundingClientRect();
+      return rect.bottom > viewport.top && rect.top < viewport.bottom;
+    }));
+    expect(paperPositions).toEqual([true, true]);
+    await expect(tablet.getByRole('button', { name: '圈选' })).toHaveAttribute('aria-pressed', 'true');
+    await tablet.getByRole('button', { name: '画笔设置', exact: true }).click();
+    await expect(tablet.getByRole('slider', { name: '笔刷宽度' })).toHaveValue('4');
+    await tablet.locator('.remote-brush-advanced summary').click();
+    await expect(tablet.getByRole('checkbox', { name: /手指书写/ })).not.toBeChecked();
+    await expect(tablet.getByRole('slider', { name: '笔触平滑程度' })).toHaveValue('35');
+    await tablet.getByRole('button', { name: '关闭画笔设置' }).click();
     await tablet.getByRole('button', { name: '显示纸张列表' }).click();
     await expect(tablet.locator('.remote-canvas-row')).toHaveCount(2);
     await tablet.getByRole('button', { name: '缩小纸张列表' }).click();
@@ -872,6 +857,7 @@ test.describe('PDF reader flow', () => {
     await expect(tablet.locator('.remote-canvas-row')).toHaveCount(1);
 
     await tablet.getByRole('button', { name: '隐藏纸张列表' }).click();
+    await tablet.getByRole('button', { name: '纸张选项' }).click();
     await tablet.getByTitle('把笔记窗口移到右侧').click();
     await expect.poll(async () => {
       const stored = JSON.parse(await readFile(join(userDataDir, 'workspace/library.json'), 'utf8')) as {
@@ -956,7 +942,8 @@ test.describe('PDF reader flow', () => {
 
     await page.reload();
     const bubble = page.locator('.chat-bubble').last();
-    await expect(bubble.locator('img[alt="Generated chart"]')).toHaveAttribute('src', /^file:\/\//);
+    await expect(bubble.locator('img[alt="Generated chart"]')).toHaveAttribute('src', /^data:image\/png;base64,/);
+    await expect.poll(() => bubble.locator('img[alt="Generated chart"]').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
     await expect(bubble.getByRole('link', { name: 'Open analysis' })).toHaveAttribute('href', /^file:\/\//);
     await expect(bubble.getByRole('link', { name: 'Open analysis' })).not.toHaveAttribute('href', /^https?:\/\/localhost/);
     await expect(bubble.getByRole('link', { name: 'Open analysis' })).not.toHaveAttribute('href', /%25/);
@@ -1227,7 +1214,7 @@ test.describe('PDF reader flow', () => {
       const appServerIndex = requests.findIndex((request) => request.includes('app-server'));
       const loginIndex = requests.findIndex((request) => request[0] === 'login' && request[1] === 'status');
       return { appServerIndex, loginIndex };
-    }).toEqual({ appServerIndex: 0, loginIndex: 1 });
+    }).toEqual({ appServerIndex: 0, loginIndex: -1 });
     const documentId = `pdf_${createHash('sha256').update(await readFile(pdfPath)).digest('hex')}`;
     const now = new Date().toISOString();
     await page.evaluate(async ({ documentId, now }) => {
@@ -1356,12 +1343,8 @@ test.describe('PDF reader flow', () => {
 
     await expect.poll(async () => {
       const requests = await readFakeCodexRequests(join(runDir, 'codex-requests.jsonl'));
-      const args = requests.find((request) => request[0] === 'exec' && request.includes('--ephemeral'));
-      if (!args) {
-        return undefined;
-      }
-      const modelIndex = args.indexOf('--model');
-      return modelIndex >= 0 ? args[modelIndex + 1] : undefined;
+      const request = requests.find((request) => request[0] === 'turn/start');
+      return request ? JSON.parse(request[1]).model : undefined;
     }).toBe('gpt-test-mini');
 
     await expect.poll(async () => {
@@ -1613,9 +1596,9 @@ test.describe('PDF reader flow', () => {
 
     await expect.poll(async () => {
       const requests = await readFakeCodexRequests(join(runDir, 'codex-requests.jsonl'));
-      const args = requests.find((request) => request[0] === 'exec' && request.includes('--ephemeral'));
-      const prompt = args?.at(-1) ?? '';
-      return prompt.includes('"pageSamples"') && prompt.includes('Reader fixture quote Alpha Beta');
+      const args = requests.find((request) => request[0] === 'turn/start');
+      const prompt = args?.[1] ?? '';
+      return prompt.includes('pageSamples') && prompt.includes('Reader fixture quote Alpha Beta');
     }).toBe(true);
   });
 });
@@ -1771,6 +1754,7 @@ const later = (delay, callback) => {
 };
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const message = JSON.parse(line);
+  if (message.method) logRequest([message.method, JSON.stringify(message.params)]);
   if (message.method === 'initialize') {
     send({ id: message.id, result: {} });
   } else if (message.method === 'model/list') {
@@ -1778,6 +1762,14 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   } else if (message.method === 'thread/start') {
     send({ id: message.id, result: { thread: { id: 'thread_steer_fixture' } } });
   } else if (message.method === 'turn/start') {
+    const text = message.params.input.find((item) => item.type === 'text')?.text || '';
+    if (message.params.model === 'gpt-test-mini' || text.includes('"pageSamples"')) {
+      send({ id: message.id, result: { turn: { id: 'turn_steer_fixture' } } });
+      const answer = text.includes('"pageSamples"') ? '{"items":[{"title":"Fixture introduction","level":0,"pageNumber":1}]}' : 'Translated quickly.';
+      later(35, () => send({ method: 'item/agentMessage/delta', params: { threadId: 'thread_steer_fixture', itemId: 'utility', delta: answer } }));
+      later(55, () => send({ method: 'turn/completed', params: { threadId: 'thread_steer_fixture', turn: { id: 'turn_steer_fixture', status: 'completed' } } }));
+      return;
+    }
     send({ id: message.id, result: { turn: { id: 'turn_steer_fixture' } } });
     later(35, () => send({ method: 'item/agentMessage/delta', params: { threadId: 'thread_steer_fixture', turnId: 'turn_steer_fixture', delta: 'First segment.' } }));
   } else if (message.method === 'turn/steer') {

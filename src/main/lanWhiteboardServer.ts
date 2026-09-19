@@ -59,6 +59,8 @@ export class LanWhiteboardServer {
   private webSocketServer?: WebSocketServer;
   private port?: number;
   private trustSecret = '';
+  private clientMutationQueue: Promise<void> = Promise.resolve();
+  private readonly inkAcknowledgements = new Map<string, Extract<LanWhiteboardServerMessage, { type: 'ack' }>>();
 
   constructor(options: LanWhiteboardServerOptions) {
     this.rendererDirectory = resolve(options.rendererDirectory);
@@ -247,17 +249,40 @@ export class LanWhiteboardServer {
         socket.close(1009, 'Message too large');
         return;
       }
-      void this.handleClientMessage(socket, data.toString()).catch((error: unknown) => {
-        console.warn('[lan-whiteboard] client message failed', error);
+      let message: LanWhiteboardClientMessage;
+      try {
+        message = JSON.parse(data.toString()) as LanWhiteboardClientMessage;
+        if (!message || typeof message !== 'object') throw new Error('Invalid whiteboard message');
+      } catch (error) {
         send(socket, { type: 'error', message: errorMessage(error) });
-      });
+        return;
+      }
+      const handle = async (): Promise<void> => {
+        try {
+          await this.handleClientMessage(socket, message);
+        } catch (error) {
+          console.warn('[lan-whiteboard] client message failed', error);
+          send(socket, { type: 'error', requestId: 'requestId' in message ? cleanRequestId(message.requestId) : undefined, message: errorMessage(error) });
+        }
+      };
+      if (message.type === 'ping' || message.type === 'stroke-begin' || message.type === 'stroke-points' || message.type === 'stroke-cancel') {
+        void handle();
+      } else {
+        // Serialize the complete read/modify/save/broadcast operation across
+        // clients. Queuing only the disk write still lets rapid strokes read
+        // the same old payload and overwrite one another. Previews bypass it.
+        this.clientMutationQueue = this.clientMutationQueue.then(handle, handle);
+      }
     });
     socket.on('close', () => this.publishPresence());
     socket.on('error', (error) => console.warn('[lan-whiteboard] socket error', error));
   }
 
-  private async handleClientMessage(socket: WebSocket, source: string): Promise<void> {
-    const message = JSON.parse(source) as LanWhiteboardClientMessage;
+  private async handleClientMessage(socket: WebSocket, message: LanWhiteboardClientMessage): Promise<void> {
+    if (message.type === 'stroke-commit' || message.type === 'replace-strokes') {
+      const completed = this.inkAcknowledgements.get(cleanRequestId(message.requestId));
+      if (completed) { send(socket, completed); return; }
+    }
     switch (message.type) {
       case 'ping':
         send(socket, { type: 'pong', sentAt: finiteNumber(message.sentAt, Date.now()), serverAt: Date.now() });
@@ -355,7 +380,7 @@ export class LanWhiteboardServer {
           throw new Error('Invalid stroke');
         }
         await this.appendStroke(canvasId, message.stroke);
-        send(socket, { type: 'ack', requestId: cleanRequestId(message.requestId), revision: this.revision });
+        this.acknowledgeInk(socket, message.requestId);
         return;
       }
       case 'replace-strokes': {
@@ -365,12 +390,19 @@ export class LanWhiteboardServer {
         }
         enforceCanvasPointLimit(message.strokes);
         await this.replaceStrokes(canvasId, message.strokes);
-        send(socket, { type: 'ack', requestId: cleanRequestId(message.requestId), revision: this.revision });
+        this.acknowledgeInk(socket, message.requestId);
         return;
       }
       default:
         throw new Error('Unsupported whiteboard message');
     }
+  }
+
+  private acknowledgeInk(socket: WebSocket, requestId: string): void {
+    const message = { type: 'ack' as const, requestId: cleanRequestId(requestId), revision: this.revision };
+    this.inkAcknowledgements.set(message.requestId, message);
+    if (this.inkAcknowledgements.size > 2048) this.inkAcknowledgements.delete(this.inkAcknowledgements.keys().next().value!);
+    send(socket, message);
   }
 
   private async createCanvas(documentId: unknown, pageNumber: unknown, side: LanWhiteboardSide): Promise<WorkspaceBlock> {

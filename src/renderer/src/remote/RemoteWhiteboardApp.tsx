@@ -17,7 +17,7 @@ import {
   WifiOff
 } from 'lucide-react';
 import type { WorkspaceBlock } from '../../../shared/domain';
-import type { LanWhiteboardClientMessage, LanWhiteboardDocument, LanWhiteboardSide } from '../../../shared/lanWhiteboard';
+import type { LanWhiteboardDocument, LanWhiteboardSide } from '../../../shared/lanWhiteboard';
 import { RemoteCanvas } from './RemoteCanvas';
 import { remoteDrawingPayload } from './remoteDrawing';
 import { useLanWhiteboardSocket } from './useLanWhiteboardSocket';
@@ -28,7 +28,7 @@ export function RemoteWhiteboardApp(): ReactElement {
   const [selectedCanvasId, setSelectedCanvasId] = useState<string>();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarCompact, setSidebarCompact] = useState(false);
-  const [pageDirection, setPageDirection] = useState<'next' | 'previous'>();
+  const [navigation, setNavigation] = useState<{ id: string; sequence: number }>();
   const [fullscreen, setFullscreen] = useState(Boolean(document.fullscreenElement));
   const [pendingDelete, setPendingDelete] = useState<WorkspaceBlock>();
 
@@ -39,10 +39,9 @@ export function RemoteWhiteboardApp(): ReactElement {
   const notebookSide = contextCanvases[0] ? remoteDrawingPayload(contextCanvases[0]).side : 'left';
   const groupedCanvases = useMemo(() => groupCanvases(snapshot?.canvases ?? [], snapshot?.documents ?? []), [snapshot?.canvases, snapshot?.documents]);
   const selectedNotebookSheets = useMemo(
-    () => selectedCanvas ? notebookSheets(snapshot?.canvases ?? [], selectedCanvas) : [],
+    () => selectedCanvas ? (snapshot?.canvases ?? []).filter((block) => block.documentId === selectedCanvas.documentId).sort(compareSheets) : [],
     [selectedCanvas, snapshot?.canvases]
   );
-  const selectedSheetIndex = selectedNotebookSheets.findIndex((block) => block.id === selectedCanvasId);
 
   useEffect(() => {
     if (!snapshot || selectedCanvas) {
@@ -55,7 +54,7 @@ export function RemoteWhiteboardApp(): ReactElement {
 
   useEffect(() => {
     if (lastAcknowledgement?.requestId.startsWith('canvas_') && lastAcknowledgement.canvasId) {
-      setPageDirection('next');
+      setNavigation((current) => ({ id: lastAcknowledgement.canvasId!, sequence: (current?.sequence ?? 0) + 1 }));
       setSelectedCanvasId(lastAcknowledgement.canvasId);
       setSidebarOpen(false);
     }
@@ -88,16 +87,6 @@ export function RemoteWhiteboardApp(): ReactElement {
     send({ type: 'move-canvas', requestId: remoteId('move'), canvasId: block.id, side });
   };
 
-  const navigateSheet = (direction: 'next' | 'previous'): void => {
-    const offset = direction === 'next' ? 1 : -1;
-    const next = selectedNotebookSheets[selectedSheetIndex + offset];
-    if (!next) {
-      return;
-    }
-    setPageDirection(direction);
-    setSelectedCanvasId(next.id);
-  };
-
   const toggleFullscreen = (): void => {
     if (document.fullscreenElement) {
       void document.exitFullscreen();
@@ -106,7 +95,7 @@ export function RemoteWhiteboardApp(): ReactElement {
     }
   };
 
-  if (!token || status === 'invalid') {
+  if (status === 'invalid') {
     return (
       <main className="remote-gate">
         <div className="remote-gate__mark"><WifiOff /></div>
@@ -181,7 +170,7 @@ export function RemoteWhiteboardApp(): ReactElement {
                     <button
                       type="button"
                       aria-label={`PDF 第 ${block.pageNumber ?? '—'} 页 · 纸张 ${sheetNumber(snapshot?.canvases ?? [], block)}`}
-                      onClick={() => { setPageDirection(undefined); setSelectedCanvasId(block.id); if (innerWidth < 760) setSidebarOpen(false); }}
+                      onClick={() => { setNavigation((current) => ({ id: block.id, sequence: (current?.sequence ?? 0) + 1 })); setSelectedCanvasId(block.id); if (innerWidth < 760) setSidebarOpen(false); }}
                     >
                       <span className="remote-canvas-row__preview">
                         <NotebookPen />
@@ -220,20 +209,16 @@ export function RemoteWhiteboardApp(): ReactElement {
       <section className="remote-workspace">
         {selectedCanvas ? (
           <RemoteCanvas
-            key={selectedCanvas.id}
-            block={selectedCanvas}
+            blocks={selectedNotebookSheets}
+            selectedId={selectedCanvas.id}
+            navigation={navigation}
             connected={status === 'connected'}
-            canMove
-            canNavigateNext={selectedSheetIndex >= 0 && selectedSheetIndex < selectedNotebookSheets.length - 1}
-            canNavigatePrevious={selectedSheetIndex > 0}
-            entryDirection={pageDirection}
-            sheetNumber={sheetNumber(snapshot?.canvases ?? [], selectedCanvas)}
-            totalSheets={(snapshot?.canvases ?? []).filter((block) => block.documentId === selectedCanvas.documentId && block.pageNumber === selectedCanvas.pageNumber).length}
-            remoteStrokes={Object.values(transientStrokes[selectedCanvas.id] ?? {})}
+            remoteStrokes={transientStrokes}
             send={send}
-            onDelete={() => setPendingDelete(selectedCanvas)}
-            onMove={() => moveCanvas(selectedCanvas)}
-            onNavigate={navigateSheet}
+            onSelect={setSelectedCanvasId}
+            onDelete={setPendingDelete}
+            onMove={moveCanvas}
+            onCreate={() => send({ type: 'create-canvas', requestId: remoteId('canvas'), documentId: selectedCanvas.documentId, pageNumber: selectedCanvas.pageNumber, side: remoteDrawingPayload(selectedCanvas).side })}
           />
         ) : snapshot ? (
           <EmptyWorkspace contextDocument={contextDocument} pageNumber={snapshot.context?.pageNumber} onCreate={createCanvas} />
@@ -306,7 +291,7 @@ function PenIllustration(): ReactElement {
 function groupCanvases(canvases: WorkspaceBlock[], documents: LanWhiteboardDocument[]): Array<{ document: LanWhiteboardDocument; canvases: WorkspaceBlock[] }> {
   const documentById = new Map(documents.map((document) => [document.id, document]));
   const groups = new Map<string, WorkspaceBlock[]>();
-  for (const canvas of [...canvases].sort((a, b) => (a.pageNumber ?? 0) - (b.pageNumber ?? 0))) {
+  for (const canvas of [...canvases].sort(compareSheets)) {
     groups.set(canvas.documentId, [...(groups.get(canvas.documentId) ?? []), canvas]);
   }
   return [...groups].map(([documentId, blocks]) => ({
@@ -323,9 +308,14 @@ function sheetNumber(canvases: WorkspaceBlock[], block: WorkspaceBlock): number 
 function notebookSheets(canvases: WorkspaceBlock[], block: WorkspaceBlock): WorkspaceBlock[] {
   return canvases
     .filter((candidate) => candidate.documentId === block.documentId && candidate.pageNumber === block.pageNumber)
-    .sort((a, b) => Number(a.payload?.sheetIndex ?? Number.MAX_SAFE_INTEGER) - Number(b.payload?.sheetIndex ?? Number.MAX_SAFE_INTEGER)
-      || (remoteDrawingPayload(a).side === 'left' ? -1 : 1) - (remoteDrawingPayload(b).side === 'left' ? -1 : 1)
-      || a.createdAt.localeCompare(b.createdAt));
+    .sort(compareSheets);
+}
+
+function compareSheets(a: WorkspaceBlock, b: WorkspaceBlock): number {
+  return (a.pageNumber ?? 0) - (b.pageNumber ?? 0)
+    || Number(a.payload?.sheetIndex ?? Number.MAX_SAFE_INTEGER) - Number(b.payload?.sheetIndex ?? Number.MAX_SAFE_INTEGER)
+    || a.createdAt.localeCompare(b.createdAt)
+    || a.id.localeCompare(b.id);
 }
 
 function remoteId(prefix: string): string {

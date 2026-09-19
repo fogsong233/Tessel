@@ -11,6 +11,7 @@ Tessel is a local-first PDF reader for focused reading, contextual AI conversati
 - **Codex integration** — optionally use a locally installed Codex CLI for chat, translation, document search, local tools, images, and LaTeX output.
 - **OpenAI-compatible providers** — route chat, translation, and generated outlines through an OpenAI-compatible API when preferred.
 - **Page whiteboards** — place pressure-aware vector canvases beside PDF pages with pens, colors, undo, and lasso selection.
+- **Tablet handwriting over LAN** — open the whiteboard link from Settings on a tablet. Write with a stylus, scroll continuously with one finger, and zoom with two fingers. Brush and finger-writing preferences carry across sheets.
 - **Local-first storage** — PDF files remain in their original locations; Tessel stores metadata and derived content in Electron's `userData` directory.
 - **Optional WebDAV sync** — synchronize reading progress, conversations, notes, and translations across devices.
 - **Desktop releases** — installers are published for Windows and macOS through [GitHub Releases](https://github.com/fogsong233/Tessel/releases).
@@ -46,8 +47,10 @@ Tessel can use an OpenAI-compatible provider configured in Settings. API keys ar
 
 The optional Codex integration requires a locally installed and authenticated `codex` CLI. If Codex is unavailable, the PDF reader and provider-based features remain usable.
 
+Codex chat and translation reuse a background process. Translation uses a compact text-only context and a fast available model unless configured otherwise. Built-in PDF tools reuse parsed documents and page text; CLI compatibility mode receives the same tools through a temporary local MCP connection, without requiring `pdftotext`. File citations, local images, fenced code, and LaTeX render directly in messages.
+
 ## Data and privacy
 
 Tessel stores its workspace in Electron's `userData` directory. It contains PDF metadata, reading state, conversations, translations, notes, pins, and preferences. PDF files themselves remain in their original locations. Optional WebDAV sync is disabled until configured by the user.
 
-See [Release Notes](docs/releases/v1.5.1.md) for the current release details.
+See [Release Notes](docs/releases/v1.5.2.md) for the current release details.

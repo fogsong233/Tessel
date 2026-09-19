@@ -16,7 +16,24 @@ export interface DrawingTransform {
   translateY: number;
 }
 
+export const inkChunkSize = 64;
+export const inkChunkOverlap = 8;
+
 export function drawingStrokePath(stroke: LanDrawingStroke, active = false): string {
+  if (stroke.rendering === 'segmented') {
+    const paths: string[] = [];
+    let start = 0;
+    while (stroke.points.length - start > inkChunkSize + inkChunkOverlap) {
+      paths.push(outlinePath({ ...stroke, points: stroke.points.slice(start, start + inkChunkSize + inkChunkOverlap) }, false));
+      start += inkChunkSize;
+    }
+    paths.push(outlinePath({ ...stroke, points: stroke.points.slice(start) }, false));
+    return paths.join(' ');
+  }
+  return outlinePath(stroke, active);
+}
+
+function outlinePath(stroke: LanDrawingStroke, active: boolean): string {
   const outline = getStroke(stroke.points, {
     size: stroke.size,
     thinning: 0.68,

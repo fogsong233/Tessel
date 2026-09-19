@@ -1,4 +1,6 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { PdfDocumentCache, type CachedPdfSource } from './pdfDocumentCache';
 import * as pdfjsLib from 'pdfjs-dist/build/pdf.js';
 import type { AiPdfOutlineItem } from '../shared/domain';
 
@@ -121,14 +123,19 @@ export async function readPdfOutline(filePath: string, maxItems = 160): Promise<
   }
 }
 
-async function loadPdf(filePath: string): Promise<{
-  destroy(): Promise<void>;
-  getDestination(dest: string): Promise<unknown[] | null>;
-  getOutline(): Promise<unknown[] | null>;
-  getPage(pageNumber: number): Promise<{ getTextContent(): Promise<{ items: unknown[] }> }>;
-  getPageIndex(ref: { num: number; gen: number }): Promise<number>;
-  numPages: number;
-}> {
+const pdfCache = new PdfDocumentCache(parsePdf);
+
+export function clearPdfTextCache(): void {
+  pdfCache.clear();
+}
+
+async function loadPdf(filePath: string): Promise<CachedPdfSource> {
+  const path = resolve(filePath);
+  const info = await stat(path);
+  return pdfCache.acquire(path, `${info.size}:${info.mtimeMs}:${info.ctimeMs}`);
+}
+
+async function parsePdf(filePath: string): Promise<CachedPdfSource> {
   const data = new Uint8Array(await readFile(filePath));
   const task = pdfjsLib.getDocument({
     data,
