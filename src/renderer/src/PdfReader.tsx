@@ -1549,11 +1549,24 @@ export function PdfReader({
     // Keep controls in bounds in the same commit as their resized host. Chaining
     // delayed frames could otherwise race a click/focus in the model menu.
     alignDockRight();
-    const frame = window.requestAnimationFrame(alignDockRight);
+    const container = containerRef.current;
+    const alignedScrollLeft = container?.scrollLeft;
+    const frame = window.requestAnimationFrame(() => {
+      // A layout follow-up must not undo panning that happened after this commit.
+      if (container?.scrollLeft === alignedScrollLeft) alignDockRight();
+    });
     // Container queries and font changes can settle after the React commit.
     // Observe the dock, not the PDF canvas, so PDF zoom/panning remains free.
     const dock = containerRef.current?.querySelector<HTMLElement>('.reader-float-dock');
-    const observer = new ResizeObserver(alignDockRight);
+    let previousWidth = dock?.getBoundingClientRect().width;
+    const observer = new ResizeObserver(() => {
+      const width = dock?.getBoundingClientRect().width;
+      // Closing menus and streaming text can change height without changing
+      // horizontal bounds. Also ignore the observer's initial notification.
+      if (width === previousWidth) return;
+      previousWidth = width;
+      alignDockRight();
+    });
     if (dock) observer.observe(dock);
     return () => {
       window.cancelAnimationFrame(frame);

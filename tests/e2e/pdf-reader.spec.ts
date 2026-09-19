@@ -124,6 +124,13 @@ test.describe('PDF reader flow', () => {
     await partiallyReveal();
     await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     expect(await contained()).toBe(false);
+    // Content growth must not reset horizontal panning either. Trigger a
+    // height-only layout change without focusing a dock control.
+    await page.locator('.reader-float-dock').evaluate(async (node) => {
+      (node as HTMLElement).style.paddingBottom = '24px';
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    });
+    expect(await contained()).toBe(false);
   });
 
   test('clears PDF search highlights when the search field is emptied', async () => {
