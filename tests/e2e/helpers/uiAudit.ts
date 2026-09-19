@@ -239,7 +239,7 @@ export async function auditInterfaces(app: ElectronApplication, reader: Page, ro
   const url = info.urls.find((url) => url.includes('127.0.0.1')) ?? info.urls[0];
   const tabletPromise = app.waitForEvent('window');
   await app.evaluate(({ BrowserWindow }, url) => {
-    const tablet = new BrowserWindow({ width: 1024, height: 768, show: false, webPreferences: { sandbox: true } });
+    const tablet = new BrowserWindow({ width: 1024, height: 768, show: false, webPreferences: { sandbox: true, backgroundThrottling: false } });
     void tablet.loadURL(url);
   }, url);
   const tablet = await tabletPromise;
@@ -255,9 +255,12 @@ export async function auditInterfaces(app: ElectronApplication, reader: Page, ro
   await capture(tablet, 'tablet-compact-sidebar');
   await tablet.getByRole('button', { name: '隐藏纸张列表', exact: true }).click();
   await capture(tablet, 'tablet-hidden-sidebar');
-  await tablet.getByTitle('删除这张纸', { exact: true }).click();
+  await tablet.getByRole('button', { name: '显示纸张列表', exact: true }).click();
+  await tablet.getByRole('button', { name: '展开纸张列表', exact: true }).click();
+  await tablet.getByRole('button', { name: '删除纸张', exact: true }).first().click();
   await capture(tablet, 'tablet-delete-confirmation');
   await tablet.getByRole('button', { name: '取消', exact: true }).click();
+  await tablet.getByRole('button', { name: '隐藏纸张列表', exact: true }).click();
   await resize(tablet, 600, 900);
   await tablet.getByRole('button', { name: '画笔设置', exact: true }).click();
   await capture(tablet, 'tablet-small-brush-settings');

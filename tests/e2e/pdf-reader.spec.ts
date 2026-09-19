@@ -676,7 +676,7 @@ test.describe('PDF reader flow', () => {
         width: 1024,
         height: 768,
         show: false,
-        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false }
       });
       void tablet.loadURL(remoteUrl);
     }, url!);
